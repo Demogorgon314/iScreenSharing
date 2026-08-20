@@ -4,6 +4,7 @@ struct ConnectionsLibraryView: View {
     private enum SidebarItem: Hashable {
         case allConnections
         case network
+        case group(ConnectionGroup.ID)
     }
 
     @ObservedObject var store: ConnectionStore
@@ -14,7 +15,10 @@ struct ConnectionsLibraryView: View {
     @State private var layout: ConnectionLibraryLayout = .list
     @State private var searchText = ""
     @State private var discoveryAttempt = 0
+    @State private var editingGroupID: ConnectionGroup.ID?
+    @State private var groupNameDraft = ""
     @FocusState private var searchFocused: Bool
+    @FocusState private var groupNameFocused: Bool
 
     init(store: ConnectionStore, browser: any BonjourBrowsing = BonjourBrowser()) {
         self.store = store
@@ -22,11 +26,22 @@ struct ConnectionsLibraryView: View {
     }
 
     private var filteredConnections: [SavedConnection] {
-        guard !searchText.isEmpty else { return store.connections }
-        return store.connections.filter {
+        let connections = selectedGroup.map(store.connections(in:)) ?? store.connections
+        guard !searchText.isEmpty else { return connections }
+        return connections.filter {
             $0.name.localizedStandardContains(searchText)
                 || $0.endpoint.displayName.localizedStandardContains(searchText)
         }
+    }
+
+    private var selectedGroup: ConnectionGroup? {
+        guard case .group(let id) = sidebarSelection else { return nil }
+        return store.groups.first { $0.id == id }
+    }
+
+    private var detailTitle: String {
+        if sidebarSelection == .network { return "Network" }
+        return selectedGroup?.name ?? "All Connections"
     }
 
     var body: some View {
@@ -36,11 +51,16 @@ struct ConnectionsLibraryView: View {
                     .tag(SidebarItem.allConnections)
                 Label("Network", systemImage: "network")
                     .tag(SidebarItem.network)
+                ForEach(store.groups) { group in
+                    groupSidebarRow(group)
+                        .tag(SidebarItem.group(group.id))
+                }
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 16) {
                     Button {
+                        createGroup()
                     } label: {
                         Image(systemName: "plus")
                     }
@@ -48,11 +68,12 @@ struct ConnectionsLibraryView: View {
                     .help("New Group")
 
                     Button {
+                        deleteSelectedGroup()
                     } label: {
                         Image(systemName: "minus")
                     }
                     .buttonStyle(.plain)
-                    .disabled(true)
+                    .disabled(selectedGroup == nil)
                     Spacer()
                 }
                 .padding(.horizontal, 12)
@@ -79,7 +100,7 @@ struct ConnectionsLibraryView: View {
                     connectionGrid
                 }
             }
-            .navigationTitle(sidebarSelection == .network ? "Network" : "All Connections")
+            .navigationTitle(detailTitle)
         }
         .focusedSceneValue(\.connectionLibraryLayout, $layout)
         .focusedSceneValue(
@@ -100,8 +121,23 @@ struct ConnectionsLibraryView: View {
                 .fixedSize()
 
                 Menu {
+                    Button("Connect") {
+                        connectSelectedConnection()
+                    }
+                    .disabled(selectedConnection == nil)
                     Button("Remove Connection", role: .destructive) {
                         deleteSelectedConnection()
+                    }
+                    .disabled(selectedConnection == nil)
+                    Divider()
+                    Menu("Add to Existing Group") {
+                        ForEach(store.groups) { group in
+                            Button(group.name) { addSelectedConnection(to: group) }
+                        }
+                    }
+                    .disabled(selectedConnection == nil || store.groups.isEmpty)
+                    Button("Create New Group") {
+                        createGroup(includingSelectedConnection: true)
                     }
                     .disabled(selectedConnection == nil)
                 } label: {
@@ -114,6 +150,23 @@ struct ConnectionsLibraryView: View {
                     Label("New Connection", systemImage: "plus")
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func groupSidebarRow(_ group: ConnectionGroup) -> some View {
+        if editingGroupID == group.id {
+            TextField("Group Name", text: $groupNameDraft)
+                .focused($groupNameFocused)
+                .onSubmit { commitGroupName(group) }
+                .onExitCommand { cancelGroupName() }
+        } else {
+            Text(group.name)
+                .contextMenu {
+                    Button("Rename") { beginRenaming(group) }
+                    Button("Delete", role: .destructive) { delete(group) }
+                }
+                .onTapGesture(count: 2) { beginRenaming(group) }
         }
     }
 
@@ -200,6 +253,9 @@ struct ConnectionsLibraryView: View {
                     }
                     .padding(10)
                     .contentShape(Rectangle())
+                    .onTapGesture {
+                        selectedConnection = connection.id
+                    }
                     .onTapGesture(count: 2) {
                         openWindow(id: "authentication", value: connection.endpoint)
                     }
@@ -216,6 +272,57 @@ struct ConnectionsLibraryView: View {
         }
         store.delete(connection)
         self.selectedConnection = nil
+    }
+
+    private func connectSelectedConnection() {
+        guard let connection = selectedSavedConnection else { return }
+        openWindow(id: "authentication", value: connection.endpoint)
+    }
+
+    private func addSelectedConnection(to group: ConnectionGroup) {
+        guard let connection = selectedSavedConnection else { return }
+        store.add(connection, to: group)
+    }
+
+    private var selectedSavedConnection: SavedConnection? {
+        guard let selectedConnection else { return nil }
+        return store.connections.first { $0.id == selectedConnection }
+    }
+
+    private func createGroup(includingSelectedConnection: Bool = false) {
+        let connection = includingSelectedConnection ? selectedSavedConnection : nil
+        let group = store.createGroup(including: connection)
+        sidebarSelection = .group(group.id)
+        beginRenaming(group)
+    }
+
+    private func beginRenaming(_ group: ConnectionGroup) {
+        editingGroupID = group.id
+        groupNameDraft = group.name
+        DispatchQueue.main.async { groupNameFocused = true }
+    }
+
+    private func commitGroupName(_ group: ConnectionGroup) {
+        store.rename(group, to: groupNameDraft)
+        editingGroupID = nil
+        groupNameFocused = false
+    }
+
+    private func cancelGroupName() {
+        editingGroupID = nil
+        groupNameFocused = false
+    }
+
+    private func deleteSelectedGroup() {
+        guard let group = selectedGroup else { return }
+        delete(group)
+    }
+
+    private func delete(_ group: ConnectionGroup) {
+        store.delete(group)
+        if sidebarSelection == .group(group.id) {
+            sidebarSelection = .allConnections
+        }
     }
 
     private func openConnection(_ url: URL) {

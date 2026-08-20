@@ -59,4 +59,39 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertTrue(store.recentConnections.isEmpty)
         XCTAssertTrue(ConnectionStore(defaults: defaults).recentConnections.isEmpty)
     }
+
+    func testCreatesRenamesAndPersistsGroups() throws {
+        let store = ConnectionStore(defaults: defaults)
+        let first = store.createGroup()
+        let second = store.createGroup()
+
+        store.rename(first, to: "  Work Macs  ")
+        store.rename(second, to: "   ")
+
+        XCTAssertEqual(store.groups.map(\.name), ["Work Macs", "Untitled Group 2"])
+        XCTAssertEqual(ConnectionStore(defaults: defaults).groups, store.groups)
+    }
+
+    func testMaintainsGroupMembershipWithoutDeletingConnections() throws {
+        let store = ConnectionStore(defaults: defaults)
+        store.record(try ConnectionEndpoint("one.local"), at: Date(timeIntervalSince1970: 100))
+        store.record(try ConnectionEndpoint("two.local"), at: Date(timeIntervalSince1970: 200))
+        let firstConnection = try XCTUnwrap(store.connections.first { $0.endpoint.host == "one.local" })
+        let secondConnection = try XCTUnwrap(store.connections.first { $0.endpoint.host == "two.local" })
+        let group = store.createGroup(including: firstConnection)
+
+        store.add(secondConnection, to: group)
+
+        let updatedGroup = try XCTUnwrap(store.groups.first)
+        XCTAssertEqual(Set(store.connections(in: updatedGroup).map(\.id)), [firstConnection.id, secondConnection.id])
+        store.delete(firstConnection)
+        let groupAfterConnectionDeletion = try XCTUnwrap(store.groups.first)
+        XCTAssertEqual(groupAfterConnectionDeletion.connectionIDs, [secondConnection.id])
+
+        store.delete(groupAfterConnectionDeletion)
+
+        XCTAssertEqual(store.connections.count, 1)
+        XCTAssertTrue(store.groups.isEmpty)
+        XCTAssertTrue(ConnectionStore(defaults: defaults).groups.isEmpty)
+    }
 }
