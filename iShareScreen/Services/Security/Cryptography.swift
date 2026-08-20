@@ -33,7 +33,7 @@ enum Cryptography {
         key: Data,
         operation: CCOperation
     ) throws -> Data {
-        guard key.count == kCCKeySizeAES128,
+        guard [kCCKeySizeAES128, kCCKeySizeAES192, kCCKeySizeAES256].contains(key.count),
               input.count.isMultiple(of: kCCBlockSizeAES128) else {
             throw CryptographyError.invalidAESInput
         }
@@ -63,6 +63,54 @@ enum Cryptography {
         guard status == kCCSuccess else {
             throw CryptographyError.aesEncryptionFailed(status)
         }
+        output.removeSubrange(outputLength..<output.count)
+        return output
+    }
+
+    static func cryptAESCTR(_ input: Data, key: Data, iv: Data) throws -> Data {
+        guard [kCCKeySizeAES128, kCCKeySizeAES192, kCCKeySizeAES256].contains(key.count),
+              iv.count == kCCBlockSizeAES128 else {
+            throw CryptographyError.invalidAESInput
+        }
+        var cryptor: CCCryptorRef?
+        let creationStatus = key.withUnsafeBytes { keyBytes in
+            iv.withUnsafeBytes { ivBytes in
+                CCCryptorCreateWithMode(
+                    CCOperation(kCCEncrypt),
+                    CCMode(kCCModeCTR),
+                    CCAlgorithm(kCCAlgorithmAES),
+                    CCPadding(ccNoPadding),
+                    ivBytes.baseAddress,
+                    keyBytes.baseAddress,
+                    key.count,
+                    nil,
+                    0,
+                    0,
+                    CCModeOptions(kCCModeOptionCTR_BE),
+                    &cryptor
+                )
+            }
+        }
+        guard creationStatus == kCCSuccess, let cryptor else {
+            throw CryptographyError.aesEncryptionFailed(creationStatus)
+        }
+        defer { CCCryptorRelease(cryptor) }
+        let outputCapacity = input.count + kCCBlockSizeAES128
+        var output = Data(count: outputCapacity)
+        var outputLength = 0
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            input.withUnsafeBytes { inputBytes in
+                CCCryptorUpdate(
+                    cryptor,
+                    inputBytes.baseAddress,
+                    input.count,
+                    outputBytes.baseAddress,
+                    outputCapacity,
+                    &outputLength
+                )
+            }
+        }
+        guard status == kCCSuccess else { throw CryptographyError.aesEncryptionFailed(status) }
         output.removeSubrange(outputLength..<output.count)
         return output
     }

@@ -14,6 +14,20 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
     private static let retryLimit = 16
 
     func negotiate(_ session: RFBAuthenticatedSession) async throws -> AppleMediaNegotiationResult {
+        let receiver = try AppleMediaReceiver(endpoint: session.endpoint)
+        session.install(mediaReceiver: receiver)
+        do {
+            return try await negotiate(session, receiver: receiver)
+        } catch {
+            receiver.close()
+            throw error
+        }
+    }
+
+    private func negotiate(
+        _ session: RFBAuthenticatedSession,
+        receiver: AppleMediaReceiver
+    ) async throws -> AppleMediaNegotiationResult {
         let offers = try AppleMediaOffer.create()
         let keys = try AppleMediaKeys.random()
         let configuration = try AppleMediaConfiguration.message(
@@ -36,6 +50,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                     pendingMessages: pendingMessages
                 )
                 session.install(mediaNegotiation: result)
+                receiver.stopPunching()
                 return result
             }
             pendingMessages.append(response)

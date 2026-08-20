@@ -9,6 +9,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var recordLayer: AppleEncryptedRecordLayer?
     private(set) var rekeyGeneration: UInt32?
     private(set) var mediaNegotiation: AppleMediaNegotiationResult?
+    private(set) var mediaReceiver: AppleMediaReceiver?
 
     private let transport: NWConnectionTransport
 
@@ -29,6 +30,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
 
     func close() {
+        mediaReceiver?.close()
         transport.cancel()
     }
 
@@ -64,7 +66,13 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.mediaNegotiation = mediaNegotiation
     }
 
+    func install(mediaReceiver: AppleMediaReceiver) {
+        self.mediaReceiver?.close()
+        self.mediaReceiver = mediaReceiver
+    }
+
     deinit {
+        mediaReceiver?.close()
         transport.cancel()
     }
 }
