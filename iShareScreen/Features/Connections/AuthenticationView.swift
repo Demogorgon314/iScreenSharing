@@ -2,8 +2,8 @@ import SwiftUI
 
 struct AuthenticationView: View {
     @Environment(\.dismissWindow) private var dismissWindow
-    @Environment(\.openWindow) private var openWindow
     @StateObject private var coordinator: AuthenticationCoordinator
+    @ObservedObject private var sessions: SessionManager
     @State private var username = ""
     @State private var password = ""
     @State private var rememberPassword = false
@@ -15,16 +15,34 @@ struct AuthenticationView: View {
     }
 
     init(endpoint: ConnectionEndpoint, store: ConnectionStore, sessions: SessionManager) {
+        self.sessions = sessions
         _coordinator = StateObject(
             wrappedValue: AuthenticationCoordinator(
                 endpoint: endpoint,
                 connectionStore: store,
-                sessionManager: sessions
+                sessionManager: sessions,
+                onAuthenticated: { endpoint in
+                    SessionWindowCoordinator.shared.show(endpoint: endpoint, sessions: sessions)
+                }
             )
         )
     }
 
     var body: some View {
+        authenticationContent
+            .onChange(of: coordinator.state) { _, state in
+                guard state == .authenticated else { return }
+                dismissWindow(id: "authentication", value: coordinator.endpoint)
+                DispatchQueue.main.async {
+                    SessionWindowCoordinator.shared.show(
+                        endpoint: coordinator.endpoint,
+                        sessions: sessions
+                    )
+                }
+            }
+    }
+
+    private var authenticationContent: some View {
         VStack(spacing: 18) {
             HStack(alignment: .top, spacing: 16) {
                 Image(systemName: "rectangle.inset.filled.and.person.filled")
@@ -109,11 +127,6 @@ struct AuthenticationView: View {
                     focusedField = .username
                 }
             }
-        }
-        .onChange(of: coordinator.state) { _, state in
-            guard state == .authenticated else { return }
-            openWindow(value: coordinator.endpoint)
-            dismissWindow(id: "authentication", value: coordinator.endpoint)
         }
     }
 

@@ -233,9 +233,11 @@ struct ConnectionsLibraryView: View {
             }
                 .tag(connection.id)
                 .contentShape(Rectangle())
-                .onTapGesture {
-                    selectedConnection = connection.id
-                }
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        selectedConnection = connection.id
+                    }
+                )
                 .onTapGesture(count: 2) {
                     openWindow(id: "authentication", value: connection.endpoint)
                 }

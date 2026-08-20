@@ -20,6 +20,7 @@ final class AuthenticationCoordinator: ObservableObject {
     private let credentialStore: any CredentialStoring
     private let connectionStore: ConnectionStore
     private let sessionManager: SessionManager
+    private let onAuthenticated: @MainActor (ConnectionEndpoint) -> Void
     private var task: Task<Void, Never>?
 
     init(
@@ -30,7 +31,8 @@ final class AuthenticationCoordinator: ObservableObject {
         videoStreamStarter: any AppleVideoStreamStarting = AppleVideoStreamStarter(),
         credentialStore: any CredentialStoring = KeychainCredentialStore(),
         connectionStore: ConnectionStore,
-        sessionManager: SessionManager
+        sessionManager: SessionManager,
+        onAuthenticated: @escaping @MainActor (ConnectionEndpoint) -> Void = { _ in }
     ) {
         self.endpoint = endpoint
         self.authenticator = authenticator
@@ -40,6 +42,7 @@ final class AuthenticationCoordinator: ObservableObject {
         self.credentialStore = credentialStore
         self.connectionStore = connectionStore
         self.sessionManager = sessionManager
+        self.onAuthenticated = onAuthenticated
     }
 
     func savedCredentials() -> ScreenSharingCredentials? {
@@ -126,6 +129,7 @@ final class AuthenticationCoordinator: ObservableObject {
                     }
                     sessionManager.install(session)
                     connectionStore.record(endpoint, preferredUsername: credentials.username)
+                    onAuthenticated(endpoint)
                     state = .authenticated
                 } catch is CancellationError {
                     state = .idle

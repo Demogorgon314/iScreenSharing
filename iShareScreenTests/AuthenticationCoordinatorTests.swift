@@ -26,6 +26,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let credentials = MockCredentialStore()
         let connections = ConnectionStore(defaults: defaults)
         let sessions = SessionManager()
+        var authenticatedEndpoint: ConnectionEndpoint?
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
             authenticator: authenticator,
@@ -34,7 +35,8 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             videoStreamStarter: MockVideoStreamStarter(),
             credentialStore: credentials,
             connectionStore: connections,
-            sessionManager: sessions
+            sessionManager: sessions,
+            onAuthenticated: { authenticatedEndpoint = $0 }
         )
 
         coordinator.signIn(username: "user", password: "password", rememberPassword: true)
@@ -43,6 +45,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertTrue(sessions.session(for: endpoint) === session)
         XCTAssertEqual(connections.connections.first?.endpoint, endpoint)
         XCTAssertEqual(connections.connections.first?.preferredUsername, "user")
+        XCTAssertEqual(authenticatedEndpoint, endpoint)
         XCTAssertEqual(
             credentials.saved,
             try ScreenSharingCredentials(username: "user", password: "password")
