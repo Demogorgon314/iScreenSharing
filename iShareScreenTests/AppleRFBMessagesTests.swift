@@ -40,4 +40,27 @@ final class AppleRFBMessagesTests: XCTestCase {
         XCTAssertEqual(try message.int32BE(at: 4 + 7 * 4), -223)
         XCTAssertEqual(try message.int32BE(at: message.count - 4), 1110)
     }
+
+    func testBuildsKeyEventWithX11KeySymbol() {
+        XCTAssertEqual(
+            AppleRFBMessages.keyEvent(isDown: true, keySymbol: 0xff51),
+            Data([0x04, 0x01, 0, 0, 0, 0, 0xff, 0x51])
+        )
+    }
+
+    func testBuildsAppleEncryptedPointerEvent() throws {
+        let message = try AppleRFBMessages.encryptedPointerEvent(
+            buttons: 3,
+            x: 0x1234,
+            y: 0x5678,
+            contentKey: Data(repeating: 0, count: 16)
+        )
+        XCTAssertEqual(
+            message,
+            Data([
+                0x10, 0x00, 0xe9, 0x3e, 0x9b, 0xe4, 0x74, 0xb5, 0xae,
+                0x84, 0xd2, 0x92, 0x49, 0xa6, 0xf6, 0x8f, 0xfd, 0x77,
+            ])
+        )
+    }
 }

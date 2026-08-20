@@ -56,6 +56,9 @@ final class AuthenticationCoordinator: ObservableObject {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
                     _ = try await controlChannelNegotiator.enableEncryption(for: session)
                     let negotiation = try await mediaNegotiator.negotiate(session)
+                    session.install(
+                        inputController: AppleInputController(session: session, canvas: negotiation.canvas)
+                    )
                     try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
                     try Task.checkCancellation()
                     if rememberPassword {

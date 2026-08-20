@@ -49,5 +49,12 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         }
         XCTAssertTrue((0..<media.canvas.tileCount).allSatisfy { stream.frames.frame(at: $0) != nil })
         XCTAssertGreaterThan(stream.decodedFrameCount, media.canvas.tileCount)
+
+        let input = AppleInputController(session: session, canvas: media.canvas)
+        await input.pointer(buttons: 0, x: media.canvas.width / 2, y: media.canvas.height / 2)
+        await input.key(isDown: true, symbol: 0xffe1)
+        await input.key(isDown: false, symbol: 0xffe1)
+        let sentEventCount = await input.sentEventCount
+        XCTAssertEqual(sentEventCount, 3)
     }
 }

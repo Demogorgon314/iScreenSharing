@@ -67,6 +67,26 @@ enum AppleRFBMessages {
         message.appendUInt16BE(height)
         return message
     }
+
+    static func keyEvent(isDown: Bool, keySymbol: UInt32) -> Data {
+        var message = Data([0x04, isDown ? 0x01 : 0x00, 0x00, 0x00])
+        message.appendUInt32BE(keySymbol)
+        return message
+    }
+
+    static func encryptedPointerEvent(
+        buttons: UInt8,
+        x: UInt16,
+        y: UInt16,
+        contentKey: Data
+    ) throws -> Data {
+        var plaintext = Data(repeating: 0, count: 10)
+        plaintext.append(0xff)
+        plaintext.append(buttons)
+        plaintext.appendUInt16BE(x)
+        plaintext.appendUInt16BE(y)
+        return Data([0x10, 0x00]) + (try Cryptography.encryptAESECB(plaintext, key: contentKey))
+    }
 }
 
 enum AppleRFBMessageError: Error {

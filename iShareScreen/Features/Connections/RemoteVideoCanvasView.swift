@@ -4,10 +4,16 @@ import SwiftUI
 struct RemoteVideoCanvasView: NSViewRepresentable {
     let canvas: AppleCanvas
     let frames: AppleVideoFrameStore
+    let input: AppleInputController?
     let scalesToFit: Bool
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
-        RemoteVideoCanvasNSView(canvas: canvas, frames: frames, scalesToFit: scalesToFit)
+        RemoteVideoCanvasNSView(
+            canvas: canvas,
+            frames: frames,
+            input: input,
+            scalesToFit: scalesToFit
+        )
     }
 
     func updateNSView(_ view: RemoteVideoCanvasNSView, context: Context) {
@@ -22,14 +28,27 @@ final class RemoteVideoCanvasNSView: NSView {
 
     private let canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
+    private let input: AppleInputController?
     private let tileContainers: [CALayer]
     private let displayLayers: [AVSampleBufferDisplayLayer]
     private var observer: UUID?
     private var decodedTileHeight: CGFloat?
+    private var trackingArea: NSTrackingArea?
+    private var buttonMask: UInt8 = 0
+    private var lastRemotePoint: (x: Int, y: Int)?
+    private var scrollRemainder: CGFloat = 0
+    private var activeModifiers = [UInt16: UInt32]()
+    private var inputTask: Task<Void, Never>?
 
-    init(canvas: AppleCanvas, frames: AppleVideoFrameStore, scalesToFit: Bool) {
+    init(
+        canvas: AppleCanvas,
+        frames: AppleVideoFrameStore,
+        input: AppleInputController?,
+        scalesToFit: Bool
+    ) {
         self.canvas = canvas
         self.frames = frames
+        self.input = input
         self.scalesToFit = scalesToFit
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
         displayLayers = (0..<canvas.tileCount).map { _ in AVSampleBufferDisplayLayer() }
@@ -57,6 +76,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     deinit {
+        inputTask?.cancel()
         if let observer { frames.removeObserver(observer) }
     }
 
@@ -74,6 +94,161 @@ final class RemoteVideoCanvasNSView: NSView {
             displayLayers[index].frame = layout.content
             tileContainers[index].isHidden = layout.container.isEmpty
         }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func updateTrackingAreas() {
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .enabledDuringMouseDrag],
+            owner: self
+        )
+        addTrackingArea(area)
+        trackingArea = area
+        super.updateTrackingAreas()
+    }
+
+    override func mouseMoved(with event: NSEvent) { sendPointer(event) }
+    override func mouseDragged(with event: NSEvent) { sendPointer(event) }
+    override func rightMouseDragged(with event: NSEvent) { sendPointer(event) }
+    override func otherMouseDragged(with event: NSEvent) { sendPointer(event) }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        buttonMask |= AppleInputController.leftButton
+        sendPointer(event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        buttonMask &= ~AppleInputController.leftButton
+        sendPointer(event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        buttonMask |= AppleInputController.rightButton
+        sendPointer(event)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        buttonMask &= ~AppleInputController.rightButton
+        sendPointer(event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return }
+        window?.makeFirstResponder(self)
+        buttonMask |= AppleInputController.middleButton
+        sendPointer(event)
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        guard event.buttonNumber == 2 else { return }
+        buttonMask &= ~AppleInputController.middleButton
+        sendPointer(event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let input, let point = remotePoint(for: event) ?? lastRemotePoint else { return }
+        scrollRemainder += event.scrollingDeltaY
+        let wholeTicks = Int(scrollRemainder)
+        guard wholeTicks != 0 else { return }
+        scrollRemainder -= CGFloat(wholeTicks)
+        enqueueInput {
+            await input.scroll(
+                up: wholeTicks > 0,
+                ticks: abs(wholeTicks),
+                x: point.x,
+                y: point.y
+            )
+        }
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        guard let input, let modifier = AppleKeySymbol.modifier(for: event.keyCode) else { return }
+        let isDown: Bool
+        if activeModifiers[event.keyCode] != nil {
+            activeModifiers.removeValue(forKey: event.keyCode)
+            isDown = false
+        } else if event.modifierFlags.contains(modifier.flag) {
+            activeModifiers[event.keyCode] = modifier.symbol
+            isDown = true
+        } else {
+            return
+        }
+        enqueueInput { await input.key(isDown: isDown, symbol: modifier.symbol) }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard let input else { return }
+        if let symbol = AppleKeySymbol.special[event.keyCode] {
+            enqueueInput { await input.key(isDown: true, symbol: symbol) }
+            return
+        }
+        let hasCommandModifier = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        let characters = hasCommandModifier ? event.charactersIgnoringModifiers : event.characters
+        guard let symbols = characters?.unicodeScalars.map(\.value), !symbols.isEmpty else { return }
+        enqueueInput {
+            for symbol in symbols {
+                await input.key(isDown: true, symbol: symbol)
+                if !hasCommandModifier { await input.key(isDown: false, symbol: symbol) }
+            }
+        }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        guard let input else { return }
+        if let symbol = AppleKeySymbol.special[event.keyCode] {
+            enqueueInput { await input.key(isDown: false, symbol: symbol) }
+            return
+        }
+        guard !event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let symbols = event.charactersIgnoringModifiers?.unicodeScalars.map(\.value) else { return }
+        enqueueInput { for symbol in symbols { await input.key(isDown: false, symbol: symbol) } }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        if let input {
+            let modifiers = Array(activeModifiers.values)
+            activeModifiers.removeAll()
+            let shouldReleasePointer = buttonMask != 0
+            buttonMask = 0
+            let point = lastRemotePoint
+            enqueueInput {
+                for symbol in modifiers { await input.key(isDown: false, symbol: symbol) }
+                if shouldReleasePointer, let point {
+                    await input.pointer(buttons: 0, x: point.x, y: point.y)
+                }
+            }
+        }
+        return super.resignFirstResponder()
+    }
+
+    private func sendPointer(_ event: NSEvent) {
+        guard let input, let point = remotePoint(for: event) else { return }
+        lastRemotePoint = point
+        let buttons = buttonMask
+        enqueueInput { await input.pointer(buttons: buttons, x: point.x, y: point.y) }
+    }
+
+    private func enqueueInput(_ operation: @escaping @Sendable () async -> Void) {
+        let previous = inputTask
+        inputTask = Task {
+            _ = await previous?.value
+            guard !Task.isCancelled else { return }
+            await operation()
+        }
+    }
+
+    private func remotePoint(for event: NSEvent) -> (x: Int, y: Int)? {
+        AppleVideoCanvasLayout.remotePoint(
+            location: convert(event.locationInWindow, from: nil),
+            canvas: canvas,
+            bounds: bounds,
+            scalesToFit: scalesToFit
+        )
     }
 
     private func display(_ pixelBuffer: CVPixelBuffer, at tileIndex: Int) {
@@ -169,6 +344,57 @@ enum AppleVideoCanvasLayout {
                 height: slotHeight * scale
             )
             return Tile(container: container, content: content)
+        }
+    }
+
+    static func remotePoint(
+        location: CGPoint,
+        canvas: AppleCanvas,
+        bounds: CGRect,
+        scalesToFit: Bool
+    ) -> (x: Int, y: Int)? {
+        guard canvas.width > 0, canvas.height > 0 else { return nil }
+        let scale = scalesToFit
+            ? min(bounds.width / CGFloat(canvas.width), bounds.height / CGFloat(canvas.height))
+            : 1
+        guard scale > 0 else { return nil }
+        let size = CGSize(width: CGFloat(canvas.width) * scale, height: CGFloat(canvas.height) * scale)
+        let rect = CGRect(
+            x: bounds.midX - size.width / 2,
+            y: bounds.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+        guard rect.contains(location) else { return nil }
+        return (
+            min(canvas.width - 1, max(0, Int((location.x - rect.minX) / scale))),
+            min(canvas.height - 1, max(0, Int((rect.maxY - location.y) / scale)))
+        )
+    }
+}
+
+private enum AppleKeySymbol {
+    static let special: [UInt16: UInt32] = [
+        53: 0xff1b, 48: 0xff09, 51: 0xff08, 36: 0xff0d, 117: 0xffff,
+        114: 0xff63, 115: 0xff50, 119: 0xff57, 116: 0xff55, 121: 0xff56,
+        123: 0xff51, 126: 0xff52, 124: 0xff53, 125: 0xff54,
+        122: 0xffbe, 120: 0xffbf, 99: 0xffc0, 118: 0xffc1,
+        96: 0xffc2, 97: 0xffc3, 98: 0xffc4, 100: 0xffc5,
+        101: 0xffc6, 109: 0xffc7, 103: 0xffc8, 111: 0xffc9,
+    ]
+
+    static func modifier(for keyCode: UInt16) -> (flag: NSEvent.ModifierFlags, symbol: UInt32)? {
+        switch keyCode {
+        case 56: (.shift, 0xffe1)
+        case 60: (.shift, 0xffe2)
+        case 59: (.control, 0xffe3)
+        case 62: (.control, 0xffe4)
+        case 58: (.option, 0xffe9)
+        case 61: (.option, 0xffea)
+        case 55: (.command, 0xffeb)
+        case 54: (.command, 0xffec)
+        case 57: (.capsLock, 0xffe5)
+        default: nil
         }
     }
 }

@@ -11,6 +11,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var mediaNegotiation: AppleMediaNegotiationResult?
     private(set) var mediaReceiver: AppleMediaReceiver?
     private(set) var videoStream: AppleVideoStream?
+    private(set) var inputController: AppleInputController?
 
     private let transport: NWConnectionTransport
 
@@ -31,6 +32,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
 
     func close() {
+        if let inputController { Task { await inputController.close() } }
         videoStream?.close()
         mediaReceiver?.close()
         transport.cancel()
@@ -78,7 +80,13 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.videoStream = videoStream
     }
 
+    func install(inputController: AppleInputController) {
+        if let current = self.inputController { Task { await current.close() } }
+        self.inputController = inputController
+    }
+
     deinit {
+        if let inputController { Task { await inputController.close() } }
         videoStream?.close()
         mediaReceiver?.close()
         transport.cancel()

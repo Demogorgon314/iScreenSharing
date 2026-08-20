@@ -7,8 +7,12 @@ struct SessionView: View {
 
     var body: some View {
         Group {
-            if let stream = sessions.session(for: endpoint)?.videoStream {
-                ActiveVideoSessionView(stream: stream, scalesToFit: scalesToFit)
+            if let session = sessions.session(for: endpoint), let stream = session.videoStream {
+                ActiveVideoSessionView(
+                    stream: stream,
+                    input: session.inputController,
+                    scalesToFit: scalesToFit
+                )
             } else {
                 unavailableContent
             }
@@ -46,6 +50,7 @@ struct SessionView: View {
 
 private struct ActiveVideoSessionView: View {
     @ObservedObject var stream: AppleVideoStream
+    let input: AppleInputController?
     let scalesToFit: Bool
 
     var body: some View {
@@ -54,6 +59,7 @@ private struct ActiveVideoSessionView: View {
             RemoteVideoCanvasView(
                 canvas: stream.canvas,
                 frames: stream.frames,
+                input: input,
                 scalesToFit: scalesToFit
             )
             if stream.state != .streaming {

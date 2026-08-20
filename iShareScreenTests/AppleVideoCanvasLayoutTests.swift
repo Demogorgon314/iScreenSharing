@@ -28,4 +28,26 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
         XCTAssertEqual(layouts[0].container, CGRect(x: 100, y: 100, width: 100, height: 40))
         XCTAssertEqual(layouts[1].container, CGRect(x: 100, y: 60, width: 100, height: 40))
     }
+
+    func testMapsLetterboxedViewCoordinatesIntoTopOriginCanvas() {
+        let canvas = AppleCanvas(width: 100, height: 50, tileCount: 1)
+        let bounds = CGRect(x: 0, y: 0, width: 300, height: 300)
+        let center = AppleVideoCanvasLayout.remotePoint(
+            location: CGPoint(x: 150, y: 150),
+            canvas: canvas,
+            bounds: bounds,
+            scalesToFit: true
+        )
+
+        XCTAssertEqual(center?.x, 50)
+        XCTAssertEqual(center?.y, 25)
+        XCTAssertNil(
+            AppleVideoCanvasLayout.remotePoint(
+                location: CGPoint(x: 150, y: 20),
+                canvas: canvas,
+                bounds: bounds,
+                scalesToFit: true
+            )
+        )
+    }
 }
