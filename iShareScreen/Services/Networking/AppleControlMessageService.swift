@@ -7,6 +7,7 @@ final class AppleControlMessageService: @unchecked Sendable {
     private let pendingMessages: [Data]
     private let receiveDisplayLayout: @Sendable (AppleDisplayLayout) async -> Void
     private let receiveMediaCanvas: @Sendable (AppleCanvas) async -> Void
+    private let receiveCursorUpdate: @Sendable (AppleCursorUpdate) async -> Void
     private let countLock = NSLock()
     private var task: Task<Void, Never>?
     private var messageCount = 0
@@ -17,7 +18,8 @@ final class AppleControlMessageService: @unchecked Sendable {
         clipboard: any AppleClipboardReceiving,
         pendingMessages: [Data],
         receiveDisplayLayout: @escaping @Sendable (AppleDisplayLayout) async -> Void = { _ in },
-        receiveMediaCanvas: @escaping @Sendable (AppleCanvas) async -> Void = { _ in }
+        receiveMediaCanvas: @escaping @Sendable (AppleCanvas) async -> Void = { _ in },
+        receiveCursorUpdate: @escaping @Sendable (AppleCursorUpdate) async -> Void = { _ in }
     ) {
         self.session = session
         self.input = input
@@ -25,6 +27,7 @@ final class AppleControlMessageService: @unchecked Sendable {
         self.pendingMessages = pendingMessages
         self.receiveDisplayLayout = receiveDisplayLayout
         self.receiveMediaCanvas = receiveMediaCanvas
+        self.receiveCursorUpdate = receiveCursorUpdate
     }
 
     var receivedMessageCount: Int {
@@ -73,8 +76,12 @@ final class AppleControlMessageService: @unchecked Sendable {
             if let canvas = AppleMediaConfiguration.canvas(from: message) {
                 await receiveMediaCanvas(canvas)
             }
-            for layout in AppleFramebufferUpdate.displayLayouts(from: message) {
+            let contents = AppleFramebufferUpdate.contents(from: message)
+            for layout in contents.displayLayouts {
                 await receiveDisplayLayout(layout)
+            }
+            for update in contents.cursorUpdates {
+                await receiveCursorUpdate(update)
             }
             return
         }

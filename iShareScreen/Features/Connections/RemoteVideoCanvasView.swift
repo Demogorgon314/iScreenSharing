@@ -5,6 +5,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let canvas: AppleCanvas
     let frames: AppleVideoFrameStore
     let input: AppleInputController?
+    let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
@@ -12,6 +13,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             canvas: canvas,
             frames: frames,
             input: input,
+            cursors: cursors,
             displayScale: displayScale
         )
     }
@@ -29,9 +31,12 @@ final class RemoteVideoCanvasNSView: NSView {
     private let canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
     private let input: AppleInputController?
+    private let cursors: AppleCursorStore?
     private let tileContainers: [CALayer]
     private let displayLayers: [AVSampleBufferDisplayLayer]
     private var observer: UUID?
+    private var cursorObserver: UUID?
+    private var remoteCursor = NSCursor.arrow
     private var decodedTileHeight: CGFloat?
     private var trackingArea: NSTrackingArea?
     private var buttonMask: UInt8 = 0
@@ -44,11 +49,13 @@ final class RemoteVideoCanvasNSView: NSView {
         canvas: AppleCanvas,
         frames: AppleVideoFrameStore,
         input: AppleInputController?,
+        cursors: AppleCursorStore?,
         displayScale: AppleVideoDisplayScale
     ) {
         self.canvas = canvas
         self.frames = frames
         self.input = input
+        self.cursors = cursors
         self.displayScale = displayScale
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
         displayLayers = (0..<canvas.tileCount).map { _ in AVSampleBufferDisplayLayer() }
@@ -65,6 +72,10 @@ final class RemoteVideoCanvasNSView: NSView {
         observer = frames.addObserver { [weak self] tileIndex, frame in
             self?.display(frame, at: tileIndex)
         }
+        cursorObserver = cursors?.addObserver { [weak self] image in
+            self?.applyCursor(image)
+        }
+        applyCursor(cursors?.currentImage())
         for tileIndex in displayLayers.indices {
             if let frame = frames.frame(at: tileIndex) { display(frame, at: tileIndex) }
         }
@@ -78,6 +89,7 @@ final class RemoteVideoCanvasNSView: NSView {
     deinit {
         inputTask?.cancel()
         if let observer { frames.removeObserver(observer) }
+        if let cursorObserver { cursors?.removeObserver(cursorObserver) }
     }
 
     override func layout() {
@@ -97,6 +109,10 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: remoteCursor)
+    }
 
     override func updateTrackingAreas() {
         if let trackingArea { removeTrackingArea(trackingArea) }
@@ -268,6 +284,38 @@ final class RemoteVideoCanvasNSView: NSView {
         guard renderer.isReadyForMoreMediaData,
               let sampleBuffer = Self.sampleBuffer(for: pixelBuffer) else { return }
         renderer.enqueue(sampleBuffer)
+    }
+
+    private func applyCursor(_ image: AppleCursorImage?) {
+        precondition(Thread.isMainThread)
+        remoteCursor = image.flatMap(Self.cursor(from:)) ?? .arrow
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private static func cursor(from image: AppleCursorImage) -> NSCursor? {
+        let (pixelCount, pixelOverflow) = image.width.multipliedReportingOverflow(by: image.height)
+        let (byteCount, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
+        guard image.width > 0, image.height > 0, !pixelOverflow, !byteOverflow,
+              image.rgba.count == byteCount,
+              let representation = NSBitmapImageRep(
+                  bitmapDataPlanes: nil,
+                  pixelsWide: image.width,
+                  pixelsHigh: image.height,
+                  bitsPerSample: 8,
+                  samplesPerPixel: 4,
+                  hasAlpha: true,
+                  isPlanar: false,
+                  colorSpaceName: .deviceRGB,
+                  bytesPerRow: image.width * 4,
+                  bitsPerPixel: 32
+              ), let bitmap = representation.bitmapData else { return nil }
+        image.rgba.copyBytes(to: bitmap, count: image.rgba.count)
+        let cursorImage = NSImage(size: NSSize(width: image.width, height: image.height))
+        cursorImage.addRepresentation(representation)
+        return NSCursor(
+            image: cursorImage,
+            hotSpot: NSPoint(x: image.hotspotX, y: image.hotspotY)
+        )
     }
 
     private static func sampleBuffer(for pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {

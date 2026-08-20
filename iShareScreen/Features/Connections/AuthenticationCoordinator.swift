@@ -79,6 +79,8 @@ final class AuthenticationCoordinator: ObservableObject {
                     } else {
                         dynamicResolutionController = nil
                     }
+                    let cursorStore = AppleCursorStore()
+                    session.install(cursorStore: cursorStore)
                     let controlMessages = AppleControlMessageService(
                         session: session,
                         input: input,
@@ -89,6 +91,9 @@ final class AuthenticationCoordinator: ObservableObject {
                         },
                         receiveMediaCanvas: { canvas in
                             await dynamicResolutionController?.receiveMediaCanvas(canvas)
+                        },
+                        receiveCursorUpdate: { update in
+                            cursorStore.apply(update)
                         }
                     )
                     session.install(

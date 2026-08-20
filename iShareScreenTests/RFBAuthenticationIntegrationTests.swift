@@ -60,6 +60,7 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
                 await input?.update(canvas: canvas)
             }
         )
+        let cursorStore = AppleCursorStore()
         let controlMessages = AppleControlMessageService(
             session: session,
             input: input,
@@ -70,6 +71,9 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
             },
             receiveMediaCanvas: { canvas in
                 await dynamicResolution.receiveMediaCanvas(canvas)
+            },
+            receiveCursorUpdate: { update in
+                cursorStore.apply(update)
             }
         )
         controlMessages.start()
@@ -101,6 +105,12 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertGreaterThan(controlMessages.receivedMessageCount, 0)
+
+        let cursorDeadline = clock.now.advanced(by: .seconds(3))
+        while cursorStore.receivedUpdateCount == 0, clock.now < cursorDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertGreaterThan(cursorStore.receivedUpdateCount, 0)
 
         let initialCanvas = stream.canvas
         let requestedSize = initialCanvas == AppleCanvas(width: 1600, height: 1200, tileCount: initialCanvas.tileCount)

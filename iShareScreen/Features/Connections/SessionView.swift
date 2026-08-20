@@ -16,6 +16,7 @@ struct SessionView: View {
                 ActiveVideoSessionView(
                     stream: stream,
                     input: isObserving ? nil : session.inputController,
+                    cursors: session.cursorStore,
                     displayScale: displayScale,
                     onViewportChange: viewportChanged
                 )
@@ -160,6 +161,7 @@ private struct AudioMuteButton: View {
 private struct ActiveVideoSessionView: View {
     @ObservedObject var stream: AppleVideoStream
     let input: AppleInputController?
+    let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
     let onViewportChange: (CGSize) -> Void
 
@@ -170,6 +172,7 @@ private struct ActiveVideoSessionView: View {
                 canvas: stream.canvas,
                 frames: stream.frames,
                 input: input,
+                cursors: cursors,
                 displayScale: displayScale
             )
             .id(stream.canvas)

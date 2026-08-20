@@ -41,9 +41,72 @@ final class AppleFramebufferUpdateTests: XCTestCase {
         XCTAssertTrue(AppleFramebufferUpdate.displayLayouts(from: Data([1, 0, 0, 0])).isEmpty)
     }
 
+    func testDecodesAndSelectsCachedCursorImages() throws {
+        let raw = Data([3, 2, 1, 255, 7, 6, 5, 255, 9, 10])
+        let compressed = try ZlibCodec.compress(raw)
+        var message = Data([0, 0, 0, 2])
+        message.append(cursorHeader(hotspotX: 1, hotspotY: 0, width: 2, height: 1))
+        message.appendUInt32BE(42)
+        message.appendUInt32BE(UInt32(compressed.count))
+        message.append(compressed)
+        message.append(cursorHeader(hotspotX: 0, hotspotY: 0, width: 0, height: 0))
+        message.appendUInt32BE(42)
+        message.appendUInt32BE(0)
+
+        let updates = AppleFramebufferUpdate.cursorUpdates(from: message)
+
+        XCTAssertEqual(updates.count, 2)
+        XCTAssertEqual(
+            updates[0],
+            .store(
+                id: 42,
+                image: AppleCursorImage(
+                    width: 2,
+                    height: 1,
+                    hotspotX: 1,
+                    hotspotY: 0,
+                    rgba: Data([1, 2, 3, 9, 5, 6, 7, 10])
+                )
+            )
+        )
+        XCTAssertEqual(updates[1], .select(id: 42))
+    }
+
+    func testRejectsMalformedCursorWithoutDiscardingEarlierUpdates() throws {
+        var message = Data([0, 0, 0, 2])
+        message.append(cursorHeader(hotspotX: 0, hotspotY: 0, width: 0, height: 0))
+        message.appendUInt32BE(7)
+        message.appendUInt32BE(0)
+        message.append(cursorHeader(hotspotX: 2, hotspotY: 0, width: 1, height: 1))
+        let compressed = try ZlibCodec.compress(Data(repeating: 0, count: 5))
+        message.appendUInt32BE(8)
+        message.appendUInt32BE(UInt32(compressed.count))
+        message.append(compressed)
+
+        XCTAssertEqual(AppleFramebufferUpdate.cursorUpdates(from: message), [.select(id: 7)])
+
+        message.removeLast()
+        XCTAssertEqual(AppleFramebufferUpdate.cursorUpdates(from: message), [.select(id: 7)])
+    }
+
     private func rectangleHeader(encoding: Int32) -> Data {
         var data = Data(repeating: 0, count: 8)
         data.appendInt32BE(encoding)
+        return data
+    }
+
+    private func cursorHeader(
+        hotspotX: UInt16,
+        hotspotY: UInt16,
+        width: UInt16,
+        height: UInt16
+    ) -> Data {
+        var data = Data()
+        data.appendUInt16BE(hotspotX)
+        data.appendUInt16BE(hotspotY)
+        data.appendUInt16BE(width)
+        data.appendUInt16BE(height)
+        data.appendInt32BE(0x450)
         return data
     }
 

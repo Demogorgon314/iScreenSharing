@@ -16,6 +16,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var clipboardService: AppleClipboardService?
     private(set) var audioStream: AppleAudioStream?
     private(set) var dynamicResolutionController: AppleDynamicResolutionController?
+    private(set) var cursorStore: AppleCursorStore?
 
     private let transport: NWConnectionTransport
 
@@ -107,6 +108,10 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     func install(dynamicResolutionController: AppleDynamicResolutionController) {
         self.dynamicResolutionController = dynamicResolutionController
+    }
+
+    func install(cursorStore: AppleCursorStore) {
+        self.cursorStore = cursorStore
     }
 
     deinit {
