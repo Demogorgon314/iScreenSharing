@@ -3,6 +3,7 @@ import Foundation
 struct AppleMediaNegotiationResult: Equatable, Sendable {
     let keys: AppleMediaKeys
     let canvas: AppleCanvas
+    let videoSynchronizationSource: UInt32
     let pendingMessages: [Data]
 }
 
@@ -47,6 +48,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                 let result = AppleMediaNegotiationResult(
                     keys: keys,
                     canvas: canvas,
+                    videoSynchronizationSource: offers.videoSynchronizationSource,
                     pendingMessages: pendingMessages
                 )
                 session.install(mediaNegotiation: result)

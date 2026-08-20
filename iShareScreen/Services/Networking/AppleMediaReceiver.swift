@@ -64,6 +64,15 @@ final class AppleMediaReceiver: @unchecked Sendable {
         }
     }
 
+    func sendControl(_ datagram: Data) throws {
+        let isOpen = lock.withLock { !isClosed }
+        guard isOpen else { throw AppleMediaReceiverError.closed }
+        let sent = datagram.withUnsafeBytes { bytes in
+            Darwin.send(controlSocket, bytes.baseAddress, bytes.count, 0)
+        }
+        guard sent == datagram.count else { throw AppleMediaReceiverError.sendFailed(errno) }
+    }
+
     func stopPunching() {
         punchTimer.cancel()
     }
@@ -196,6 +205,8 @@ enum AppleMediaReceiverError: LocalizedError {
     case connectionFailed(Int32)
     case ipv4ResolutionFailed
     case invalidPort
+    case closed
+    case sendFailed(Int32)
 
     var errorDescription: String? {
         switch self {
@@ -207,9 +218,19 @@ enum AppleMediaReceiverError: LocalizedError {
             "The remote Mac does not have a usable IPv4 address for media streaming."
         case .invalidPort:
             "The Screen Sharing port is too high to allocate its media port."
+        case .closed:
+            "The Screen Sharing media connection is closed."
+        case .sendFailed:
+            "Screen Sharing recovery feedback could not be sent."
         }
     }
 }
+
+protocol AppleMediaControlSending: Sendable {
+    func sendControl(_ datagram: Data) throws
+}
+
+extension AppleMediaReceiver: AppleMediaControlSending {}
 
 private extension NSLock {
     func withLock<T>(_ body: () throws -> T) rethrows -> T {

@@ -20,17 +20,25 @@ struct AppleSRTPKeySchedule: Equatable, Sendable {
         guard masterKey.count == 32, masterSalt.count == 14 else {
             throw AppleSRTPError.invalidKeyBlob
         }
-        cipherKey = try Self.derive(masterKey: masterKey, masterSalt: masterSalt, label: 0, count: 32)
-        authenticationKey = try Self.derive(masterKey: masterKey, masterSalt: masterSalt, label: 1, count: 20)
-        salt = try Self.derive(masterKey: masterKey, masterSalt: masterSalt, label: 2, count: 14)
+        cipherKey = try AppleMediaKeyDerivation.derive(
+            masterKey: masterKey, masterSalt: masterSalt, label: 0, count: 32
+        )
+        authenticationKey = try AppleMediaKeyDerivation.derive(
+            masterKey: masterKey, masterSalt: masterSalt, label: 1, count: 20
+        )
+        salt = try AppleMediaKeyDerivation.derive(
+            masterKey: masterKey, masterSalt: masterSalt, label: 2, count: 14
+        )
     }
 
     init(blob: Data) throws {
         guard blob.count == AppleMediaKeys.blobLength else { throw AppleSRTPError.invalidKeyBlob }
         try self.init(masterKey: blob.prefix(32), masterSalt: blob.suffix(14))
     }
+}
 
-    private static func derive(
+private enum AppleMediaKeyDerivation {
+    static func derive(
         masterKey: Data,
         masterSalt: Data,
         label: UInt8,
@@ -53,6 +61,71 @@ struct AppleSRTPKeySchedule: Equatable, Sendable {
             data[index] &+= 1
             if data[index] != 0 { break }
         }
+    }
+}
+
+struct AppleSRTCPKeySchedule: Equatable, Sendable {
+    let cipherKey: Data
+    let authenticationKey: Data
+    let salt: Data
+
+    init(blob: Data) throws {
+        guard blob.count == AppleMediaKeys.blobLength else { throw AppleSRTPError.invalidKeyBlob }
+        let masterKey = blob.prefix(32)
+        let masterSalt = blob.suffix(14)
+        cipherKey = try AppleMediaKeyDerivation.derive(
+            masterKey: masterKey, masterSalt: masterSalt, label: 3, count: 32
+        )
+        authenticationKey = try AppleMediaKeyDerivation.derive(
+            masterKey: masterKey, masterSalt: masterSalt, label: 4, count: 20
+        )
+        salt = try AppleMediaKeyDerivation.derive(
+            masterKey: masterKey, masterSalt: masterSalt, label: 5, count: 14
+        )
+    }
+}
+
+final class AppleSRTCPEncryptor: @unchecked Sendable {
+    private static let authenticationTagLength = 10
+    private let lock = NSLock()
+    private let keys: AppleSRTCPKeySchedule
+    private var index: UInt32 = 0
+
+    init(keyBlob: Data) throws {
+        keys = try AppleSRTCPKeySchedule(blob: keyBlob)
+    }
+
+    func protect(_ packet: Data) throws -> Data {
+        try lock.withCriticalSection {
+            guard packet.count >= 8 else { throw AppleSRTPError.invalidPacket }
+            let packetIndex = index & 0x7fff_ffff
+            index = (packetIndex &+ 1) & 0x7fff_ffff
+            let source = try packet.uint32BE(at: 4)
+            let header = packet.prefix(8)
+            let ciphertext = try Cryptography.cryptAESCTR(
+                packet.dropFirst(8),
+                key: keys.cipherKey,
+                iv: initializationVector(source: source, index: packetIndex)
+            )
+            var body = Data(header)
+            body.append(ciphertext)
+            body.appendUInt32BE(0x8000_0000 | packetIndex)
+            let code = HMAC<Insecure.SHA1>.authenticationCode(
+                for: body,
+                using: SymmetricKey(data: keys.authenticationKey)
+            )
+            body.append(contentsOf: code.prefix(Self.authenticationTagLength))
+            return body
+        }
+    }
+
+    private func initializationVector(source: UInt32, index: UInt32) -> Data {
+        var vector = Data(keys.salt) + Data(repeating: 0, count: 2)
+        for offset in 0..<4 {
+            vector[4 + offset] ^= UInt8(truncatingIfNeeded: source >> UInt32(24 - offset * 8))
+            vector[10 + offset] ^= UInt8(truncatingIfNeeded: index >> UInt32(24 - offset * 8))
+        }
+        return vector
     }
 }
 

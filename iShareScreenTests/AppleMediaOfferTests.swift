@@ -11,6 +11,8 @@ final class AppleMediaOfferTests: XCTestCase {
             timestamp: { 123_456_789 },
             uuid: { fixedUUID }
         )
+        XCTAssertEqual(offers.videoSynchronizationSource, 0x1122_3344)
+        XCTAssertEqual(offers.audioSynchronizationSource, 0x5566_7788)
 
         for (offer, mode) in [(offers.video, 7), (offers.audio, 8)] {
             XCTAssertEqual(String(data: offer.prefix(8), encoding: .ascii), "bplist00")

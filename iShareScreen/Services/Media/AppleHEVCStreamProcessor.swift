@@ -24,6 +24,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
     private let decryptor: AppleSRTPDecryptor
     private var groups = [GroupKey: [AppleRTPPacket]]()
     private var sourcePacketCounts = [UInt32: Int]()
+    private var sequenceTracker = AppleRTPSequenceTracker()
     private(set) var parameterSets = AppleHEVCParameterSets()
 
     init(keyBlob: Data) throws {
@@ -41,6 +42,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
     }
 
     private func processUnlocked(_ packet: AppleRTPPacket) -> AppleHEVCAccessUnit? {
+        sequenceTracker.observe(packet)
         let key = GroupKey(source: packet.synchronizationSource, timestamp: packet.timestamp)
         sourcePacketCounts[key.source, default: 0] += 1
         var packets = groups[key, default: []]
@@ -61,6 +63,10 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             timestamp: key.timestamp,
             nalUnits: units
         )
+    }
+
+    func drainMissingSequences() -> [UInt32: [UInt16]] {
+        lock.withStreamLock { sequenceTracker.drainMissingSequences() }
     }
 
     func currentParameterSets() -> AppleHEVCParameterSets {
@@ -122,6 +128,37 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         let gapIndex = gaps.max { $0.0 < $1.0 }!.1
         let start = (gapIndex + 1) % sorted.count
         return Array(sorted[start...]) + Array(sorted[..<start])
+    }
+}
+
+struct AppleRTPSequenceTracker: Sendable {
+    private var maximumSequence = [UInt32: UInt16]()
+    private var missingSequences = [UInt32: Set<UInt16>]()
+
+    mutating func observe(_ packet: AppleRTPPacket) {
+        let source = packet.synchronizationSource
+        let sequence = packet.sequenceNumber
+        guard let previous = maximumSequence[source] else {
+            maximumSequence[source] = sequence
+            return
+        }
+        let difference = sequence &- previous
+        if difference == 0 { return }
+        if difference > 0x8000 {
+            missingSequences[source]?.remove(sequence)
+            return
+        }
+        if difference > 1 {
+            for offset in 1..<min(Int(difference), 32) {
+                missingSequences[source, default: []].insert(previous &+ UInt16(offset))
+            }
+        }
+        maximumSequence[source] = sequence
+    }
+
+    mutating func drainMissingSequences() -> [UInt32: [UInt16]] {
+        defer { missingSequences.removeAll(keepingCapacity: true) }
+        return missingSequences.mapValues { $0.sorted() }
     }
 }
 

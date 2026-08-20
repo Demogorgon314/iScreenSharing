@@ -1,6 +1,7 @@
 import Combine
 import CoreVideo
 import Foundation
+import OSLog
 
 final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     enum State: Equatable {
@@ -15,9 +16,12 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     let frames = AppleVideoFrameStore()
 
     private static let maximumCachedUnitsPerSource = 128
+    private static let receiverReportInterval: TimeInterval = 0.5
+    private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
     private let receiver: AppleMediaReceiver
     private let processor: AppleHEVCStreamProcessor
+    private let feedback: AppleVideoFeedbackController
     private let queue = DispatchQueue(label: "com.isharescreen.video-stream", qos: .userInteractive)
     private let lifecycleLock = NSLock()
     private let countLock = NSLock()
@@ -27,11 +31,17 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var cachedUnits = [UInt32: [Data]]()
     private var isClosed = false
     private var frameCount = 0
+    private var lastReceiverReportTime: TimeInterval = 0
 
     init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
         self.receiver = receiver
         canvas = negotiation.canvas
         processor = try AppleHEVCStreamProcessor(keyBlob: negotiation.keys.videoServer)
+        feedback = try AppleVideoFeedbackController(
+            sender: receiver,
+            keyBlob: negotiation.keys.videoViewer,
+            synchronizationSource: negotiation.videoSynchronizationSource
+        )
     }
 
     var decodedFrameCount: Int {
@@ -71,9 +81,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     }
 
     private func processAvailablePackets() {
+        sendReceiverReportIfNeeded()
         let datagrams = receiver.drainVideoPackets()
         guard !datagrams.isEmpty else { return }
         let accessUnits = processor.process(datagrams)
+        sendPendingNACKs()
         guard !accessUnits.isEmpty else { return }
 
         if decoder == nil || sourceToTile.count != canvas.tileCount {
@@ -137,9 +149,37 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         do {
             _ = try decoder?.decode(nalUnit, tileIndex: tileIndex)
         } catch AppleHEVCDecoderError.decodeFailed {
-            // Packet loss may make an individual inter-frame undecodable. A later IDR recovers it.
+            requestKeyFrame(for: tileIndex)
         } catch {
             fail(error)
+        }
+    }
+
+    private func sendPendingNACKs() {
+        do {
+            try feedback.sendNACKs(processor.drainMissingSequences())
+        } catch {
+            Self.logger.debug("NACK send failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func requestKeyFrame(for tileIndex: Int) {
+        guard let source = sourceToTile.first(where: { $0.value == tileIndex })?.key else { return }
+        do {
+            try feedback.requestKeyFrame(for: source)
+        } catch {
+            Self.logger.debug("Key-frame request failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func sendReceiverReportIfNeeded() {
+        let currentTime = ProcessInfo.processInfo.systemUptime
+        guard currentTime - lastReceiverReportTime >= Self.receiverReportInterval else { return }
+        lastReceiverReportTime = currentTime
+        do {
+            try feedback.sendReceiverReport()
+        } catch {
+            Self.logger.debug("Receiver report failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

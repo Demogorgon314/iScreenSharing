@@ -31,6 +31,23 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(unit.nalUnits.count, 2)
     }
 
+    func testTracksSequenceGapsAndCancelsNACKForLatePacket() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: Data([1]))))
+        XCTAssertNil(processor.process(packet(sequence: 13, marker: false, payload: Data([1]))))
+        XCTAssertNil(processor.process(packet(sequence: 11, marker: false, payload: Data([1]))))
+
+        XCTAssertEqual(processor.drainMissingSequences(), [0x1122_3344: [12]])
+        XCTAssertTrue(processor.drainMissingSequences().isEmpty)
+    }
+
+    func testSequenceTrackingHandlesRollover() {
+        var tracker = AppleRTPSequenceTracker()
+        tracker.observe(packet(sequence: UInt16.max, marker: false, payload: Data()))
+        tracker.observe(packet(sequence: 1, marker: false, payload: Data()))
+        XCTAssertEqual(tracker.drainMissingSequences(), [0x1122_3344: [0]])
+    }
+
     private func packet(sequence: UInt16, marker: Bool, payload: Data) -> AppleRTPPacket {
         AppleRTPPacket(
             header: Data(),

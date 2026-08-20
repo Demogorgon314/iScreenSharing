@@ -3,6 +3,8 @@ import Foundation
 struct AppleMediaOffers: Equatable, Sendable {
     let video: Data
     let audio: Data
+    let videoSynchronizationSource: UInt32
+    let audioSynchronizationSource: UInt32
 }
 
 enum AppleMediaOffer {
@@ -25,21 +27,28 @@ enum AppleMediaOffer {
         timestamp: () -> UInt64 = { UInt64(Date().timeIntervalSince1970 * 1_000_000_000) },
         uuid: () -> UUID = UUID.init
     ) throws -> AppleMediaOffers {
+        let videoSynchronizationSource = try randomUInt32()
+        let audioSynchronizationSource = try randomUInt32()
         let video = try makePlist(
             mode: 7,
-            sessionID: randomUInt32(),
+            sessionID: videoSynchronizationSource,
             timestamp: timestamp(),
             callID: uuid(),
             audioEnabled: audioEnabled
         )
         let audio = try makePlist(
             mode: 8,
-            sessionID: randomUInt32(),
+            sessionID: audioSynchronizationSource,
             timestamp: timestamp(),
             callID: uuid(),
             audioEnabled: audioEnabled
         )
-        return AppleMediaOffers(video: video, audio: audio)
+        return AppleMediaOffers(
+            video: video,
+            audio: audio,
+            videoSynchronizationSource: videoSynchronizationSource,
+            audioSynchronizationSource: audioSynchronizationSource
+        )
     }
 
     static func decompressMediaBlob(from offer: Data) throws -> Data {

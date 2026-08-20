@@ -33,6 +33,25 @@ final class AppleSRTPTests: XCTestCase {
             XCTAssertEqual(error as? AppleSRTPError, .authenticationFailed)
         }
     }
+
+    func testProtectsIndependentSRTCPReferencePacket() throws {
+        let encryptor = try AppleSRTCPEncryptor(keyBlob: Data(0..<46))
+        let packet = try XCTUnwrap(
+            Data(hex: "80c900011122334481cd00041122334455667788000a0005001e0000")
+        )
+
+        XCTAssertEqual(
+            try encryptor.protect(packet).hex,
+            "80c9000111223344ea6540af06680fabb3ce005aa192a9c2d9138ea18000000005039c4d56c23bf9e2ba"
+        )
+    }
+
+    func testSRTCPRejectsShortPacket() throws {
+        let encryptor = try AppleSRTCPEncryptor(keyBlob: Data(0..<46))
+        XCTAssertThrowsError(try encryptor.protect(Data(repeating: 0, count: 7))) { error in
+            XCTAssertEqual(error as? AppleSRTPError, .invalidPacket)
+        }
+    }
 }
 
 private extension Data {
