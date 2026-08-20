@@ -113,9 +113,9 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(cursorStore.receivedUpdateCount, 0)
 
         let initialCanvas = stream.canvas
-        let requestedSize = initialCanvas == AppleCanvas(width: 1600, height: 1200, tileCount: initialCanvas.tileCount)
-            ? AppleDynamicResolutionSize(width: 960, height: 540)
-            : AppleDynamicResolutionSize(width: 800, height: 600)
+        let requestedSize = initialCanvas.width == 1920 && initialCanvas.height == 1080
+            ? AppleDynamicResolutionSize(width: 1440, height: 900)
+            : AppleDynamicResolutionSize(width: 960, height: 540)
         try await dynamicResolution.request(width: requestedSize.width, height: requestedSize.height)
         let resizeDeadline = clock.now.advanced(by: .seconds(10))
         while clock.now < resizeDeadline {

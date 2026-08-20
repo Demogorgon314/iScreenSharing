@@ -36,12 +36,30 @@ final class AppleDisplayConfigurationTests: XCTestCase {
         XCTAssertEqual(try message.uint32BE(at: firstModeOffset + 24), 1)
     }
 
+    func testBuildsTwoVirtualDisplayDescriptors() throws {
+        let message = try AppleDisplayConfiguration.message(
+            width: 1440,
+            height: 900,
+            displayCount: 2
+        )
+
+        XCTAssertEqual(message.count, 604)
+        XCTAssertEqual(try message.uint16BE(at: 2), 600)
+        XCTAssertEqual(try message.uint16BE(at: 6), 2)
+        XCTAssertEqual(try message.uint16BE(at: 12), 296)
+        XCTAssertEqual(try message.uint16BE(at: 308), 296)
+        XCTAssertEqual(message[12..<308], message[308..<604])
+    }
+
     func testRejectsInvalidGeometryAndScale() {
         XCTAssertThrowsError(try AppleDisplayConfiguration.message(width: 0, height: 900)) {
             XCTAssertEqual($0 as? AppleDisplayConfigurationError, .invalidDimensions)
         }
         XCTAssertThrowsError(try AppleDisplayConfiguration.message(width: 1440, height: 900, backingScale: .nan)) {
             XCTAssertEqual($0 as? AppleDisplayConfigurationError, .invalidBackingScale)
+        }
+        XCTAssertThrowsError(try AppleDisplayConfiguration.message(width: 1440, height: 900, displayCount: 3)) {
+            XCTAssertEqual($0 as? AppleDisplayConfigurationError, .invalidDisplayCount)
         }
     }
 

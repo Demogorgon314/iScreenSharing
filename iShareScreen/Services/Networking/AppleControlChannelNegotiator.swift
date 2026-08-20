@@ -23,6 +23,9 @@ struct AppleControlChannelNegotiator: AppleControlChannelNegotiating {
 
         try await session.send(AppleRFBMessages.postEncryptionToggle)
         try await Task.sleep(for: .milliseconds(200))
+        try await session.sendEncrypted(
+            AppleDisplayConfiguration.message(width: 1440, height: 900)
+        )
         return recordLayer
     }
 }

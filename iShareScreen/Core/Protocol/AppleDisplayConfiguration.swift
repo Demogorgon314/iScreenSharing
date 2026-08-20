@@ -37,6 +37,7 @@ enum AppleDisplayConfiguration {
         height: Int,
         backingScale: Double = 2,
         hdr: Bool = false,
+        displayCount: Int = 1,
         displayName: String = "iShareScreen Virtual Display"
     ) throws -> Data {
         guard width > 0, height > 0 else {
@@ -44,6 +45,9 @@ enum AppleDisplayConfiguration {
         }
         guard backingScale.isFinite, backingScale > 0 else {
             throw AppleDisplayConfigurationError.invalidBackingScale
+        }
+        guard (1...2).contains(displayCount) else {
+            throw AppleDisplayConfigurationError.invalidDisplayCount
         }
 
         let descriptorSize = descriptorHeaderSize + modeSize * modes.count
@@ -82,12 +86,13 @@ enum AppleDisplayConfiguration {
             descriptor.writeUInt32BE(hdr ? 1 : 0, at: offset + 24)
         }
 
+        let messageSize = 8 + descriptorSize * displayCount
         var message = Data([0x1d, 0])
-        message.appendUInt16BE(UInt16(8 + descriptorSize))
+        message.appendUInt16BE(UInt16(messageSize))
         message.appendUInt16BE(1)
-        message.appendUInt16BE(1)
+        message.appendUInt16BE(UInt16(displayCount))
         message.appendUInt32BE(0)
-        message.append(descriptor)
+        for _ in 0..<displayCount { message.append(descriptor) }
         return message
     }
 
@@ -132,11 +137,13 @@ enum AppleDisplayConfiguration {
 enum AppleDisplayConfigurationError: LocalizedError, Equatable {
     case invalidDimensions
     case invalidBackingScale
+    case invalidDisplayCount
 
     var errorDescription: String? {
         switch self {
         case .invalidDimensions: "The requested display dimensions are invalid."
         case .invalidBackingScale: "The requested display scale is invalid."
+        case .invalidDisplayCount: "Screen Sharing supports one or two virtual displays."
         }
     }
 }
