@@ -31,6 +31,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
             mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
             credentialStore: credentials,
             connectionStore: connections,
             sessionManager: sessions
@@ -59,6 +60,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
             mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             sessionManager: sessions
@@ -168,4 +170,11 @@ private struct MockMediaNegotiator: AppleMediaNegotiating {
         session.install(mediaNegotiation: result)
         return result
     }
+}
+
+private struct MockVideoStreamStarter: AppleVideoStreamStarting {
+    func startVideo(
+        for session: RFBAuthenticatedSession,
+        negotiation: AppleMediaNegotiationResult
+    ) throws { }
 }

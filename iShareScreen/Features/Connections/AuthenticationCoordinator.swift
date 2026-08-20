@@ -16,6 +16,7 @@ final class AuthenticationCoordinator: ObservableObject {
     private let authenticator: any RFBAuthenticating
     private let controlChannelNegotiator: any AppleControlChannelNegotiating
     private let mediaNegotiator: any AppleMediaNegotiating
+    private let videoStreamStarter: any AppleVideoStreamStarting
     private let credentialStore: any CredentialStoring
     private let connectionStore: ConnectionStore
     private let sessionManager: SessionManager
@@ -26,6 +27,7 @@ final class AuthenticationCoordinator: ObservableObject {
         authenticator: any RFBAuthenticating = RFBAuthenticationService(),
         controlChannelNegotiator: any AppleControlChannelNegotiating = AppleControlChannelNegotiator(),
         mediaNegotiator: any AppleMediaNegotiating = AppleMediaNegotiator(),
+        videoStreamStarter: any AppleVideoStreamStarting = AppleVideoStreamStarter(),
         credentialStore: any CredentialStoring = KeychainCredentialStore(),
         connectionStore: ConnectionStore,
         sessionManager: SessionManager
@@ -34,6 +36,7 @@ final class AuthenticationCoordinator: ObservableObject {
         self.authenticator = authenticator
         self.controlChannelNegotiator = controlChannelNegotiator
         self.mediaNegotiator = mediaNegotiator
+        self.videoStreamStarter = videoStreamStarter
         self.credentialStore = credentialStore
         self.connectionStore = connectionStore
         self.sessionManager = sessionManager
@@ -52,7 +55,8 @@ final class AuthenticationCoordinator: ObservableObject {
                 do {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
                     _ = try await controlChannelNegotiator.enableEncryption(for: session)
-                    _ = try await mediaNegotiator.negotiate(session)
+                    let negotiation = try await mediaNegotiator.negotiate(session)
+                    try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
                     try Task.checkCancellation()
                     if rememberPassword {
                         try credentialStore.save(credentials, for: endpoint)

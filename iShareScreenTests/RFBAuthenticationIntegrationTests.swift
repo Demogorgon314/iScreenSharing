@@ -33,16 +33,21 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(media.canvas.height, 0)
         XCTAssertGreaterThan(media.canvas.tileCount, 0)
         XCTAssertEqual(session.mediaNegotiation, media)
-        try await Task.sleep(for: .milliseconds(800))
-        let encryptedPackets = session.mediaReceiver?.drainVideoPackets() ?? []
-        XCTAssertGreaterThan(encryptedPackets.count, 0)
-        let decryptor = try AppleSRTPDecryptor(keyBlob: media.keys.videoServer)
-        let decryptedPackets = encryptedPackets.compactMap { try? decryptor.decrypt($0) }
-        XCTAssertGreaterThan(decryptedPackets.count, 0)
-        XCTAssertTrue(decryptedPackets.contains { !$0.payload.isEmpty })
-        let processor = try AppleHEVCStreamProcessor(keyBlob: media.keys.videoServer)
-        _ = processor.process(encryptedPackets)
-        XCTAssertTrue(processor.currentParameterSets().isComplete)
-        XCTAssertEqual(processor.primarySources(tileCount: media.canvas.tileCount).count, media.canvas.tileCount)
+        let receiver = try XCTUnwrap(session.mediaReceiver)
+        let stream = try AppleVideoStream(receiver: receiver, negotiation: media)
+        session.install(videoStream: stream)
+        stream.start()
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(6))
+        while clock.now < deadline {
+            let allTilesHaveFrames = (0..<media.canvas.tileCount).allSatisfy {
+                stream.frames.frame(at: $0) != nil
+            }
+            if allTilesHaveFrames, stream.decodedFrameCount > media.canvas.tileCount { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue((0..<media.canvas.tileCount).allSatisfy { stream.frames.frame(at: $0) != nil })
+        XCTAssertGreaterThan(stream.decodedFrameCount, media.canvas.tileCount)
     }
 }

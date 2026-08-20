@@ -10,6 +10,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var rekeyGeneration: UInt32?
     private(set) var mediaNegotiation: AppleMediaNegotiationResult?
     private(set) var mediaReceiver: AppleMediaReceiver?
+    private(set) var videoStream: AppleVideoStream?
 
     private let transport: NWConnectionTransport
 
@@ -30,6 +31,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
 
     func close() {
+        videoStream?.close()
         mediaReceiver?.close()
         transport.cancel()
     }
@@ -71,7 +73,13 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.mediaReceiver = mediaReceiver
     }
 
+    func install(videoStream: AppleVideoStream) {
+        self.videoStream?.close()
+        self.videoStream = videoStream
+    }
+
     deinit {
+        videoStream?.close()
         mediaReceiver?.close()
         transport.cancel()
     }
