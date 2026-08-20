@@ -48,6 +48,7 @@ private struct ScreenSharingCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @FocusedBinding(\.connectionLibraryLayout) private var connectionLibraryLayout
     @FocusedBinding(\.sessionDisplayScale) private var displayScale
+    @FocusedValue(\.dynamicResolutionActions) private var dynamicResolutionActions
     @FocusedValue(\.sessionModeActions) private var sessionModeActions
 
     var body: some Commands {
@@ -71,6 +72,10 @@ private struct ScreenSharingCommands: Commands {
                 displayScale?.toggleScaling()
             }
             .disabled(displayScale == nil)
+            Button("Dynamic Resolution") {
+                dynamicResolutionActions?.toggle()
+            }
+            .disabled(dynamicResolutionActions?.canToggle != true)
             Divider()
             Button("Actual Size") {
                 displayScale?.actualSize()
@@ -111,10 +116,19 @@ extension FocusedValues {
         set { self[SessionDisplayScaleFocusedKey.self] = newValue }
     }
 
+    var dynamicResolutionActions: DynamicResolutionActions? {
+        get { self[DynamicResolutionActionsFocusedKey.self] }
+        set { self[DynamicResolutionActionsFocusedKey.self] = newValue }
+    }
+
     var sessionModeActions: SessionModeActions? {
         get { self[SessionModeActionsFocusedKey.self] }
         set { self[SessionModeActionsFocusedKey.self] = newValue }
     }
+}
+
+private struct DynamicResolutionActionsFocusedKey: FocusedValueKey {
+    typealias Value = DynamicResolutionActions
 }
 
 private struct ConnectionLibraryLayoutFocusedKey: FocusedValueKey {
@@ -123,6 +137,12 @@ private struct ConnectionLibraryLayoutFocusedKey: FocusedValueKey {
 
 struct SessionModeActions {
     let isObserving: Bool
+    let canToggle: Bool
+    let toggle: () -> Void
+}
+
+struct DynamicResolutionActions {
+    let isEnabled: Bool
     let canToggle: Bool
     let toggle: () -> Void
 }

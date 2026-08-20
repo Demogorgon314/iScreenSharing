@@ -24,7 +24,7 @@ struct AppleMediaKeys: Equatable, Sendable {
     }
 }
 
-struct AppleCanvas: Equatable, Sendable {
+struct AppleCanvas: Equatable, Hashable, Sendable {
     let width: Int
     let height: Int
     let tileCount: Int

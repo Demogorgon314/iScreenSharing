@@ -36,14 +36,6 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertEqual(session.mediaNegotiation, media)
         let input = AppleInputController(session: session, canvas: media.canvas)
         let clipboard = await MainActor.run { IntegrationClipboardReceiver() }
-        let controlMessages = AppleControlMessageService(
-            session: session,
-            input: input,
-            clipboard: clipboard,
-            pendingMessages: media.pendingMessages
-        )
-        controlMessages.start()
-        defer { controlMessages.close() }
         let receiver = try XCTUnwrap(session.mediaReceiver)
         let audioPlayer = IntegrationAudioPlayer()
         let audioStream = try AppleAudioStream(
@@ -56,6 +48,32 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         let stream = try AppleVideoStream(receiver: receiver, negotiation: media)
         session.install(videoStream: stream)
         stream.start()
+        let dynamicResolution = AppleDynamicResolutionController(
+            initialCanvas: media.canvas,
+            mediaConfiguration: media.configuration,
+            sendMessage: { [weak session] message in
+                guard let session else { return }
+                try await session.sendEncrypted(message)
+            },
+            applyCanvas: { [weak stream, weak input] canvas in
+                await stream?.reconfigure(canvas: canvas)
+                await input?.update(canvas: canvas)
+            }
+        )
+        let controlMessages = AppleControlMessageService(
+            session: session,
+            input: input,
+            clipboard: clipboard,
+            pendingMessages: media.pendingMessages,
+            receiveDisplayLayout: { layout in
+                try? await dynamicResolution.receive(layout)
+            },
+            receiveMediaCanvas: { canvas in
+                await dynamicResolution.receiveMediaCanvas(canvas)
+            }
+        )
+        controlMessages.start()
+        defer { controlMessages.close() }
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(6))
@@ -84,12 +102,30 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         }
         XCTAssertGreaterThan(controlMessages.receivedMessageCount, 0)
 
+        let initialCanvas = stream.canvas
+        let requestedSize = initialCanvas == AppleCanvas(width: 1600, height: 1200, tileCount: initialCanvas.tileCount)
+            ? AppleDynamicResolutionSize(width: 960, height: 540)
+            : AppleDynamicResolutionSize(width: 800, height: 600)
+        try await dynamicResolution.request(width: requestedSize.width, height: requestedSize.height)
+        let resizeDeadline = clock.now.advanced(by: .seconds(10))
+        while clock.now < resizeDeadline {
+            let resizedCanvas = stream.canvas
+            let allTilesHaveFrames = (0..<resizedCanvas.tileCount).allSatisfy {
+                stream.frames.frame(at: $0) != nil
+            }
+            if resizedCanvas != initialCanvas, allTilesHaveFrames, stream.state == .streaming { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotEqual(stream.canvas, initialCanvas)
+        XCTAssertEqual(stream.state, .streaming)
+        XCTAssertTrue((0..<stream.canvas.tileCount).allSatisfy { stream.frames.frame(at: $0) != nil })
+
         try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: true))
         try await Task.sleep(for: .milliseconds(50))
         try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: false))
 
         let countBeforeInput = await input.sentEventCount
-        await input.pointer(buttons: 0, x: media.canvas.width / 2, y: media.canvas.height / 2)
+        await input.pointer(buttons: 0, x: stream.canvas.width / 2, y: stream.canvas.height / 2)
         await input.key(isDown: true, symbol: 0xffe1)
         await input.key(isDown: false, symbol: 0xffe1)
         let sentEventCount = await input.sentEventCount

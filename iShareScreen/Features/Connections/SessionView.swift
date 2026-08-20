@@ -7,6 +7,8 @@ struct SessionView: View {
     @State private var isObserving = false
     @State private var isChangingMode = false
     @State private var modeError: String?
+    @State private var viewportSize = CGSize.zero
+    @StateObject private var dynamicResolution = AppleDynamicResolutionModel()
 
     var body: some View {
         Group {
@@ -14,17 +16,27 @@ struct SessionView: View {
                 ActiveVideoSessionView(
                     stream: stream,
                     input: isObserving ? nil : session.inputController,
-                    displayScale: displayScale
+                    displayScale: displayScale,
+                    onViewportChange: viewportChanged
                 )
             } else {
                 unavailableContent
             }
         }
         .onDisappear {
+            dynamicResolution.cancel()
             sessions.disconnect(endpoint)
         }
         .navigationTitle(endpoint.displayName)
         .focusedSceneValue(\.sessionDisplayScale, $displayScale)
+        .focusedSceneValue(
+            \.dynamicResolutionActions,
+            DynamicResolutionActions(
+                isEnabled: dynamicResolution.isEnabled,
+                canToggle: sessions.session(for: endpoint)?.dynamicResolutionController != nil,
+                toggle: { dynamicResolution.isEnabled.toggle() }
+            )
+        )
         .focusedSceneValue(
             \.sessionModeActions,
             SessionModeActions(
@@ -57,6 +69,14 @@ struct SessionView: View {
         } message: {
             Text(modeError ?? "The Screen Sharing mode could not be changed.")
         }
+        .alert("Unable to Change Resolution", isPresented: resolutionErrorIsPresented) {
+            Button("OK") { dynamicResolution.clearError() }
+        } message: {
+            Text(dynamicResolution.errorMessage ?? "The remote display resolution could not be changed.")
+        }
+        .onChange(of: dynamicResolution.isEnabled) { _, enabled in
+            if enabled { scheduleDynamicResolution() } else { dynamicResolution.cancel() }
+        }
     }
 
     private var unavailableContent: some View {
@@ -85,6 +105,23 @@ struct SessionView: View {
             get: { modeError != nil },
             set: { if !$0 { modeError = nil } }
         )
+    }
+
+    private var resolutionErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { dynamicResolution.errorMessage != nil },
+            set: { if !$0 { dynamicResolution.clearError() } }
+        )
+    }
+
+    private func viewportChanged(_ size: CGSize) {
+        viewportSize = size
+        scheduleDynamicResolution()
+    }
+
+    private func scheduleDynamicResolution() {
+        guard let controller = sessions.session(for: endpoint)?.dynamicResolutionController else { return }
+        dynamicResolution.schedule(viewport: viewportSize, controller: controller)
     }
 
     private func toggleObservationMode() {
@@ -123,6 +160,7 @@ private struct ActiveVideoSessionView: View {
     @ObservedObject var stream: AppleVideoStream
     let input: AppleInputController?
     let displayScale: AppleVideoDisplayScale
+    let onViewportChange: (CGSize) -> Void
 
     var body: some View {
         ZStack {
@@ -133,6 +171,7 @@ private struct ActiveVideoSessionView: View {
                 input: input,
                 displayScale: displayScale
             )
+            .id(stream.canvas)
             if stream.state != .streaming {
                 VStack(spacing: 10) {
                     if stream.state == .preparing { ProgressView().controlSize(.small) }
@@ -141,6 +180,13 @@ private struct ActiveVideoSessionView: View {
                         .multilineTextAlignment(.center)
                 }
                 .padding(20)
+            }
+        }
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { onViewportChange(geometry.size) }
+                    .onChange(of: geometry.size) { _, size in onViewportChange(size) }
             }
         }
     }
