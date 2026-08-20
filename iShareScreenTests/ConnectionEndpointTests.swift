@@ -26,6 +26,25 @@ final class ConnectionEndpointTests: XCTestCase {
         XCTAssertEqual(endpoint.port, 5900)
     }
 
+    func testRepresentsBonjourServiceWithoutFrameworkDependencies() throws {
+        let service = try BonjourServiceEndpoint(name: "deepdream’s Mac mini")
+        let endpoint = ConnectionEndpoint(bonjourService: service)
+
+        XCTAssertEqual(endpoint.displayName, "deepdream’s Mac mini")
+        XCTAssertEqual(endpoint.bonjourService, service)
+        XCTAssertTrue(endpoint.url.absoluteString.hasPrefix("vnc://bonjour?"))
+        XCTAssertEqual(
+            try JSONDecoder().decode(ConnectionEndpoint.self, from: JSONEncoder().encode(endpoint)),
+            endpoint
+        )
+    }
+
+    func testRejectsEmptyBonjourServiceFields() {
+        XCTAssertThrowsError(try BonjourServiceEndpoint(name: " "))
+        XCTAssertThrowsError(try BonjourServiceEndpoint(name: "Mac", type: " "))
+        XCTAssertThrowsError(try BonjourServiceEndpoint(name: "Mac", domain: " "))
+    }
+
     func testRejectsEmptyAndMalformedInputs() {
         XCTAssertThrowsError(try ConnectionEndpoint(""))
         XCTAssertThrowsError(try ConnectionEndpoint("not a host/path"))
@@ -33,4 +52,3 @@ final class ConnectionEndpointTests: XCTestCase {
         XCTAssertThrowsError(try ConnectionEndpoint("vnc://user@example.com"))
     }
 }
-

@@ -6,10 +6,21 @@ final class NWConnectionTransport: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.isharescreen.rfb-transport")
 
     init(endpoint: ConnectionEndpoint) {
-        connection = NWConnection(
+        connection = NWConnection(to: Self.networkEndpoint(for: endpoint), using: .tcp)
+    }
+
+    static func networkEndpoint(for endpoint: ConnectionEndpoint) -> NWEndpoint {
+        if let service = endpoint.bonjourService {
+            return .service(
+                name: service.name,
+                type: service.type,
+                domain: service.domain,
+                interface: nil
+            )
+        }
+        return .hostPort(
             host: NWEndpoint.Host(endpoint.host),
-            port: NWEndpoint.Port(rawValue: endpoint.port)!,
-            using: .tcp
+            port: NWEndpoint.Port(rawValue: endpoint.port)!
         )
     }
 
