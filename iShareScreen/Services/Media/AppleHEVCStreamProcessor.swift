@@ -1,0 +1,134 @@
+import Foundation
+
+struct AppleHEVCParameterSets: Equatable, Sendable {
+    var video = Data()
+    var sequence = Data()
+    var pictures = [Data]()
+
+    var isComplete: Bool { !video.isEmpty && !sequence.isEmpty && !pictures.isEmpty }
+}
+
+struct AppleHEVCAccessUnit: Equatable, Sendable {
+    let synchronizationSource: UInt32
+    let timestamp: UInt32
+    let nalUnits: [Data]
+}
+
+final class AppleHEVCStreamProcessor: @unchecked Sendable {
+    private struct GroupKey: Hashable {
+        let source: UInt32
+        let timestamp: UInt32
+    }
+
+    private let lock = NSLock()
+    private let decryptor: AppleSRTPDecryptor
+    private var groups = [GroupKey: [AppleRTPPacket]]()
+    private var sourcePacketCounts = [UInt32: Int]()
+    private(set) var parameterSets = AppleHEVCParameterSets()
+
+    init(keyBlob: Data) throws {
+        decryptor = try AppleSRTPDecryptor(keyBlob: keyBlob)
+    }
+
+    func process(_ datagrams: [Data]) -> [AppleHEVCAccessUnit] {
+        lock.withStreamLock {
+            datagrams.compactMap { try? decryptor.decrypt($0) }.compactMap(processUnlocked)
+        }
+    }
+
+    func process(_ packet: AppleRTPPacket) -> AppleHEVCAccessUnit? {
+        lock.withStreamLock { processUnlocked(packet) }
+    }
+
+    private func processUnlocked(_ packet: AppleRTPPacket) -> AppleHEVCAccessUnit? {
+        let key = GroupKey(source: packet.synchronizationSource, timestamp: packet.timestamp)
+        sourcePacketCounts[key.source, default: 0] += 1
+        var packets = groups[key, default: []]
+        if !packets.contains(where: { $0.sequenceNumber == packet.sequenceNumber }) {
+            packets.append(packet)
+        }
+        groups[key] = packets
+        guard packets.contains(where: \.marker) else { return nil }
+        groups.removeValue(forKey: key)
+
+        let ordered = Self.sequenceOrdered(packets)
+        guard ordered.last?.marker == true else { return nil }
+        let units = AppleHEVCNALUnit.reassemble(ordered.map(\.payload))
+        harvest(units)
+        guard !units.isEmpty else { return nil }
+        return AppleHEVCAccessUnit(
+            synchronizationSource: key.source,
+            timestamp: key.timestamp,
+            nalUnits: units
+        )
+    }
+
+    func currentParameterSets() -> AppleHEVCParameterSets {
+        lock.withStreamLock { parameterSets }
+    }
+
+    func primarySources(tileCount: Int) -> [UInt32] {
+        lock.withStreamLock {
+            guard tileCount > 0 else { return [] }
+            let sources = sourcePacketCounts.keys.sorted()
+            var groups = [[UInt32]]()
+            for source in sources {
+                if let last = groups.indices.last,
+                   groups[last].count < tileCount,
+                   source &- groups[last].last! <= 1 {
+                    groups[last].append(source)
+                } else {
+                    groups.append([source])
+                }
+            }
+            return groups.max { lhs, rhs in
+                let lhsCount = lhs.reduce(0) { total, source in
+                    total + sourcePacketCounts[source, default: 0]
+                }
+                let rhsCount = rhs.reduce(0) { total, source in
+                    total + sourcePacketCounts[source, default: 0]
+                }
+                return lhsCount < rhsCount
+            } ?? []
+        }
+    }
+
+    private func harvest(_ units: [Data]) {
+        for unit in units {
+            switch AppleHEVCNALUnit.type(of: unit) {
+            case AppleHEVCNALUnit.videoParameterSetType:
+                parameterSets.video = unit
+            case AppleHEVCNALUnit.sequenceParameterSetType:
+                parameterSets.sequence = unit
+            case AppleHEVCNALUnit.pictureParameterSetType:
+                if !parameterSets.pictures.contains(unit) { parameterSets.pictures.append(unit) }
+            default:
+                break
+            }
+        }
+    }
+
+    private static func sequenceOrdered(_ packets: [AppleRTPPacket]) -> [AppleRTPPacket] {
+        let sorted = packets.sorted { $0.sequenceNumber < $1.sequenceNumber }
+        guard sorted.count > 1,
+              Int(sorted.last!.sequenceNumber) - Int(sorted.first!.sequenceNumber) > 0x8000 else {
+            return sorted
+        }
+        let gaps = sorted.indices.map { index -> (Int, Int) in
+            let next = sorted[(index + 1) % sorted.count].sequenceNumber
+            let difference = (Int(next) - Int(sorted[index].sequenceNumber)) & 0xffff
+            return (difference, index)
+        }
+        let gapIndex = gaps.max { $0.0 < $1.0 }!.1
+        let start = (gapIndex + 1) % sorted.count
+        return Array(sorted[start...]) + Array(sorted[..<start])
+    }
+}
+
+private extension NSLock {
+    func withStreamLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
+    }
+}

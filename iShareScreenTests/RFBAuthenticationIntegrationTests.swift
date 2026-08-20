@@ -33,12 +33,16 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(media.canvas.height, 0)
         XCTAssertGreaterThan(media.canvas.tileCount, 0)
         XCTAssertEqual(session.mediaNegotiation, media)
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(800))
         let encryptedPackets = session.mediaReceiver?.drainVideoPackets() ?? []
         XCTAssertGreaterThan(encryptedPackets.count, 0)
         let decryptor = try AppleSRTPDecryptor(keyBlob: media.keys.videoServer)
         let decryptedPackets = encryptedPackets.compactMap { try? decryptor.decrypt($0) }
         XCTAssertGreaterThan(decryptedPackets.count, 0)
         XCTAssertTrue(decryptedPackets.contains { !$0.payload.isEmpty })
+        let processor = try AppleHEVCStreamProcessor(keyBlob: media.keys.videoServer)
+        _ = processor.process(encryptedPackets)
+        XCTAssertTrue(processor.currentParameterSets().isComplete)
+        XCTAssertEqual(processor.primarySources(tileCount: media.canvas.tileCount).count, media.canvas.tileCount)
     }
 }
