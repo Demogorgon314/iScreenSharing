@@ -30,10 +30,7 @@ struct SessionView: View {
                 Button { sendClipboard() } label: { Image(systemName: "clipboard") }
                     .help("Send Clipboard to Remote Mac")
                 if let audio = sessions.session(for: endpoint)?.audioStream {
-                    Button { audio.toggleMute() } label: {
-                        Image(systemName: audio.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    }
-                    .help(audio.isMuted ? "Unmute" : "Mute")
+                    AudioMuteButton(audio: audio)
                 }
             }
         }
@@ -58,6 +55,17 @@ struct SessionView: View {
               let input = session.inputController,
               let text = session.clipboardService?.localText() else { return }
         Task { try? await input.sendClipboard(text) }
+    }
+}
+
+private struct AudioMuteButton: View {
+    @ObservedObject var audio: AppleAudioStream
+
+    var body: some View {
+        Button { audio.toggleMute() } label: {
+            Image(systemName: audio.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+        }
+        .help(audio.isMuted ? "Unmute" : "Mute")
     }
 }
 
