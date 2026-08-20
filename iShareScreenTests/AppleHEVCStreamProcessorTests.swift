@@ -41,6 +41,21 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertTrue(processor.drainMissingSequences().isEmpty)
     }
 
+    func testResetDiscardsSourcesParametersAndMissingSequences() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let parameterPayload = aggregationPayload([
+            Data([0x40, 0x01, 1]), Data([0x42, 0x01, 2]), Data([0x44, 0x01, 3]),
+        ])
+        _ = processor.process(packet(sequence: 10, marker: true, payload: parameterPayload))
+        _ = processor.process(packet(sequence: 13, marker: false, payload: Data([1])))
+
+        processor.reset()
+
+        XCTAssertEqual(processor.currentParameterSets(), AppleHEVCParameterSets())
+        XCTAssertTrue(processor.primarySources(tileCount: 1).isEmpty)
+        XCTAssertTrue(processor.drainMissingSequences().isEmpty)
+    }
+
     func testSequenceTrackingHandlesRollover() {
         var tracker = AppleRTPSequenceTracker()
         tracker.observe(packet(sequence: UInt16.max, marker: false, payload: Data()))

@@ -63,7 +63,7 @@ final class AppleDisplayConfigurationTests: XCTestCase {
 
         XCTAssertEqual(layout.scaledWidth, 1440)
         XCTAssertEqual(layout.scaledHeight, 900)
-        XCTAssertEqual(layout.canvas, AppleCanvas(width: 2880, height: 1800, tileCount: 1))
+        XCTAssertEqual(layout.canvas(tileCount: 4), AppleCanvas(width: 2880, height: 1800, tileCount: 4))
         XCTAssertEqual(layout.displays, [
             AppleDisplayRect(displayID: 42, x: 10, y: 20, width: 2880, height: 1800),
         ])

@@ -166,6 +166,7 @@ private struct MockMediaNegotiator: AppleMediaNegotiating {
             keys: keys,
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
             videoSynchronizationSource: 0x1122_3344,
+            configuration: Data([0x1c]),
             pendingMessages: []
         )
         session.install(mediaNegotiation: result)

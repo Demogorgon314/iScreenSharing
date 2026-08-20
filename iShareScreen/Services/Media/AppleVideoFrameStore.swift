@@ -27,6 +27,10 @@ final class AppleVideoFrameStore: @unchecked Sendable {
         lock.withFrameStoreLock { frames[tileIndex] }
     }
 
+    func removeAllFrames() {
+        lock.withFrameStoreLock { frames.removeAll(keepingCapacity: false) }
+    }
+
     func publish(_ frame: CVPixelBuffer, at tileIndex: Int) {
         let callbacks = lock.withFrameStoreLock {
             frames[tileIndex] = frame

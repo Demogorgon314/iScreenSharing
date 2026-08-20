@@ -16,7 +16,7 @@ final class AppleFramebufferUpdateTests: XCTestCase {
 
         let layout = try XCTUnwrap(layouts.first)
         XCTAssertEqual(layouts.count, 1)
-        XCTAssertEqual(layout.canvas, AppleCanvas(width: 2880, height: 1800, tileCount: 1))
+        XCTAssertEqual(layout.canvas(tileCount: 4), AppleCanvas(width: 2880, height: 1800, tileCount: 4))
         XCTAssertEqual(layout.displays.first?.displayID, 42)
     }
 

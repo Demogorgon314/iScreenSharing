@@ -15,8 +15,8 @@ struct AppleDisplayLayout: Equatable, Sendable {
     let backingHeight: Int
     let displays: [AppleDisplayRect]
 
-    var canvas: AppleCanvas {
-        AppleCanvas(width: backingWidth, height: backingHeight, tileCount: displays.count)
+    func canvas(tileCount: Int) -> AppleCanvas {
+        AppleCanvas(width: backingWidth, height: backingHeight, tileCount: tileCount)
     }
 }
 

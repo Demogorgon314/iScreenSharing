@@ -73,6 +73,15 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         lock.withStreamLock { parameterSets }
     }
 
+    func reset() {
+        lock.withStreamLock {
+            groups.removeAll(keepingCapacity: false)
+            sourcePacketCounts.removeAll(keepingCapacity: false)
+            sequenceTracker = AppleRTPSequenceTracker()
+            parameterSets = AppleHEVCParameterSets()
+        }
+    }
+
     func primarySources(tileCount: Int) -> [UInt32] {
         lock.withStreamLock {
             guard tileCount > 0 else { return [] }

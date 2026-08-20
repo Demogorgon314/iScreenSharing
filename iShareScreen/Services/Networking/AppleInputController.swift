@@ -8,7 +8,7 @@ actor AppleInputController {
     static let scrollDown: UInt8 = 1 << 4
 
     private weak var session: RFBAuthenticatedSession?
-    private let canvas: AppleCanvas
+    private var canvas: AppleCanvas
     private var isClosed = false
     private(set) var sentEventCount = 0
 
@@ -70,6 +70,10 @@ actor AppleInputController {
 
     func close() {
         isClosed = true
+    }
+
+    func update(canvas: AppleCanvas) {
+        self.canvas = canvas
     }
 
     private func send(_ message: Data) async {

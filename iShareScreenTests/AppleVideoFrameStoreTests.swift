@@ -20,6 +20,9 @@ final class AppleVideoFrameStoreTests: XCTestCase {
         store.publish(secondFrame, at: 2)
         await Task.yield()
         XCTAssertTrue(store.frame(at: 2) === secondFrame)
+
+        store.removeAllFrames()
+        XCTAssertNil(store.frame(at: 2))
     }
 
     private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {

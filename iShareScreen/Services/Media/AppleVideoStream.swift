@@ -12,7 +12,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     }
 
     @Published private(set) var state: State = .preparing
-    let canvas: AppleCanvas
+    @Published private(set) var canvas: AppleCanvas
     let frames = AppleVideoFrameStore()
 
     private static let maximumCachedUnitsPerSource = 128
@@ -46,6 +46,31 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     var decodedFrameCount: Int {
         countLock.withVideoStreamLock { frameCount }
+    }
+
+    func reconfigure(canvas: AppleCanvas) async {
+        let isOpen = lifecycleLock.withVideoStreamLock { !isClosed }
+        guard isOpen else { return }
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self else {
+                    continuation.resume()
+                    return
+                }
+                decoder?.close()
+                decoder = nil
+                sourceToTile.removeAll(keepingCapacity: false)
+                cachedUnits.removeAll(keepingCapacity: false)
+                processor.reset()
+                frames.removeAllFrames()
+                countLock.withVideoStreamLock { self.frameCount = 0 }
+                DispatchQueue.main.async { [weak self] in
+                    self?.canvas = canvas
+                    self?.state = .preparing
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     func start() {

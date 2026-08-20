@@ -15,6 +15,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var controlMessageService: AppleControlMessageService?
     private(set) var clipboardService: AppleClipboardService?
     private(set) var audioStream: AppleAudioStream?
+    private(set) var dynamicResolutionController: AppleDynamicResolutionController?
 
     private let transport: NWConnectionTransport
 
@@ -102,6 +103,10 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     func install(audioStream: AppleAudioStream) {
         self.audioStream?.close()
         self.audioStream = audioStream
+    }
+
+    func install(dynamicResolutionController: AppleDynamicResolutionController) {
+        self.dynamicResolutionController = dynamicResolutionController
     }
 
     deinit {

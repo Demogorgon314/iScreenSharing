@@ -59,18 +59,43 @@ final class AuthenticationCoordinator: ObservableObject {
                     let input = AppleInputController(session: session, canvas: negotiation.canvas)
                     session.install(inputController: input)
                     let clipboard = AppleClipboardService()
+                    try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
+                    let dynamicResolutionController: AppleDynamicResolutionController?
+                    if let stream = session.videoStream {
+                        let controller = AppleDynamicResolutionController(
+                            initialCanvas: negotiation.canvas,
+                            mediaConfiguration: negotiation.configuration,
+                            sendMessage: { [weak session] message in
+                                guard let session else { return }
+                                try await session.sendEncrypted(message)
+                            },
+                            applyCanvas: { [weak stream, weak input] canvas in
+                                await stream?.reconfigure(canvas: canvas)
+                                await input?.update(canvas: canvas)
+                            }
+                        )
+                        session.install(dynamicResolutionController: controller)
+                        dynamicResolutionController = controller
+                    } else {
+                        dynamicResolutionController = nil
+                    }
                     let controlMessages = AppleControlMessageService(
                         session: session,
                         input: input,
                         clipboard: clipboard,
-                        pendingMessages: negotiation.pendingMessages
+                        pendingMessages: negotiation.pendingMessages,
+                        receiveDisplayLayout: { layout in
+                            try? await dynamicResolutionController?.receive(layout)
+                        },
+                        receiveMediaCanvas: { canvas in
+                            await dynamicResolutionController?.receiveMediaCanvas(canvas)
+                        }
                     )
                     session.install(
                         controlMessageService: controlMessages,
                         clipboardService: clipboard
                     )
                     controlMessages.start()
-                    try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
                     if let receiver = session.mediaReceiver,
                        let audio = try? AppleAudioStream(receiver: receiver, negotiation: negotiation) {
                         session.install(audioStream: audio)
