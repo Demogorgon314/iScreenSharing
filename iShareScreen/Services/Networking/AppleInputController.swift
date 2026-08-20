@@ -53,8 +53,33 @@ actor AppleInputController {
         }
     }
 
+    func enableClipboard() async {
+        await send(AppleClipboardMessage.enable)
+    }
+
+    func fetchClipboard() async {
+        await send(AppleClipboardMessage.fetch)
+    }
+
+    func sendClipboard(_ text: String) async throws {
+        let message = try AppleClipboardMessage.send(text: text)
+        for fragment in AppleClipboardMessage.fragments(of: message) {
+            try await sendThrowing(fragment)
+        }
+    }
+
     func close() {
         isClosed = true
+    }
+
+    private func send(_ message: Data) async {
+        try? await sendThrowing(message)
+    }
+
+    private func sendThrowing(_ message: Data) async throws {
+        guard let session, !isClosed else { return }
+        try await session.sendEncrypted(message)
+        sentEventCount += 1
     }
 
     static func clampedPoint(x: Int, y: Int, canvas: AppleCanvas) -> (x: UInt16, y: UInt16) {

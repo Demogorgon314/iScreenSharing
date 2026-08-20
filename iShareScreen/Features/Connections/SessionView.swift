@@ -27,8 +27,8 @@ struct SessionView: View {
                     Image(systemName: scalesToFit ? "rectangle.inset.filled" : "rectangle")
                 }
                     .help("Scale to Fit")
-                Button { } label: { Image(systemName: "clipboard") }
-                    .help("Clipboard")
+                Button { sendClipboard() } label: { Image(systemName: "clipboard") }
+                    .help("Send Clipboard to Remote Mac")
             }
         }
     }
@@ -45,6 +45,13 @@ struct SessionView: View {
             }
             .foregroundStyle(.white)
         }
+    }
+
+    private func sendClipboard() {
+        guard let session = sessions.session(for: endpoint),
+              let input = session.inputController,
+              let text = session.clipboardService?.localText() else { return }
+        Task { try? await input.sendClipboard(text) }
     }
 }
 

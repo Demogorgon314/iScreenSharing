@@ -1,4 +1,3 @@
-import Compression
 import Foundation
 
 struct AppleMediaOffers: Equatable, Sendable {
@@ -53,7 +52,7 @@ enum AppleMediaOffer {
     }
 
     static func decompressMediaBlob(_ compressed: Data) throws -> Data {
-        try Zlib.decompress(compressed)
+        try ZlibCodec.decompress(compressed)
     }
 
     private static func makePlist(
@@ -72,7 +71,7 @@ enum AppleMediaOffer {
         let dictionary: [String: Any] = [
             "avcMediaStreamOptionRemoteEndpointInfo": remoteEndpointInfo(),
             "avcMediaStreamNegotiatorMode": mode,
-            "avcMediaStreamNegotiatorMediaBlob": try Zlib.compress(blob),
+            "avcMediaStreamNegotiatorMediaBlob": try ZlibCodec.compress(blob),
             "avcMediaStreamOptionCallID": callID.uuidString.uppercased(),
         ]
         return try PropertyListSerialization.data(
@@ -179,76 +178,6 @@ enum AppleMediaOffer {
             data.append(byte)
         } while value != 0
         return data
-    }
-}
-
-private enum Zlib {
-    static func compress(_ input: Data) throws -> Data {
-        let deflate = try transform(
-            input,
-            initialCapacity: max(256, input.count * 2),
-            function: compression_encode_buffer
-        )
-        var output = Data([0x78, 0x9c])
-        output.append(deflate)
-        output.appendUInt32BE(adler32(input))
-        return output
-    }
-
-    static func decompress(_ input: Data) throws -> Data {
-        guard input.count >= 6,
-              input[0] & 0x0f == 8,
-              (Int(input[0]) << 8 | Int(input[1])).isMultiple(of: 31),
-              input[1] & 0x20 == 0 else {
-            throw AppleMediaOfferError.compressionFailed
-        }
-        let deflate = input.subdata(in: 2..<(input.count - 4))
-        let output = try transform(
-            deflate,
-            initialCapacity: max(4_096, input.count * 4),
-            function: compression_decode_buffer
-        )
-        guard adler32(output) == (try input.uint32BE(at: input.count - 4)) else {
-            throw AppleMediaOfferError.compressionFailed
-        }
-        return output
-    }
-
-    private static func transform(
-        _ input: Data,
-        initialCapacity: Int,
-        function: (UnsafeMutablePointer<UInt8>, Int, UnsafePointer<UInt8>, Int, UnsafeMutableRawPointer?, compression_algorithm) -> Int
-    ) throws -> Data {
-        guard !input.isEmpty else { throw AppleMediaOfferError.compressionFailed }
-        var capacity = initialCapacity
-        while capacity <= 16 * 1_024 * 1_024 {
-            let output = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
-            defer { output.deallocate() }
-            let count = input.withUnsafeBytes { sourceBuffer in
-                function(
-                    output,
-                    capacity,
-                    sourceBuffer.bindMemory(to: UInt8.self).baseAddress!,
-                    input.count,
-                    nil,
-                    COMPRESSION_ZLIB
-                )
-            }
-            if count > 0 { return Data(bytes: output, count: count) }
-            capacity *= 2
-        }
-        throw AppleMediaOfferError.compressionFailed
-    }
-
-    private static func adler32(_ data: Data) -> UInt32 {
-        let modulus: UInt32 = 65_521
-        var first: UInt32 = 1
-        var second: UInt32 = 0
-        for byte in data {
-            first = (first + UInt32(byte)) % modulus
-            second = (second + first) % modulus
-        }
-        return second << 16 | first
     }
 }
 

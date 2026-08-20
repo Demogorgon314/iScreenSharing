@@ -12,6 +12,8 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var mediaReceiver: AppleMediaReceiver?
     private(set) var videoStream: AppleVideoStream?
     private(set) var inputController: AppleInputController?
+    private(set) var controlMessageService: AppleControlMessageService?
+    private(set) var clipboardService: AppleClipboardService?
 
     private let transport: NWConnectionTransport
 
@@ -32,6 +34,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
 
     func close() {
+        controlMessageService?.close()
         if let inputController { Task { await inputController.close() } }
         videoStream?.close()
         mediaReceiver?.close()
@@ -85,7 +88,17 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.inputController = inputController
     }
 
+    func install(
+        controlMessageService: AppleControlMessageService,
+        clipboardService: AppleClipboardService
+    ) {
+        self.controlMessageService?.close()
+        self.controlMessageService = controlMessageService
+        self.clipboardService = clipboardService
+    }
+
     deinit {
+        controlMessageService?.close()
         if let inputController { Task { await inputController.close() } }
         videoStream?.close()
         mediaReceiver?.close()
