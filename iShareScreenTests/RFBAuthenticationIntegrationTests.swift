@@ -1,3 +1,4 @@
+import AVFAudio
 import XCTest
 @testable import iShareScreen
 
@@ -44,6 +45,14 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         controlMessages.start()
         defer { controlMessages.close() }
         let receiver = try XCTUnwrap(session.mediaReceiver)
+        let audioPlayer = IntegrationAudioPlayer()
+        let audioStream = try AppleAudioStream(
+            receiver: receiver,
+            negotiation: media,
+            player: audioPlayer
+        )
+        audioStream.start()
+        defer { audioStream.close() }
         let stream = try AppleVideoStream(receiver: receiver, negotiation: media)
         session.install(videoStream: stream)
         stream.start()
@@ -60,6 +69,14 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertTrue((0..<media.canvas.tileCount).allSatisfy { stream.frames.frame(at: $0) != nil })
         XCTAssertGreaterThanOrEqual(stream.decodedFrameCount, media.canvas.tileCount)
         XCTAssertEqual(stream.state, .streaming)
+
+        let audioDeadline = clock.now.advanced(by: .seconds(3))
+        while audioStream.decodedPacketCount == 0, clock.now < audioDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertGreaterThan(audioStream.receivedPacketCount, 0)
+        XCTAssertGreaterThan(audioStream.decodedPacketCount, 0)
+        XCTAssertGreaterThan(audioPlayer.playedBufferCount, 0)
 
         let controlDeadline = clock.now.advanced(by: .seconds(3))
         while controlMessages.receivedMessageCount == 0, clock.now < controlDeadline {
@@ -79,4 +96,24 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
 @MainActor
 private final class IntegrationClipboardReceiver: AppleClipboardReceiving {
     func receive(_ text: String) { }
+}
+
+private final class IntegrationAudioPlayer: AppleAudioPlaying, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var playedBufferCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func play(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    func setMuted(_ muted: Bool) { }
+    func close() { }
 }

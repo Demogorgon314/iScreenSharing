@@ -71,6 +71,11 @@ final class AuthenticationCoordinator: ObservableObject {
                     )
                     controlMessages.start()
                     try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
+                    if let receiver = session.mediaReceiver,
+                       let audio = try? AppleAudioStream(receiver: receiver, negotiation: negotiation) {
+                        session.install(audioStream: audio)
+                        audio.start()
+                    }
                     try Task.checkCancellation()
                     if rememberPassword {
                         try credentialStore.save(credentials, for: endpoint)
