@@ -8,8 +8,8 @@ struct NewConnectionView: View {
     @State private var validationMessage: String?
     @FocusState private var addressFocused: Bool
 
-    init(store: ConnectionStore) {
-        _coordinator = StateObject(wrappedValue: ConnectionCoordinator(store: store))
+    init() {
+        _coordinator = StateObject(wrappedValue: ConnectionCoordinator())
     }
 
     var body: some View {
@@ -54,7 +54,7 @@ struct NewConnectionView: View {
         .onAppear { addressFocused = true }
         .onChange(of: coordinator.state) { _, state in
             guard case .ready = state, let endpoint = try? ConnectionEndpoint(address) else { return }
-            openWindow(value: endpoint)
+            openWindow(id: "authentication", value: endpoint)
             dismissWindow(id: "new-connection")
         }
     }
@@ -74,4 +74,3 @@ struct NewConnectionView: View {
         }
     }
 }
-

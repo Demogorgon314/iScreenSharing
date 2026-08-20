@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SessionView: View {
     let endpoint: ConnectionEndpoint
+    @ObservedObject var sessions: SessionManager
 
     var body: some View {
         ZStack {
@@ -11,12 +12,15 @@ struct SessionView: View {
                     .font(.system(size: 44, weight: .thin))
                 Text(endpoint.displayName)
                     .font(.title3)
-                Text("The host supports Apple Screen Sharing. Authentication and video negotiation are being implemented next.")
+                Text(statusMessage)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 430)
             }
             .foregroundStyle(.white)
+        }
+        .onDisappear {
+            sessions.disconnect(endpoint)
         }
         .navigationTitle(endpoint.displayName)
         .toolbar {
@@ -28,5 +32,12 @@ struct SessionView: View {
             }
         }
     }
-}
 
+    private var statusMessage: String {
+        if sessions.session(for: endpoint) != nil {
+            "Secure connection established. Preparing the remote display…"
+        } else {
+            "The connection is no longer active."
+        }
+    }
+}

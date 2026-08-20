@@ -13,12 +13,10 @@ final class ConnectionCoordinator: ObservableObject {
     @Published private(set) var state: State = .idle
 
     private let probeService: any RFBProbing
-    private let store: ConnectionStore
     private var task: Task<Void, Never>?
 
-    init(probeService: any RFBProbing = RFBProbeService(), store: ConnectionStore) {
+    init(probeService: any RFBProbing = RFBProbeService()) {
         self.probeService = probeService
-        self.store = store
     }
 
     func connect(to endpoint: ConnectionEndpoint) {
@@ -28,7 +26,6 @@ final class ConnectionCoordinator: ObservableObject {
             do {
                 let result = try await probeService.probe(endpoint)
                 try Task.checkCancellation()
-                store.record(endpoint)
                 state = .ready(result)
             } catch is CancellationError {
                 state = .idle
