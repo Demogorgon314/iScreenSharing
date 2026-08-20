@@ -5,17 +5,57 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
     var endpoint: ConnectionEndpoint
     var name: String
     var lastConnectedAt: Date
+    var preferredUsername: String
+    var sharingType: ScreenSharingType
+    var virtualDisplayCount: VirtualDisplayCount
 
     init(
         id: UUID = UUID(),
         endpoint: ConnectionEndpoint,
         name: String? = nil,
-        lastConnectedAt: Date = .now
+        lastConnectedAt: Date = .now,
+        preferredUsername: String = "",
+        sharingType: ScreenSharingType = .highPerformance,
+        virtualDisplayCount: VirtualDisplayCount = .one
     ) {
         self.id = id
         self.endpoint = endpoint
         self.name = name ?? endpoint.displayName
         self.lastConnectedAt = lastConnectedAt
+        self.preferredUsername = preferredUsername
+        self.sharingType = sharingType
+        self.virtualDisplayCount = virtualDisplayCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        endpoint = try container.decode(ConnectionEndpoint.self, forKey: .endpoint)
+        name = try container.decode(String.self, forKey: .name)
+        lastConnectedAt = try container.decode(Date.self, forKey: .lastConnectedAt)
+        preferredUsername = try container.decodeIfPresent(String.self, forKey: .preferredUsername) ?? ""
+        sharingType = try container.decodeIfPresent(ScreenSharingType.self, forKey: .sharingType)
+            ?? .highPerformance
+        virtualDisplayCount = try container.decodeIfPresent(VirtualDisplayCount.self, forKey: .virtualDisplayCount)
+            ?? .one
     }
 }
 
+enum ScreenSharingType: String, Codable, CaseIterable, Sendable {
+    case standard
+    case highPerformance
+
+    var title: String {
+        switch self {
+        case .standard: "Standard"
+        case .highPerformance: "High Performance"
+        }
+    }
+}
+
+enum VirtualDisplayCount: Int, Codable, CaseIterable, Sendable {
+    case one = 1
+    case two = 2
+
+    var title: String { "\(rawValue) Virtual Display\(rawValue == 1 ? "" : "s")" }
+}

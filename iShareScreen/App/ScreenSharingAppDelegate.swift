@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 final class ScreenSharingAppDelegate: NSObject, NSApplicationDelegate {
     private static let menuTrackingObserver = ConnectionMenuTrackingObserver()
+    private static var isConfiguringMenu = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         DispatchQueue.main.async {
@@ -20,6 +21,9 @@ final class ScreenSharingAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     static func configureConnectionMenu() {
+        guard !isConfiguringMenu else { return }
+        isConfiguringMenu = true
+        defer { isConfiguringMenu = false }
         guard let menu = NSApp.mainMenu,
               let item = menu.items.first(where: { $0.title == "Connection" }) else { return }
         if let fileItem = menu.items.first(where: { $0.title == "File" }) {
@@ -49,15 +53,22 @@ private final class ConnectionMenuTrackingObserver: NSObject {
     func start() {
         guard !isObserving else { return }
         isObserving = true
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(menuDidBeginTracking(_:)),
-            name: NSMenu.didBeginTrackingNotification,
-            object: nil
-        )
+        for name in [
+            NSMenu.didAddItemNotification,
+            NSMenu.didRemoveItemNotification,
+            NSMenu.didChangeItemNotification,
+            NSMenu.didBeginTrackingNotification,
+        ] {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(menuDidChange(_:)),
+                name: name,
+                object: nil
+            )
+        }
     }
 
-    @objc private func menuDidBeginTracking(_ notification: Notification) {
+    @objc private func menuDidChange(_ notification: Notification) {
         ScreenSharingAppDelegate.configureConnectionMenu()
     }
 }

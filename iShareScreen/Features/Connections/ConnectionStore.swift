@@ -27,9 +27,18 @@ final class ConnectionStore: ObservableObject {
         groups = Self.load(defaults: defaults, key: groupStorageKey)
     }
 
-    func record(_ endpoint: ConnectionEndpoint, at date: Date = .now) {
+    func record(
+        _ endpoint: ConnectionEndpoint,
+        preferredUsername: String? = nil,
+        at date: Date = .now
+    ) {
         Self.record(endpoint, at: date, in: &connections)
         Self.record(endpoint, at: date, in: &recentConnections)
+        if let preferredUsername,
+           let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
+            connections[index].preferredUsername = preferredUsername
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         persist()
     }
 
@@ -38,6 +47,35 @@ final class ConnectionStore: ObservableObject {
         for index in groups.indices {
             groups[index].connectionIDs.remove(connection.id)
         }
+        persist()
+    }
+
+    func connection(for endpoint: ConnectionEndpoint) -> SavedConnection? {
+        connections.first { $0.endpoint == endpoint }
+    }
+
+    func update(
+        _ connection: SavedConnection,
+        name: String,
+        endpoint: ConnectionEndpoint,
+        preferredUsername: String,
+        sharingType: ScreenSharingType,
+        virtualDisplayCount: VirtualDisplayCount
+    ) throws {
+        guard let index = connections.firstIndex(where: { $0.id == connection.id }) else {
+            throw ConnectionStoreError.connectionNotFound
+        }
+        guard !connections.contains(where: { $0.id != connection.id && $0.endpoint == endpoint }) else {
+            throw ConnectionStoreError.duplicateEndpoint
+        }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw ConnectionStoreError.emptyName }
+
+        connections[index].name = name
+        connections[index].endpoint = endpoint
+        connections[index].preferredUsername = preferredUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        connections[index].sharingType = sharingType
+        connections[index].virtualDisplayCount = virtualDisplayCount
         persist()
     }
 
@@ -130,5 +168,19 @@ final class ConnectionStore: ObservableObject {
             return []
         }
         return decoded
+    }
+}
+
+enum ConnectionStoreError: LocalizedError, Equatable {
+    case connectionNotFound
+    case duplicateEndpoint
+    case emptyName
+
+    var errorDescription: String? {
+        switch self {
+        case .connectionNotFound: "The saved connection no longer exists."
+        case .duplicateEndpoint: "A connection for this server address and port already exists."
+        case .emptyName: "Enter a name for this connection."
+        }
     }
 }

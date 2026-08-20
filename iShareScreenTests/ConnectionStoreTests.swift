@@ -25,11 +25,12 @@ final class ConnectionStoreTests: XCTestCase {
         let updatedDate = Date(timeIntervalSince1970: 200)
         let store = ConnectionStore(defaults: defaults)
 
-        store.record(endpoint, at: firstDate)
-        store.record(endpoint, at: updatedDate)
+        store.record(endpoint, preferredUsername: "editor", at: firstDate)
+        store.record(endpoint, preferredUsername: "editor", at: updatedDate)
 
         XCTAssertEqual(store.connections.count, 1)
         XCTAssertEqual(store.connections[0].lastConnectedAt, updatedDate)
+        XCTAssertEqual(store.connections[0].preferredUsername, "editor")
         XCTAssertEqual(store.recentConnections.count, 1)
         XCTAssertEqual(store.recentConnections[0].endpoint, endpoint)
         XCTAssertEqual(store.recentConnections[0].lastConnectedAt, updatedDate)
@@ -94,4 +95,63 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertTrue(store.groups.isEmpty)
         XCTAssertTrue(ConnectionStore(defaults: defaults).groups.isEmpty)
     }
+
+    func testUpdatesConnectionSettingsAndRejectsDuplicateEndpoint() throws {
+        let store = ConnectionStore(defaults: defaults)
+        store.record(try ConnectionEndpoint("one.local"))
+        store.record(try ConnectionEndpoint("two.local"))
+        let connection = try XCTUnwrap(store.connection(for: ConnectionEndpoint("one.local")))
+        let updatedEndpoint = try ConnectionEndpoint("updated.local:5901")
+
+        try store.update(
+            connection,
+            name: "  Studio Mac  ",
+            endpoint: updatedEndpoint,
+            preferredUsername: "  editor  ",
+            sharingType: .highPerformance,
+            virtualDisplayCount: .two
+        )
+
+        let updated = try XCTUnwrap(store.connection(for: updatedEndpoint))
+        XCTAssertEqual(updated.name, "Studio Mac")
+        XCTAssertEqual(updated.preferredUsername, "editor")
+        XCTAssertEqual(updated.virtualDisplayCount, .two)
+        XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: updatedEndpoint), updated)
+        XCTAssertThrowsError(
+            try store.update(
+                updated,
+                name: updated.name,
+                endpoint: ConnectionEndpoint("two.local"),
+                preferredUsername: updated.preferredUsername,
+                sharingType: updated.sharingType,
+                virtualDisplayCount: updated.virtualDisplayCount
+            )
+        ) {
+            XCTAssertEqual($0 as? ConnectionStoreError, .duplicateEndpoint)
+        }
+    }
+
+    func testLoadsLegacyConnectionsWithNativeDefaults() throws {
+        let endpoint = try ConnectionEndpoint("legacy.local")
+        let legacy = LegacySavedConnection(
+            id: UUID(),
+            endpoint: endpoint,
+            name: "Legacy",
+            lastConnectedAt: Date(timeIntervalSince1970: 100)
+        )
+        defaults.set(try JSONEncoder().encode([legacy]), forKey: "savedConnections")
+
+        let connection = try XCTUnwrap(ConnectionStore(defaults: defaults).connections.first)
+
+        XCTAssertEqual(connection.preferredUsername, "")
+        XCTAssertEqual(connection.sharingType, .highPerformance)
+        XCTAssertEqual(connection.virtualDisplayCount, .one)
+    }
+}
+
+private struct LegacySavedConnection: Codable {
+    let id: UUID
+    let endpoint: ConnectionEndpoint
+    let name: String
+    let lastConnectedAt: Date
 }

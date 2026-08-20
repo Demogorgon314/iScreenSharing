@@ -10,6 +10,9 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
               let password = environment["ISHARESCREEN_TEST_PASSWORD"] else {
             throw XCTSkip("Set ISHARESCREEN_TEST_HOST, _USERNAME, and _PASSWORD to run the LAN integration test.")
         }
+        let virtualDisplayCount: VirtualDisplayCount = environment["ISHARESCREEN_TEST_DISPLAY_COUNT"] == "2"
+            ? .two
+            : .one
 
         let session = try await RFBAuthenticationService().connect(
             to: ConnectionEndpoint(host),
@@ -23,7 +26,10 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(session.serverInfo.width, 0)
         XCTAssertGreaterThan(session.serverInfo.height, 0)
 
-        let recordLayer = try await AppleControlChannelNegotiator().enableEncryption(for: session)
+        let recordLayer = try await AppleControlChannelNegotiator().enableEncryption(
+            for: session,
+            virtualDisplayCount: virtualDisplayCount
+        )
         XCTAssertEqual(recordLayer.contentKey.count, 16)
         XCTAssertEqual(session.recordLayer?.contentKey, recordLayer.contentKey)
         XCTAssertGreaterThanOrEqual(session.rekeyGeneration ?? 0, 1)

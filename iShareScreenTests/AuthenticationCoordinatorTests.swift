@@ -42,6 +42,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(sessions.session(for: endpoint) === session)
         XCTAssertEqual(connections.connections.first?.endpoint, endpoint)
+        XCTAssertEqual(connections.connections.first?.preferredUsername, "user")
         XCTAssertEqual(
             credentials.saved,
             try ScreenSharingCredentials(username: "user", password: "password")
@@ -74,6 +75,39 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(connections.connections.isEmpty)
         XCTAssertNil(sessions.session(for: endpoint))
+    }
+
+    func testPrefillsUsernameAndRejectsUnsupportedStandardMode() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let connections = ConnectionStore(defaults: defaults)
+        connections.record(endpoint)
+        let connection = try XCTUnwrap(connections.connection(for: endpoint))
+        try connections.update(
+            connection,
+            name: connection.name,
+            endpoint: endpoint,
+            preferredUsername: "editor",
+            sharingType: .standard,
+            virtualDisplayCount: .one
+        )
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(result: .success(makeSession(endpoint: endpoint))),
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: MockCredentialStore(),
+            connectionStore: connections,
+            sessionManager: SessionManager()
+        )
+
+        XCTAssertEqual(coordinator.preferredUsername(), "editor")
+        coordinator.signIn(username: "editor", password: "password", rememberPassword: false)
+
+        XCTAssertEqual(
+            coordinator.state,
+            .failed(AuthenticationCoordinatorError.standardModeUnavailable.localizedDescription)
+        )
     }
 
     private func makeSession(endpoint: ConnectionEndpoint) -> RFBAuthenticatedSession {
@@ -141,7 +175,8 @@ private final class MockCredentialStore: CredentialStoring, @unchecked Sendable 
 
 private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
     func enableEncryption(
-        for session: RFBAuthenticatedSession
+        for session: RFBAuthenticatedSession,
+        virtualDisplayCount: VirtualDisplayCount
     ) async throws -> AppleEncryptedRecordLayer {
         let layer = AppleEncryptedRecordLayer(
             keys: try AppleRecordKeys(

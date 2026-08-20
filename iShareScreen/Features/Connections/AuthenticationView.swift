@@ -102,7 +102,12 @@ struct AuthenticationView: View {
                 rememberPassword = true
                 focusedField = .password
             } else {
-                focusedField = .username
+                if let preferredUsername = coordinator.preferredUsername() {
+                    username = preferredUsername
+                    focusedField = .password
+                } else {
+                    focusedField = .username
+                }
             }
         }
         .onChange(of: coordinator.state) { _, state in

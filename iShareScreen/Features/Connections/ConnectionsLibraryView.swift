@@ -12,6 +12,7 @@ struct ConnectionsLibraryView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var sidebarSelection: SidebarItem? = .allConnections
     @State private var selectedConnection: SavedConnection.ID?
+    @State private var editingConnection: SavedConnection?
     @State private var layout: ConnectionLibraryLayout = .list
     @State private var searchText = ""
     @State private var discoveryAttempt = 0
@@ -111,6 +112,11 @@ struct ConnectionsLibraryView: View {
         .searchFocused($searchFocused)
         .onOpenURL(perform: openConnection)
         .installsConnectionMenuTitle()
+        .sheet(item: $editingConnection) { connection in
+            ConnectionEditorView(connection: connection, store: store) { endpoint in
+                openWindow(id: "authentication", value: endpoint)
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Picker("Show connections as icons, or in a list", selection: $layout) {
@@ -125,7 +131,11 @@ struct ConnectionsLibraryView: View {
                         connectSelectedConnection()
                     }
                     .disabled(selectedConnection == nil)
-                    Button("Remove Connection", role: .destructive) {
+                    Button("Edit") {
+                        editSelectedConnection()
+                    }
+                    .disabled(selectedConnection == nil)
+                    Button("Delete", role: .destructive) {
                         deleteSelectedConnection()
                     }
                     .disabled(selectedConnection == nil)
@@ -218,9 +228,14 @@ struct ConnectionsLibraryView: View {
 
     private var connectionList: some View {
         List(filteredConnections, selection: $selectedConnection) { connection in
-            ConnectionRow(connection: connection)
+            ConnectionRow(connection: connection) {
+                editingConnection = connection
+            }
                 .tag(connection.id)
                 .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedConnection = connection.id
+                }
                 .onTapGesture(count: 2) {
                     openWindow(id: "authentication", value: connection.endpoint)
                 }
@@ -228,6 +243,7 @@ struct ConnectionsLibraryView: View {
                     Button("Connect") {
                         openWindow(id: "authentication", value: connection.endpoint)
                     }
+                    Button("Edit") { editingConnection = connection }
                     Button("Remove", role: .destructive) {
                         store.delete(connection)
                     }
@@ -259,6 +275,13 @@ struct ConnectionsLibraryView: View {
                     .onTapGesture(count: 2) {
                         openWindow(id: "authentication", value: connection.endpoint)
                     }
+                    .contextMenu {
+                        Button("Connect") {
+                            openWindow(id: "authentication", value: connection.endpoint)
+                        }
+                        Button("Edit") { editingConnection = connection }
+                        Button("Delete", role: .destructive) { store.delete(connection) }
+                    }
                 }
             }
             .padding(24)
@@ -277,6 +300,10 @@ struct ConnectionsLibraryView: View {
     private func connectSelectedConnection() {
         guard let connection = selectedSavedConnection else { return }
         openWindow(id: "authentication", value: connection.endpoint)
+    }
+
+    private func editSelectedConnection() {
+        editingConnection = selectedSavedConnection
     }
 
     private func addSelectedConnection(to group: ConnectionGroup) {
@@ -366,6 +393,7 @@ private struct NetworkConnectionRow: View {
 
 private struct ConnectionRow: View {
     let connection: SavedConnection
+    let onEdit: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -386,8 +414,12 @@ private struct ConnectionRow: View {
 
             Text(connection.lastConnectedAt, format: .dateTime.month().day().year().hour().minute())
                 .foregroundStyle(.secondary)
-            Image(systemName: "info.circle")
-                .foregroundStyle(.secondary)
+            Button(action: onEdit) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Info")
         }
         .padding(.vertical, 7)
     }

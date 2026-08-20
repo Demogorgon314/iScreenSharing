@@ -46,15 +46,27 @@ final class AuthenticationCoordinator: ObservableObject {
         try? credentialStore.load(for: endpoint)
     }
 
+    func preferredUsername() -> String? {
+        let username = connectionStore.connection(for: endpoint)?.preferredUsername ?? ""
+        return username.isEmpty ? nil : username
+    }
+
     func signIn(username: String, password: String, rememberPassword: Bool) {
         task?.cancel()
         do {
+            let savedConnection = connectionStore.connection(for: endpoint)
+            guard savedConnection?.sharingType != .standard else {
+                throw AuthenticationCoordinatorError.standardModeUnavailable
+            }
             let credentials = try ScreenSharingCredentials(username: username, password: password)
             state = .authenticating
             task = Task {
                 do {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
-                    _ = try await controlChannelNegotiator.enableEncryption(for: session)
+                    _ = try await controlChannelNegotiator.enableEncryption(
+                        for: session,
+                        virtualDisplayCount: savedConnection?.virtualDisplayCount ?? .one
+                    )
                     let negotiation = try await mediaNegotiator.negotiate(session)
                     let input = AppleInputController(session: session, canvas: negotiation.canvas)
                     session.install(inputController: input)
@@ -113,7 +125,7 @@ final class AuthenticationCoordinator: ObservableObject {
                         try credentialStore.delete(for: endpoint)
                     }
                     sessionManager.install(session)
-                    connectionStore.record(endpoint)
+                    connectionStore.record(endpoint, preferredUsername: credentials.username)
                     state = .authenticated
                 } catch is CancellationError {
                     state = .idle
@@ -130,5 +142,13 @@ final class AuthenticationCoordinator: ObservableObject {
         task?.cancel()
         task = nil
         state = .idle
+    }
+}
+
+enum AuthenticationCoordinatorError: LocalizedError, Equatable {
+    case standardModeUnavailable
+
+    var errorDescription: String? {
+        "Standard Screen Sharing is not implemented yet. Choose High Performance in the connection settings."
     }
 }
