@@ -7,7 +7,7 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
             canvas: AppleCanvas(width: 1920, height: 1200, tileCount: 4),
             bounds: CGRect(x: 0, y: 0, width: 960, height: 600),
             slotHeight: 304,
-            scalesToFit: true
+            fixedScale: nil
         )
 
         XCTAssertEqual(layouts.count, 4)
@@ -22,7 +22,7 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
             canvas: AppleCanvas(width: 100, height: 80, tileCount: 2),
             bounds: CGRect(x: 0, y: 0, width: 300, height: 200),
             slotHeight: 40,
-            scalesToFit: false
+            fixedScale: 1
         )
 
         XCTAssertEqual(layouts[0].container, CGRect(x: 100, y: 100, width: 100, height: 40))
@@ -36,7 +36,7 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
             location: CGPoint(x: 150, y: 150),
             canvas: canvas,
             bounds: bounds,
-            scalesToFit: true
+            fixedScale: nil
         )
 
         XCTAssertEqual(center?.x, 50)
@@ -46,7 +46,7 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
                 location: CGPoint(x: 150, y: 20),
                 canvas: canvas,
                 bounds: bounds,
-                scalesToFit: true
+                fixedScale: nil
             )
         )
     }

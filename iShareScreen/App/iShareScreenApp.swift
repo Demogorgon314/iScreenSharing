@@ -17,7 +17,7 @@ struct iShareScreenApp: App {
         .defaultSize(width: 715, height: 510)
         .windowToolbarStyle(.unified)
         .commands {
-            ConnectionCommands()
+            ScreenSharingCommands()
         }
 
         Window("Screen Sharing", id: "new-connection") {
@@ -44,15 +44,50 @@ struct iShareScreenApp: App {
     }
 }
 
-private struct ConnectionCommands: Commands {
+private struct ScreenSharingCommands: Commands {
     @Environment(\.openWindow) private var openWindow
+    @FocusedBinding(\.sessionDisplayScale) private var displayScale
 
     var body: some Commands {
         CommandMenu("Connection") {
-            Button("New Connection…") {
+            Button("New…") {
                 openWindow(id: "new-connection")
             }
-            .keyboardShortcut("k", modifiers: .command)
+            .keyboardShortcut("n", modifiers: .command)
         }
+        CommandGroup(after: .toolbar) {
+            Divider()
+            Button(displayScale?.scalesToFit != false ? "Turn Scaling Off" : "Turn Scaling On") {
+                displayScale?.toggleScaling()
+            }
+            .disabled(displayScale == nil)
+            Divider()
+            Button("Actual Size") {
+                displayScale?.actualSize()
+            }
+            .keyboardShortcut("0", modifiers: .command)
+            .disabled(displayScale == nil)
+            Button("Zoom In") {
+                displayScale?.zoomIn()
+            }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(displayScale == nil || displayScale?.fixedScale == AppleVideoDisplayScale.maximum)
+            Button("Zoom Out") {
+                displayScale?.zoomOut()
+            }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(displayScale == nil || displayScale?.fixedScale == AppleVideoDisplayScale.minimum)
+        }
+    }
+}
+
+private struct SessionDisplayScaleFocusedKey: FocusedValueKey {
+    typealias Value = Binding<AppleVideoDisplayScale>
+}
+
+extension FocusedValues {
+    var sessionDisplayScale: Binding<AppleVideoDisplayScale>? {
+        get { self[SessionDisplayScaleFocusedKey.self] }
+        set { self[SessionDisplayScaleFocusedKey.self] = newValue }
     }
 }

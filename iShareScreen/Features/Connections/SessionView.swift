@@ -3,7 +3,7 @@ import SwiftUI
 struct SessionView: View {
     let endpoint: ConnectionEndpoint
     @ObservedObject var sessions: SessionManager
-    @State private var scalesToFit = true
+    @State private var displayScale = AppleVideoDisplayScale()
 
     var body: some View {
         Group {
@@ -11,7 +11,7 @@ struct SessionView: View {
                 ActiveVideoSessionView(
                     stream: stream,
                     input: session.inputController,
-                    scalesToFit: scalesToFit
+                    displayScale: displayScale
                 )
             } else {
                 unavailableContent
@@ -21,12 +21,13 @@ struct SessionView: View {
             sessions.disconnect(endpoint)
         }
         .navigationTitle(endpoint.displayName)
+        .focusedSceneValue(\.sessionDisplayScale, $displayScale)
         .toolbar {
             ToolbarItemGroup {
-                Button { scalesToFit.toggle() } label: {
-                    Image(systemName: scalesToFit ? "rectangle.inset.filled" : "rectangle")
+                Button { displayScale.toggleScaling() } label: {
+                    Image(systemName: displayScale.scalesToFit ? "rectangle.inset.filled" : "rectangle")
                 }
-                    .help("Scale to Fit")
+                    .help(displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On")
                 Button { sendClipboard() } label: { Image(systemName: "clipboard") }
                     .help("Send Clipboard to Remote Mac")
                 if let audio = sessions.session(for: endpoint)?.audioStream {
@@ -72,7 +73,7 @@ private struct AudioMuteButton: View {
 private struct ActiveVideoSessionView: View {
     @ObservedObject var stream: AppleVideoStream
     let input: AppleInputController?
-    let scalesToFit: Bool
+    let displayScale: AppleVideoDisplayScale
 
     var body: some View {
         ZStack {
@@ -81,7 +82,7 @@ private struct ActiveVideoSessionView: View {
                 canvas: stream.canvas,
                 frames: stream.frames,
                 input: input,
-                scalesToFit: scalesToFit
+                displayScale: displayScale
             )
             if stream.state != .streaming {
                 VStack(spacing: 10) {

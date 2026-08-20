@@ -5,24 +5,24 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let canvas: AppleCanvas
     let frames: AppleVideoFrameStore
     let input: AppleInputController?
-    let scalesToFit: Bool
+    let displayScale: AppleVideoDisplayScale
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
             canvas: canvas,
             frames: frames,
             input: input,
-            scalesToFit: scalesToFit
+            displayScale: displayScale
         )
     }
 
     func updateNSView(_ view: RemoteVideoCanvasNSView, context: Context) {
-        view.scalesToFit = scalesToFit
+        view.displayScale = displayScale
     }
 }
 
 final class RemoteVideoCanvasNSView: NSView {
-    var scalesToFit: Bool {
+    var displayScale: AppleVideoDisplayScale {
         didSet { needsLayout = true }
     }
 
@@ -44,12 +44,12 @@ final class RemoteVideoCanvasNSView: NSView {
         canvas: AppleCanvas,
         frames: AppleVideoFrameStore,
         input: AppleInputController?,
-        scalesToFit: Bool
+        displayScale: AppleVideoDisplayScale
     ) {
         self.canvas = canvas
         self.frames = frames
         self.input = input
-        self.scalesToFit = scalesToFit
+        self.displayScale = displayScale
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
         displayLayers = (0..<canvas.tileCount).map { _ in AVSampleBufferDisplayLayer() }
         super.init(frame: .zero)
@@ -87,7 +87,7 @@ final class RemoteVideoCanvasNSView: NSView {
             canvas: canvas,
             bounds: bounds,
             slotHeight: slotHeight,
-            scalesToFit: scalesToFit
+            fixedScale: displayScale.fixedScale
         )
         for (index, layout) in layouts.enumerated() {
             tileContainers[index].frame = layout.container
@@ -247,7 +247,7 @@ final class RemoteVideoCanvasNSView: NSView {
             location: convert(event.locationInWindow, from: nil),
             canvas: canvas,
             bounds: bounds,
-            scalesToFit: scalesToFit
+            fixedScale: displayScale.fixedScale
         )
     }
 
@@ -311,15 +311,14 @@ enum AppleVideoCanvasLayout {
         canvas: AppleCanvas,
         bounds: CGRect,
         slotHeight: CGFloat,
-        scalesToFit: Bool
+        fixedScale: CGFloat?
     ) -> [Tile] {
         guard canvas.tileCount > 0, canvas.width > 0, canvas.height > 0, slotHeight > 0 else {
             return []
         }
         let canvasSize = CGSize(width: canvas.width, height: canvas.height)
-        let scale = scalesToFit
-            ? min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
-            : 1
+        let scale = fixedScale
+            ?? min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
         let outputSize = CGSize(width: canvasSize.width * scale, height: canvasSize.height * scale)
         let canvasRect = CGRect(
             x: bounds.midX - outputSize.width / 2,
@@ -351,12 +350,11 @@ enum AppleVideoCanvasLayout {
         location: CGPoint,
         canvas: AppleCanvas,
         bounds: CGRect,
-        scalesToFit: Bool
+        fixedScale: CGFloat?
     ) -> (x: Int, y: Int)? {
         guard canvas.width > 0, canvas.height > 0 else { return nil }
-        let scale = scalesToFit
-            ? min(bounds.width / CGFloat(canvas.width), bounds.height / CGFloat(canvas.height))
-            : 1
+        let scale = fixedScale
+            ?? min(bounds.width / CGFloat(canvas.width), bounds.height / CGFloat(canvas.height))
         guard scale > 0 else { return nil }
         let size = CGSize(width: CGFloat(canvas.width) * scale, height: CGFloat(canvas.height) * scale)
         let rect = CGRect(
