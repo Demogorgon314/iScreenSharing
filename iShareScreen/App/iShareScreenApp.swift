@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 @main
 struct iShareScreenApp: App {
+    @NSApplicationDelegateAdaptor(ScreenSharingAppDelegate.self) private var appDelegate
     @StateObject private var store: ConnectionStore
     @StateObject private var sessions: SessionManager
 
@@ -17,7 +19,7 @@ struct iShareScreenApp: App {
         .defaultSize(width: 715, height: 510)
         .windowToolbarStyle(.unified)
         .commands {
-            ScreenSharingCommands()
+            ScreenSharingCommands(store: store)
         }
 
         Window("Screen Sharing", id: "new-connection") {
@@ -45,11 +47,15 @@ struct iShareScreenApp: App {
 }
 
 private struct ScreenSharingCommands: Commands {
+    @ObservedObject var store: ConnectionStore
     @Environment(\.openWindow) private var openWindow
     @FocusedBinding(\.connectionLibraryLayout) private var connectionLibraryLayout
     @FocusedBinding(\.sessionDisplayScale) private var displayScale
     @FocusedValue(\.dynamicResolutionActions) private var dynamicResolutionActions
     @FocusedValue(\.sessionModeActions) private var sessionModeActions
+    @FocusedValue(\.sessionEndpoint) private var sessionEndpoint
+    @FocusedValue(\.connectionLibraryActions) private var connectionLibraryActions
+    private let documents = ConnectionDocumentService()
 
     var body: some Commands {
         CommandMenu("Connection") {
@@ -57,6 +63,55 @@ private struct ScreenSharingCommands: Commands {
                 openWindow(id: "new-connection")
             }
             .keyboardShortcut("n", modifiers: .command)
+            Button("Open…") {
+                Task {
+                    do {
+                        if let endpoint = try await documents.openLocation() {
+                            openWindow(id: "authentication", value: endpoint)
+                        }
+                    } catch {
+                        ConnectionDocumentService.present(error)
+                    }
+                }
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            Menu("Open Recent") {
+                ForEach(store.recentConnections) { connection in
+                    Button(connection.name) {
+                        openWindow(id: "authentication", value: connection.endpoint)
+                    }
+                }
+                Divider()
+                Button("Clear Menu") { store.clearRecentConnections() }
+                    .disabled(store.recentConnections.isEmpty)
+            }
+            Divider()
+            Button("Close") {
+                NSApp.keyWindow?.performClose(nil)
+            }
+            .keyboardShortcut("w", modifiers: .command)
+            .disabled(sessionEndpoint == nil)
+            Button("Close All") {
+                NSApp.windows.filter(\.isVisible).forEach { $0.performClose(nil) }
+            }
+            .keyboardShortcut("w", modifiers: [.command, .option])
+            Divider()
+            Button("Save As…") {
+                guard let sessionEndpoint else { return }
+                Task {
+                    do {
+                        try await documents.saveLocation(for: sessionEndpoint)
+                    } catch {
+                        ConnectionDocumentService.present(error)
+                    }
+                }
+            }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
+            .disabled(sessionEndpoint == nil)
+            Divider()
+            Button("Find…") { connectionLibraryActions?.focusSearch() }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(connectionLibraryActions == nil)
         }
         CommandGroup(before: .toolbar) {
             Button("as Icons") {
@@ -125,6 +180,16 @@ extension FocusedValues {
         get { self[SessionModeActionsFocusedKey.self] }
         set { self[SessionModeActionsFocusedKey.self] = newValue }
     }
+
+    var sessionEndpoint: ConnectionEndpoint? {
+        get { self[SessionEndpointFocusedKey.self] }
+        set { self[SessionEndpointFocusedKey.self] = newValue }
+    }
+
+    var connectionLibraryActions: ConnectionLibraryActions? {
+        get { self[ConnectionLibraryActionsFocusedKey.self] }
+        set { self[ConnectionLibraryActionsFocusedKey.self] = newValue }
+    }
 }
 
 private struct DynamicResolutionActionsFocusedKey: FocusedValueKey {
@@ -149,4 +214,16 @@ struct DynamicResolutionActions {
 
 private struct SessionModeActionsFocusedKey: FocusedValueKey {
     typealias Value = SessionModeActions
+}
+
+private struct SessionEndpointFocusedKey: FocusedValueKey {
+    typealias Value = ConnectionEndpoint
+}
+
+struct ConnectionLibraryActions {
+    let focusSearch: () -> Void
+}
+
+private struct ConnectionLibraryActionsFocusedKey: FocusedValueKey {
+    typealias Value = ConnectionLibraryActions
 }

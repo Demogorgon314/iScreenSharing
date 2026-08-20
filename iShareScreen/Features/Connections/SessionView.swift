@@ -28,6 +28,7 @@ struct SessionView: View {
             sessions.disconnect(endpoint)
         }
         .navigationTitle(endpoint.displayName)
+        .focusedSceneValue(\.sessionEndpoint, endpoint)
         .focusedSceneValue(\.sessionDisplayScale, $displayScale)
         .focusedSceneValue(
             \.dynamicResolutionActions,

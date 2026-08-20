@@ -14,6 +14,7 @@ struct ConnectionsLibraryView: View {
     @State private var layout: ConnectionLibraryLayout = .list
     @State private var searchText = ""
     @State private var discoveryAttempt = 0
+    @FocusState private var searchFocused: Bool
 
     init(store: ConnectionStore, browser: any BonjourBrowsing = BonjourBrowser()) {
         self.store = store
@@ -81,7 +82,14 @@ struct ConnectionsLibraryView: View {
             .navigationTitle(sidebarSelection == .network ? "Network" : "All Connections")
         }
         .focusedSceneValue(\.connectionLibraryLayout, $layout)
+        .focusedSceneValue(
+            \.connectionLibraryActions,
+            ConnectionLibraryActions(focusSearch: { searchFocused = true })
+        )
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search")
+        .searchFocused($searchFocused)
+        .onOpenURL(perform: openConnection)
+        .installsConnectionMenuTitle()
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Picker("Show connections as icons, or in a list", selection: $layout) {
@@ -161,11 +169,11 @@ struct ConnectionsLibraryView: View {
                 .tag(connection.id)
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
-                    openWindow(value: connection.endpoint)
+                    openWindow(id: "authentication", value: connection.endpoint)
                 }
                 .contextMenu {
                     Button("Connect") {
-                        openWindow(value: connection.endpoint)
+                        openWindow(id: "authentication", value: connection.endpoint)
                     }
                     Button("Remove", role: .destructive) {
                         store.delete(connection)
@@ -193,7 +201,7 @@ struct ConnectionsLibraryView: View {
                     .padding(10)
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
-                        openWindow(value: connection.endpoint)
+                        openWindow(id: "authentication", value: connection.endpoint)
                     }
                 }
             }
@@ -208,6 +216,17 @@ struct ConnectionsLibraryView: View {
         }
         store.delete(connection)
         self.selectedConnection = nil
+    }
+
+    private func openConnection(_ url: URL) {
+        Task {
+            do {
+                let endpoint = try await ConnectionDocumentService.endpoint(from: url)
+                openWindow(id: "authentication", value: endpoint)
+            } catch {
+                ConnectionDocumentService.present(error)
+            }
+        }
     }
 }
 

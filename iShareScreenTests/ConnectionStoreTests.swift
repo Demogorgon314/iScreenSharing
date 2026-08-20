@@ -30,7 +30,12 @@ final class ConnectionStoreTests: XCTestCase {
 
         XCTAssertEqual(store.connections.count, 1)
         XCTAssertEqual(store.connections[0].lastConnectedAt, updatedDate)
-        XCTAssertEqual(ConnectionStore(defaults: defaults).connections, store.connections)
+        XCTAssertEqual(store.recentConnections.count, 1)
+        XCTAssertEqual(store.recentConnections[0].endpoint, endpoint)
+        XCTAssertEqual(store.recentConnections[0].lastConnectedAt, updatedDate)
+        let restored = ConnectionStore(defaults: defaults)
+        XCTAssertEqual(restored.connections, store.connections)
+        XCTAssertEqual(restored.recentConnections, store.recentConnections)
     }
 
     func testDeleteRemovesPersistedConnection() throws {
@@ -41,6 +46,17 @@ final class ConnectionStoreTests: XCTestCase {
 
         XCTAssertTrue(store.connections.isEmpty)
         XCTAssertTrue(ConnectionStore(defaults: defaults).connections.isEmpty)
+        XCTAssertEqual(store.recentConnections.count, 1)
+    }
+
+    func testClearsOnlyRecentConnections() throws {
+        let store = ConnectionStore(defaults: defaults)
+        store.record(try ConnectionEndpoint("example.local"))
+
+        store.clearRecentConnections()
+
+        XCTAssertEqual(store.connections.count, 1)
+        XCTAssertTrue(store.recentConnections.isEmpty)
+        XCTAssertTrue(ConnectionStore(defaults: defaults).recentConnections.isEmpty)
     }
 }
-
