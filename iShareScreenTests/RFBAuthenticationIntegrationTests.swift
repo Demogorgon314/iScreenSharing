@@ -84,6 +84,10 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         }
         XCTAssertGreaterThan(controlMessages.receivedMessageCount, 0)
 
+        try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: true))
+        try await Task.sleep(for: .milliseconds(50))
+        try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: false))
+
         let countBeforeInput = await input.sentEventCount
         await input.pointer(buttons: 0, x: media.canvas.width / 2, y: media.canvas.height / 2)
         await input.key(isDown: true, symbol: 0xffe1)

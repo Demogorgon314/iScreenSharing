@@ -74,6 +74,12 @@ enum AppleRFBMessages {
         return message
     }
 
+    static func controlMode(observing: Bool) -> Data {
+        var message = Data([0x0a, 0x00])
+        message.appendUInt16BE(observing ? 0 : 1)
+        return message
+    }
+
     static func encryptedPointerEvent(
         buttons: UInt8,
         x: UInt16,

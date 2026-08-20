@@ -4,13 +4,16 @@ struct SessionView: View {
     let endpoint: ConnectionEndpoint
     @ObservedObject var sessions: SessionManager
     @State private var displayScale = AppleVideoDisplayScale()
+    @State private var isObserving = false
+    @State private var isChangingMode = false
+    @State private var modeError: String?
 
     var body: some View {
         Group {
             if let session = sessions.session(for: endpoint), let stream = session.videoStream {
                 ActiveVideoSessionView(
                     stream: stream,
-                    input: session.inputController,
+                    input: isObserving ? nil : session.inputController,
                     displayScale: displayScale
                 )
             } else {
@@ -22,6 +25,14 @@ struct SessionView: View {
         }
         .navigationTitle(endpoint.displayName)
         .focusedSceneValue(\.sessionDisplayScale, $displayScale)
+        .focusedSceneValue(
+            \.sessionModeActions,
+            SessionModeActions(
+                isObserving: isObserving,
+                canToggle: sessions.session(for: endpoint) != nil && !isChangingMode,
+                toggle: toggleObservationMode
+            )
+        )
         .toolbar {
             ToolbarItemGroup {
                 Button { displayScale.toggleScaling() } label: {
@@ -30,10 +41,21 @@ struct SessionView: View {
                     .help(displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On")
                 Button { sendClipboard() } label: { Image(systemName: "clipboard") }
                     .help("Send Clipboard to Remote Mac")
+                    .disabled(isObserving)
+                Button { toggleObservationMode() } label: {
+                    Image(systemName: isObserving ? "eye.fill" : "cursorarrow.rays")
+                }
+                .help(isObserving ? "Switch to Control Mode" : "Switch to Observe Mode")
+                .disabled(isChangingMode || sessions.session(for: endpoint) == nil)
                 if let audio = sessions.session(for: endpoint)?.audioStream {
                     AudioMuteButton(audio: audio)
                 }
             }
+        }
+        .alert("Unable to Change Mode", isPresented: modeErrorIsPresented) {
+            Button("OK") { modeError = nil }
+        } message: {
+            Text(modeError ?? "The Screen Sharing mode could not be changed.")
         }
     }
 
@@ -56,6 +78,33 @@ struct SessionView: View {
               let input = session.inputController,
               let text = session.clipboardService?.localText() else { return }
         Task { try? await input.sendClipboard(text) }
+    }
+
+    private var modeErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { modeError != nil },
+            set: { if !$0 { modeError = nil } }
+        )
+    }
+
+    private func toggleObservationMode() {
+        guard !isChangingMode, let session = sessions.session(for: endpoint) else { return }
+        let newValue = !isObserving
+        isChangingMode = true
+        Task {
+            do {
+                try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: newValue))
+                await MainActor.run {
+                    isObserving = newValue
+                    isChangingMode = false
+                }
+            } catch {
+                await MainActor.run {
+                    modeError = error.localizedDescription
+                    isChangingMode = false
+                }
+            }
+        }
     }
 }
 

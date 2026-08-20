@@ -47,6 +47,7 @@ struct iShareScreenApp: App {
 private struct ScreenSharingCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @FocusedBinding(\.sessionDisplayScale) private var displayScale
+    @FocusedValue(\.sessionModeActions) private var sessionModeActions
 
     var body: some Commands {
         CommandMenu("Connection") {
@@ -77,6 +78,11 @@ private struct ScreenSharingCommands: Commands {
             }
             .keyboardShortcut("-", modifiers: .command)
             .disabled(displayScale == nil || displayScale?.fixedScale == AppleVideoDisplayScale.minimum)
+            Divider()
+            Button(sessionModeActions?.isObserving == true ? "Switch to Control Mode" : "Switch to Observe Mode") {
+                sessionModeActions?.toggle()
+            }
+            .disabled(sessionModeActions?.canToggle != true)
         }
     }
 }
@@ -90,4 +96,19 @@ extension FocusedValues {
         get { self[SessionDisplayScaleFocusedKey.self] }
         set { self[SessionDisplayScaleFocusedKey.self] = newValue }
     }
+
+    var sessionModeActions: SessionModeActions? {
+        get { self[SessionModeActionsFocusedKey.self] }
+        set { self[SessionModeActionsFocusedKey.self] = newValue }
+    }
+}
+
+struct SessionModeActions {
+    let isObserving: Bool
+    let canToggle: Bool
+    let toggle: () -> Void
+}
+
+private struct SessionModeActionsFocusedKey: FocusedValueKey {
+    typealias Value = SessionModeActions
 }
