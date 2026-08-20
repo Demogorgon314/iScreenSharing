@@ -29,6 +29,11 @@ extension Data {
         self[offset + 3] = UInt8(truncatingIfNeeded: value)
     }
 
+    mutating func writeUInt64BE(_ value: UInt64, at offset: Int) {
+        writeUInt32BE(UInt32(truncatingIfNeeded: value >> 32), at: offset)
+        writeUInt32BE(UInt32(truncatingIfNeeded: value), at: offset + 4)
+    }
+
     func uint16BE(at offset: Int) throws -> UInt16 {
         guard offset >= 0, count >= offset + 2 else {
             throw WireDataError.outOfBounds
