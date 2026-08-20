@@ -31,6 +31,16 @@ final class CryptographyTests: XCTestCase {
         XCTAssertEqual(encrypted.count, 256)
     }
 
+    func testAESCBCMatchesNISTKnownAnswerAndDecrypts() throws {
+        let key = try XCTUnwrap(Data(hex: "2b7e151628aed2a6abf7158809cf4f3c"))
+        let iv = try XCTUnwrap(Data(hex: "000102030405060708090a0b0c0d0e0f"))
+        let plaintext = try XCTUnwrap(Data(hex: "6bc1bee22e409f96e93d7e117393172a"))
+        let expected = try XCTUnwrap(Data(hex: "7649abac8119b246cee98e9b12e9197d"))
+
+        XCTAssertEqual(try Cryptography.encryptAESCBC(plaintext, key: key, iv: iv), expected)
+        XCTAssertEqual(try Cryptography.decryptAESCBC(expected, key: key, iv: iv), plaintext)
+    }
+
     func testRejectsInvalidAESInputsAndMalformedDER() {
         XCTAssertThrowsError(
             try Cryptography.encryptAESECB(Data(repeating: 0, count: 15), key: Data(repeating: 0, count: 16))
@@ -81,4 +91,3 @@ private extension Data {
         }
     }
 }
-

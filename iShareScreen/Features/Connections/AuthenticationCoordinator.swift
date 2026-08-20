@@ -14,6 +14,7 @@ final class AuthenticationCoordinator: ObservableObject {
 
     let endpoint: ConnectionEndpoint
     private let authenticator: any RFBAuthenticating
+    private let controlChannelNegotiator: any AppleControlChannelNegotiating
     private let credentialStore: any CredentialStoring
     private let connectionStore: ConnectionStore
     private let sessionManager: SessionManager
@@ -22,12 +23,14 @@ final class AuthenticationCoordinator: ObservableObject {
     init(
         endpoint: ConnectionEndpoint,
         authenticator: any RFBAuthenticating = RFBAuthenticationService(),
+        controlChannelNegotiator: any AppleControlChannelNegotiating = AppleControlChannelNegotiator(),
         credentialStore: any CredentialStoring = KeychainCredentialStore(),
         connectionStore: ConnectionStore,
         sessionManager: SessionManager
     ) {
         self.endpoint = endpoint
         self.authenticator = authenticator
+        self.controlChannelNegotiator = controlChannelNegotiator
         self.credentialStore = credentialStore
         self.connectionStore = connectionStore
         self.sessionManager = sessionManager
@@ -45,6 +48,7 @@ final class AuthenticationCoordinator: ObservableObject {
             task = Task {
                 do {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
+                    _ = try await controlChannelNegotiator.enableEncryption(for: session)
                     try Task.checkCancellation()
                     if rememberPassword {
                         try credentialStore.save(credentials, for: endpoint)
@@ -71,4 +75,3 @@ final class AuthenticationCoordinator: ObservableObject {
         state = .idle
     }
 }
-

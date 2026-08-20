@@ -21,5 +21,10 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertTrue(session.securityTypes.contains(.appleRSA))
         XCTAssertGreaterThan(session.serverInfo.width, 0)
         XCTAssertGreaterThan(session.serverInfo.height, 0)
+
+        let recordLayer = try await AppleControlChannelNegotiator().enableEncryption(for: session)
+        XCTAssertEqual(recordLayer.contentKey.count, 16)
+        XCTAssertEqual(session.recordLayer?.contentKey, recordLayer.contentKey)
+        XCTAssertGreaterThanOrEqual(session.rekeyGeneration ?? 0, 1)
     }
 }

@@ -16,30 +16,94 @@ enum Cryptography {
     }
 
     static func encryptAESECB(_ plaintext: Data, key: Data) throws -> Data {
+        try cryptAESECB(plaintext, key: key, operation: CCOperation(kCCEncrypt))
+    }
+
+    static func decryptAESECB(_ ciphertext: Data, key: Data) throws -> Data {
+        try cryptAESECB(ciphertext, key: key, operation: CCOperation(kCCDecrypt))
+    }
+
+    private static func cryptAESECB(
+        _ input: Data,
+        key: Data,
+        operation: CCOperation
+    ) throws -> Data {
         guard key.count == kCCKeySizeAES128,
-              plaintext.count.isMultiple(of: kCCBlockSizeAES128) else {
+              input.count.isMultiple(of: kCCBlockSizeAES128) else {
             throw CryptographyError.invalidAESInput
         }
 
-        let outputCapacity = plaintext.count + kCCBlockSizeAES128
+        let outputCapacity = input.count + kCCBlockSizeAES128
         var output = Data(count: outputCapacity)
         var outputLength = 0
         let status = output.withUnsafeMutableBytes { outputBytes in
-            plaintext.withUnsafeBytes { plaintextBytes in
+            input.withUnsafeBytes { inputBytes in
                 key.withUnsafeBytes { keyBytes in
                     CCCrypt(
-                        CCOperation(kCCEncrypt),
+                        operation,
                         CCAlgorithm(kCCAlgorithmAES),
                         CCOptions(kCCOptionECBMode),
                         keyBytes.baseAddress,
                         key.count,
                         nil,
-                        plaintextBytes.baseAddress,
-                        plaintext.count,
+                        inputBytes.baseAddress,
+                        input.count,
                         outputBytes.baseAddress,
                         outputCapacity,
                         &outputLength
                     )
+                }
+            }
+        }
+        guard status == kCCSuccess else {
+            throw CryptographyError.aesEncryptionFailed(status)
+        }
+        output.removeSubrange(outputLength..<output.count)
+        return output
+    }
+
+    static func encryptAESCBC(_ plaintext: Data, key: Data, iv: Data) throws -> Data {
+        try cryptAESCBC(plaintext, key: key, iv: iv, operation: CCOperation(kCCEncrypt))
+    }
+
+    static func decryptAESCBC(_ ciphertext: Data, key: Data, iv: Data) throws -> Data {
+        try cryptAESCBC(ciphertext, key: key, iv: iv, operation: CCOperation(kCCDecrypt))
+    }
+
+    private static func cryptAESCBC(
+        _ input: Data,
+        key: Data,
+        iv: Data,
+        operation: CCOperation
+    ) throws -> Data {
+        guard key.count == kCCKeySizeAES128,
+              iv.count == kCCBlockSizeAES128,
+              !input.isEmpty,
+              input.count.isMultiple(of: kCCBlockSizeAES128) else {
+            throw CryptographyError.invalidAESInput
+        }
+
+        let outputCapacity = input.count + kCCBlockSizeAES128
+        var output = Data(count: outputCapacity)
+        var outputLength = 0
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            input.withUnsafeBytes { inputBytes in
+                key.withUnsafeBytes { keyBytes in
+                    iv.withUnsafeBytes { ivBytes in
+                        CCCrypt(
+                            operation,
+                            CCAlgorithm(kCCAlgorithmAES),
+                            CCOptions(0),
+                            keyBytes.baseAddress,
+                            key.count,
+                            ivBytes.baseAddress,
+                            inputBytes.baseAddress,
+                            input.count,
+                            outputBytes.baseAddress,
+                            outputCapacity,
+                            &outputLength
+                        )
+                    }
                 }
             }
         }

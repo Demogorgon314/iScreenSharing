@@ -6,6 +6,8 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     let securityTypes: [RFBSecurityType]
     let masterKey: Data
     let serverInfo: RFBServerInfo
+    private(set) var recordLayer: AppleEncryptedRecordLayer?
+    private(set) var rekeyGeneration: UInt32?
 
     private let transport: NWConnectionTransport
 
@@ -35,6 +37,11 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     func receiveExactly(_ length: Int) async throws -> Data {
         try await transport.receiveExactly(length)
+    }
+
+    func install(recordLayer: AppleEncryptedRecordLayer, generation: UInt32) {
+        self.recordLayer = recordLayer
+        rekeyGeneration = generation
     }
 
     deinit {

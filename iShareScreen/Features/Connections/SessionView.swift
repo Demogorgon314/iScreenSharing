@@ -34,7 +34,7 @@ struct SessionView: View {
     }
 
     private var statusMessage: String {
-        if sessions.session(for: endpoint) != nil {
+        if sessions.session(for: endpoint)?.recordLayer != nil {
             "Secure connection established. Preparing the remote display…"
         } else {
             "The connection is no longer active."

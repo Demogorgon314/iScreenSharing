@@ -29,6 +29,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
             authenticator: authenticator,
+            controlChannelNegotiator: MockControlChannelNegotiator(),
             credentialStore: credentials,
             connectionStore: connections,
             sessionManager: sessions
@@ -55,6 +56,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
             authenticator: authenticator,
+            controlChannelNegotiator: MockControlChannelNegotiator(),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             sessionManager: sessions
@@ -133,3 +135,17 @@ private final class MockCredentialStore: CredentialStoring, @unchecked Sendable 
     }
 }
 
+private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
+    func enableEncryption(
+        for session: RFBAuthenticatedSession
+    ) async throws -> AppleEncryptedRecordLayer {
+        let layer = AppleEncryptedRecordLayer(
+            keys: try AppleRecordKeys(
+                key: Data(repeating: 0x11, count: 16),
+                initializationVector: Data(repeating: 0x22, count: 16)
+            )
+        )
+        session.install(recordLayer: layer, generation: 1)
+        return layer
+    }
+}

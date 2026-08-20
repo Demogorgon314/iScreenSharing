@@ -13,7 +13,24 @@ final class NWConnectionTransport: @unchecked Sendable {
         )
     }
 
-    func start() async throws {
+    func start(timeout: Duration = .seconds(15)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                try await self.waitUntilReady()
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw RFBNetworkError.connectionTimedOut
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw RFBNetworkError.connectionClosed
+            }
+            return result
+        }
+    }
+
+    private func waitUntilReady() async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let gate = ContinuationGate()
@@ -21,10 +38,12 @@ final class NWConnectionTransport: @unchecked Sendable {
                     switch state {
                     case .ready:
                         gate.performOnce { continuation.resume() }
-                    case .failed(let error), .waiting(let error):
+                    case .failed(let error):
                         gate.performOnce {
                             continuation.resume(throwing: RFBNetworkError.connectionFailed(error.localizedDescription))
                         }
+                    case .waiting:
+                        break
                     case .cancelled:
                         gate.performOnce { continuation.resume(throwing: CancellationError()) }
                     default:
@@ -109,6 +128,7 @@ enum RFBNetworkError: LocalizedError {
     case connectionFailed(String)
     case connectionClosed
     case invalidReadLength
+    case connectionTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -118,7 +138,8 @@ enum RFBNetworkError: LocalizedError {
             "The Mac closed the connection unexpectedly."
         case .invalidReadLength:
             "The host requested an invalid amount of protocol data."
+        case .connectionTimedOut:
+            "The connection timed out. Check Local Network access in System Settings and try again."
         }
     }
 }
-
