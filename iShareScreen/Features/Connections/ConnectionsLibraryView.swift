@@ -6,17 +6,12 @@ struct ConnectionsLibraryView: View {
         case network
     }
 
-    private enum Layout: String {
-        case icons
-        case list
-    }
-
     @ObservedObject var store: ConnectionStore
     @StateObject private var discovery: NetworkDiscoveryModel
     @Environment(\.openWindow) private var openWindow
     @State private var sidebarSelection: SidebarItem? = .allConnections
     @State private var selectedConnection: SavedConnection.ID?
-    @State private var layout: Layout = .list
+    @State private var layout: ConnectionLibraryLayout = .list
     @State private var searchText = ""
     @State private var discoveryAttempt = 0
 
@@ -85,12 +80,13 @@ struct ConnectionsLibraryView: View {
             }
             .navigationTitle(sidebarSelection == .network ? "Network" : "All Connections")
         }
+        .focusedSceneValue(\.connectionLibraryLayout, $layout)
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Picker("Show connections as icons, or in a list", selection: $layout) {
-                    Image(systemName: "rectangle.grid.2x2").tag(Layout.icons)
-                    Image(systemName: "list.bullet").tag(Layout.list)
+                    Image(systemName: "rectangle.grid.2x2").tag(ConnectionLibraryLayout.icons)
+                    Image(systemName: "list.bullet").tag(ConnectionLibraryLayout.list)
                 }
                 .pickerStyle(.segmented)
                 .fixedSize()

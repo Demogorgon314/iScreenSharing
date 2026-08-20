@@ -46,6 +46,7 @@ struct iShareScreenApp: App {
 
 private struct ScreenSharingCommands: Commands {
     @Environment(\.openWindow) private var openWindow
+    @FocusedBinding(\.connectionLibraryLayout) private var connectionLibraryLayout
     @FocusedBinding(\.sessionDisplayScale) private var displayScale
     @FocusedValue(\.sessionModeActions) private var sessionModeActions
 
@@ -56,7 +57,15 @@ private struct ScreenSharingCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: .command)
         }
-        CommandGroup(after: .toolbar) {
+        CommandGroup(before: .toolbar) {
+            Button("as Icons") {
+                connectionLibraryLayout = .icons
+            }
+            .disabled(connectionLibraryLayout == nil)
+            Button("as List") {
+                connectionLibraryLayout = .list
+            }
+            .disabled(connectionLibraryLayout == nil)
             Divider()
             Button(displayScale?.scalesToFit != false ? "Turn Scaling Off" : "Turn Scaling On") {
                 displayScale?.toggleScaling()
@@ -92,6 +101,11 @@ private struct SessionDisplayScaleFocusedKey: FocusedValueKey {
 }
 
 extension FocusedValues {
+    var connectionLibraryLayout: Binding<ConnectionLibraryLayout>? {
+        get { self[ConnectionLibraryLayoutFocusedKey.self] }
+        set { self[ConnectionLibraryLayoutFocusedKey.self] = newValue }
+    }
+
     var sessionDisplayScale: Binding<AppleVideoDisplayScale>? {
         get { self[SessionDisplayScaleFocusedKey.self] }
         set { self[SessionDisplayScaleFocusedKey.self] = newValue }
@@ -101,6 +115,10 @@ extension FocusedValues {
         get { self[SessionModeActionsFocusedKey.self] }
         set { self[SessionModeActionsFocusedKey.self] = newValue }
     }
+}
+
+private struct ConnectionLibraryLayoutFocusedKey: FocusedValueKey {
+    typealias Value = Binding<ConnectionLibraryLayout>
 }
 
 struct SessionModeActions {
