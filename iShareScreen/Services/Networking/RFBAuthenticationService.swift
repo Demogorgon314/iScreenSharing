@@ -8,6 +8,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     let serverInfo: RFBServerInfo
     private(set) var recordLayer: AppleEncryptedRecordLayer?
     private(set) var rekeyGeneration: UInt32?
+    private(set) var mediaNegotiation: AppleMediaNegotiationResult?
 
     private let transport: NWConnectionTransport
 
@@ -44,9 +45,34 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         rekeyGeneration = generation
     }
 
+    func sendEncrypted(_ message: Data) async throws {
+        guard let recordLayer else { throw RFBSessionError.encryptionNotEnabled }
+        try await send(try recordLayer.encrypt(message))
+    }
+
+    func receiveEncrypted() async throws -> Data {
+        guard let recordLayer else { throw RFBSessionError.encryptionNotEnabled }
+        let header = try await receiveExactly(2)
+        let length = try Int(header.uint16BE(at: 0))
+        guard length > 0, length.isMultiple(of: 16) else {
+            throw AppleEncryptedRecordError.invalidCiphertext
+        }
+        return try recordLayer.decrypt(try await receiveExactly(length))
+    }
+
+    func install(mediaNegotiation: AppleMediaNegotiationResult) {
+        self.mediaNegotiation = mediaNegotiation
+    }
+
     deinit {
         transport.cancel()
     }
+}
+
+enum RFBSessionError: LocalizedError {
+    case encryptionNotEnabled
+
+    var errorDescription: String? { "The encrypted Screen Sharing channel is not ready." }
 }
 
 protocol RFBAuthenticating: Sendable {

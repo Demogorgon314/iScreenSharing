@@ -54,9 +54,21 @@ enum AppleRFBMessages {
         }
         return message
     }
+
+    static func framebufferUpdateRequest(
+        incremental: Bool = false,
+        width: UInt16 = .max,
+        height: UInt16 = .max
+    ) -> Data {
+        var message = Data([0x03, incremental ? 0x01 : 0x00])
+        message.appendUInt16BE(0)
+        message.appendUInt16BE(0)
+        message.appendUInt16BE(width)
+        message.appendUInt16BE(height)
+        return message
+    }
 }
 
 enum AppleRFBMessageError: Error {
     case tooManyEncodings
 }
-

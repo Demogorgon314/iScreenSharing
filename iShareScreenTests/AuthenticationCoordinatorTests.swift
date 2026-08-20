@@ -30,6 +30,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             endpoint: endpoint,
             authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
             credentialStore: credentials,
             connectionStore: connections,
             sessionManager: sessions
@@ -57,6 +58,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             endpoint: endpoint,
             authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             sessionManager: sessions
@@ -147,5 +149,23 @@ private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
         )
         session.install(recordLayer: layer, generation: 1)
         return layer
+    }
+}
+
+private struct MockMediaNegotiator: AppleMediaNegotiating {
+    func negotiate(_ session: RFBAuthenticatedSession) async throws -> AppleMediaNegotiationResult {
+        let keys = AppleMediaKeys(
+            audioViewer: Data(repeating: 1, count: 46),
+            audioServer: Data(repeating: 2, count: 46),
+            videoViewer: Data(repeating: 3, count: 46),
+            videoServer: Data(repeating: 4, count: 46)
+        )
+        let result = AppleMediaNegotiationResult(
+            keys: keys,
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            pendingMessages: []
+        )
+        session.install(mediaNegotiation: result)
+        return result
     }
 }

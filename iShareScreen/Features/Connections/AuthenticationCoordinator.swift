@@ -15,6 +15,7 @@ final class AuthenticationCoordinator: ObservableObject {
     let endpoint: ConnectionEndpoint
     private let authenticator: any RFBAuthenticating
     private let controlChannelNegotiator: any AppleControlChannelNegotiating
+    private let mediaNegotiator: any AppleMediaNegotiating
     private let credentialStore: any CredentialStoring
     private let connectionStore: ConnectionStore
     private let sessionManager: SessionManager
@@ -24,6 +25,7 @@ final class AuthenticationCoordinator: ObservableObject {
         endpoint: ConnectionEndpoint,
         authenticator: any RFBAuthenticating = RFBAuthenticationService(),
         controlChannelNegotiator: any AppleControlChannelNegotiating = AppleControlChannelNegotiator(),
+        mediaNegotiator: any AppleMediaNegotiating = AppleMediaNegotiator(),
         credentialStore: any CredentialStoring = KeychainCredentialStore(),
         connectionStore: ConnectionStore,
         sessionManager: SessionManager
@@ -31,6 +33,7 @@ final class AuthenticationCoordinator: ObservableObject {
         self.endpoint = endpoint
         self.authenticator = authenticator
         self.controlChannelNegotiator = controlChannelNegotiator
+        self.mediaNegotiator = mediaNegotiator
         self.credentialStore = credentialStore
         self.connectionStore = connectionStore
         self.sessionManager = sessionManager
@@ -49,6 +52,7 @@ final class AuthenticationCoordinator: ObservableObject {
                 do {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
                     _ = try await controlChannelNegotiator.enableEncryption(for: session)
+                    _ = try await mediaNegotiator.negotiate(session)
                     try Task.checkCancellation()
                     if rememberPassword {
                         try credentialStore.save(credentials, for: endpoint)

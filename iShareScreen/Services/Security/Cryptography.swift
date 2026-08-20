@@ -3,6 +3,11 @@ import Foundation
 import Security
 
 enum Cryptography {
+    static func randomUInt32() throws -> UInt32 {
+        let bytes = try randomBytes(count: 4)
+        return try bytes.uint32BE(at: 0)
+    }
+
     static func randomBytes(count: Int) throws -> Data {
         guard count >= 0 else { throw CryptographyError.randomGenerationFailed }
         var data = Data(count: count)

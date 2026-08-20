@@ -2,6 +2,13 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleRFBMessagesTests: XCTestCase {
+    func testBuildsFramebufferUpdateRequest() {
+        XCTAssertEqual(
+            AppleRFBMessages.framebufferUpdateRequest(),
+            Data([0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff])
+        )
+    }
+
     func testViewerInfoMatchesReferenceShapeAndCommandMask() throws {
         let message = AppleRFBMessages.viewerInfo()
 
@@ -34,4 +41,3 @@ final class AppleRFBMessagesTests: XCTestCase {
         XCTAssertEqual(try message.int32BE(at: message.count - 4), 1110)
     }
 }
-
