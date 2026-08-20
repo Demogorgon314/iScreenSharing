@@ -5,6 +5,7 @@ final class AppleControlMessageService: @unchecked Sendable {
     private let input: AppleInputController
     private let clipboard: any AppleClipboardReceiving
     private let pendingMessages: [Data]
+    private let receiveDisplayLayout: @Sendable (AppleDisplayLayout) async -> Void
     private let countLock = NSLock()
     private var task: Task<Void, Never>?
     private var messageCount = 0
@@ -13,12 +14,14 @@ final class AppleControlMessageService: @unchecked Sendable {
         session: RFBAuthenticatedSession,
         input: AppleInputController,
         clipboard: any AppleClipboardReceiving,
-        pendingMessages: [Data]
+        pendingMessages: [Data],
+        receiveDisplayLayout: @escaping @Sendable (AppleDisplayLayout) async -> Void = { _ in }
     ) {
         self.session = session
         self.input = input
         self.clipboard = clipboard
         self.pendingMessages = pendingMessages
+        self.receiveDisplayLayout = receiveDisplayLayout
     }
 
     var receivedMessageCount: Int {
@@ -63,6 +66,12 @@ final class AppleControlMessageService: @unchecked Sendable {
     ) async {
         guard !message.isEmpty else { return }
         countLock.withControlMessageLock { messageCount += 1 }
+        if message[0] == 0 {
+            for layout in AppleFramebufferUpdate.displayLayouts(from: message) {
+                await receiveDisplayLayout(layout)
+            }
+            return
+        }
         if reassembler.isInProgress || message[0] == 0x1f {
             do {
                 if let complete = try reassembler.process(message),
