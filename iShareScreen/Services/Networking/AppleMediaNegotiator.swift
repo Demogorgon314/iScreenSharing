@@ -194,11 +194,15 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
     }
 
     static func framebufferStartupMessages(displayCount: Int) throws -> [Data] {
-        [
+        var messages = [
             try AppleRFBMessages.setEncodings(),
             AppleRFBMessages.framebufferUpdateRequest(),
             AppleRFBMessages.autoFramebufferUpdate(),
         ]
+        if displayCount > 1 {
+            messages.append(AppleRFBMessages.selectCombinedDisplays)
+        }
+        return messages
     }
 
 }
