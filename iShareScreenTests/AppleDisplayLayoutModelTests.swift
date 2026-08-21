@@ -247,4 +247,58 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
 
         XCTAssertEqual(model.layout?.displays.map(\.displayID), [22, 11])
     }
+
+    func testKeepsInputTargetsInInitialMediaSlotOrderAfterLayoutSort() throws {
+        let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
+        let mediaSlotOne = AppleDisplayRect(
+            displayID: 11,
+            x: 300,
+            y: 0,
+            width: 200,
+            height: 100,
+            logicalX: 150,
+            logicalY: 0,
+            logicalWidth: 100,
+            logicalHeight: 50
+        )
+        let mediaSlotTwo = AppleDisplayRect(
+            displayID: 22,
+            x: 0,
+            y: 0,
+            width: 300,
+            height: 100,
+            logicalX: 0,
+            logicalY: 0,
+            logicalWidth: 150,
+            logicalHeight: 50
+        )
+        let layout = AppleDisplayLayout(
+            scaledWidth: 250,
+            scaledHeight: 50,
+            backingWidth: 500,
+            backingHeight: 100,
+            displays: [mediaSlotOne, mediaSlotTwo]
+        )
+
+        model.receive(layout)
+        model.receive(AppleDisplayLayout(
+            scaledWidth: layout.scaledWidth + 1,
+            scaledHeight: layout.scaledHeight,
+            backingWidth: layout.backingWidth,
+            backingHeight: layout.backingHeight,
+            displays: layout.displays
+        ))
+
+        XCTAssertEqual(model.layout?.displays.map(\.displayID), [22, 11])
+        XCTAssertEqual(model.displayID(for: 0), 11)
+        XCTAssertEqual(model.displayID(for: 1), 22)
+        XCTAssertEqual(
+            try XCTUnwrap(model.inputMapping(for: 0)).backingFrame,
+            CGRect(x: 300, y: 0, width: 200, height: 100)
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(model.inputMapping(for: 1)).backingFrame,
+            CGRect(x: 0, y: 0, width: 300, height: 100)
+        )
+    }
 }

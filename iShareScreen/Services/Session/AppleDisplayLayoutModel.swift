@@ -29,6 +29,7 @@ struct AppleDisplayInputMapping: Equatable {
 final class AppleDisplayLayoutModel: ObservableObject {
     @Published private(set) var layout: AppleDisplayLayout?
     private let expectedDisplayCount: Int
+    private var mediaDisplayIDs = [UInt32]()
 
     init(expectedDisplayCount: Int = 1) {
         self.expectedDisplayCount = max(1, expectedDisplayCount)
@@ -42,6 +43,7 @@ final class AppleDisplayLayoutModel: ObservableObject {
     func receive(_ layout: AppleDisplayLayout) {
         guard layout.displays.count >= expectedDisplayCount else { return }
         guard let currentLayout = self.layout else {
+            mediaDisplayIDs = layout.displays.map(\.displayID)
             self.layout = layout
             return
         }
@@ -81,16 +83,12 @@ final class AppleDisplayLayoutModel: ObservableObject {
     }
 
     func displayID(for displayIndex: Int) -> UInt32? {
-        guard let displays = layout?.displays,
-              displays.indices.contains(displayIndex) else { return nil }
-        return displays[displayIndex].displayID
+        inputDisplay(for: displayIndex)?.displayID
     }
 
     func inputMapping(for displayIndex: Int) -> AppleDisplayInputMapping? {
-        guard let displays = layout?.displays,
-              displays.count > 1,
-              displays.indices.contains(displayIndex) else { return nil }
-        let display = displays[displayIndex]
+        guard displayCount > 1,
+              let display = inputDisplay(for: displayIndex) else { return nil }
         return AppleDisplayInputMapping(
             backingFrame: CGRect(
                 x: display.x,
@@ -105,5 +103,12 @@ final class AppleDisplayLayoutModel: ObservableObject {
                 height: display.logicalHeight
             )
         )
+    }
+
+    private func inputDisplay(for displayIndex: Int) -> AppleDisplayRect? {
+        guard let displays = layout?.displays,
+              mediaDisplayIDs.indices.contains(displayIndex) else { return nil }
+        let displayID = mediaDisplayIDs[displayIndex]
+        return displays.first(where: { $0.displayID == displayID })
     }
 }
