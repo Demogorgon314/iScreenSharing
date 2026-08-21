@@ -3,6 +3,9 @@ import SwiftUI
 struct SessionView: View {
     let endpoint: ConnectionEndpoint
     @ObservedObject var sessions: SessionManager
+    @ObservedObject var displayLayout: AppleDisplayLayoutModel
+    let displayIndex: Int
+    let disconnectsSessionOnDisappear: Bool
     @State private var displayScale = AppleVideoDisplayScale()
     @State private var isObserving = false
     @State private var isChangingMode = false
@@ -21,6 +24,7 @@ struct SessionView: View {
                     cursors: session.cursorStore,
                     displayScale: displayScale,
                     synchronizesPresentation: synchronizesVideoPresentation,
+                    sourceRect: displayLayout.sourceRect(for: displayIndex),
                     onViewportChange: viewportChanged
                 )
                 .onChange(of: stream.state) { _, state in
@@ -32,7 +36,7 @@ struct SessionView: View {
         }
         .onDisappear {
             dynamicResolution.cancel()
-            sessions.disconnect(endpoint)
+            if disconnectsSessionOnDisappear { sessions.disconnect(endpoint) }
         }
         .navigationTitle(endpoint.displayName)
         .focusedSceneValue(\.sessionEndpoint, endpoint)
@@ -42,7 +46,7 @@ struct SessionView: View {
             \.dynamicResolutionActions,
             DynamicResolutionActions(
                 isEnabled: dynamicResolution.isEnabled,
-                canToggle: sessions.session(for: endpoint)?.dynamicResolutionController != nil,
+                canToggle: canUseDynamicResolution,
                 toggle: { dynamicResolution.isEnabled.toggle() }
             )
         )
@@ -74,6 +78,7 @@ struct SessionView: View {
                 .toggleStyle(.button)
                 .help("Dynamic Resolution")
                 .accessibilityLabel("Dynamic Resolution")
+                .disabled(!canUseDynamicResolution)
                 Toggle(isOn: $synchronizesVideoPresentation) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }
@@ -97,6 +102,9 @@ struct SessionView: View {
         }
         .onChange(of: dynamicResolution.isEnabled) { _, enabled in
             if enabled { scheduleDynamicResolution() } else { dynamicResolution.cancel() }
+        }
+        .onChange(of: displayLayout.layout) { _, _ in
+            if canUseDynamicResolution { scheduleDynamicResolution() } else { dynamicResolution.cancel() }
         }
     }
 
@@ -142,7 +150,8 @@ struct SessionView: View {
     }
 
     private func scheduleDynamicResolution() {
-        guard let session = sessions.session(for: endpoint),
+        guard canUseDynamicResolution,
+              let session = sessions.session(for: endpoint),
               session.videoStream?.state == .streaming,
               let controller = session.dynamicResolutionController else { return }
         dynamicResolution.schedule(
@@ -150,6 +159,12 @@ struct SessionView: View {
             canvas: session.videoStream?.canvas,
             controller: controller
         )
+    }
+
+    private var canUseDynamicResolution: Bool {
+        displayIndex == 0
+            && displayLayout.supportsDynamicResolution
+            && sessions.session(for: endpoint)?.dynamicResolutionController != nil
     }
 
     private func toggleObservationMode() {
@@ -190,6 +205,7 @@ private struct ActiveVideoSessionView: View {
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
+    let sourceRect: CGRect?
     let onViewportChange: (CGSize) -> Void
 
     var body: some View {
@@ -201,7 +217,8 @@ private struct ActiveVideoSessionView: View {
                 input: input,
                 cursors: cursors,
                 displayScale: displayScale,
-                synchronizesPresentation: synchronizesPresentation
+                synchronizesPresentation: synchronizesPresentation,
+                sourceRect: sourceRect
             )
             .id(stream.canvas)
             if stream.state != .streaming {

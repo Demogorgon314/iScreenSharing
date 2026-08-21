@@ -9,6 +9,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
+    let sourceRect: CGRect?
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
@@ -17,13 +18,15 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             input: input,
             cursors: cursors,
             displayScale: displayScale,
-            synchronizesPresentation: synchronizesPresentation
+            synchronizesPresentation: synchronizesPresentation,
+            sourceRect: sourceRect
         )
     }
 
     func updateNSView(_ view: RemoteVideoCanvasNSView, context: Context) {
         view.displayScale = displayScale
         view.synchronizesPresentation = synchronizesPresentation
+        view.sourceRect = sourceRect
     }
 }
 
@@ -37,6 +40,12 @@ final class RemoteVideoCanvasNSView: NSView {
             displayLayers.compactMap { $0 as? AppleNV24MetalLayer }.forEach {
                 $0.synchronizesPresentation = synchronizesPresentation
             }
+        }
+    }
+    var sourceRect: CGRect? {
+        didSet {
+            guard sourceRect != oldValue else { return }
+            needsLayout = true
         }
     }
 
@@ -63,7 +72,8 @@ final class RemoteVideoCanvasNSView: NSView {
         input: AppleInputController?,
         cursors: AppleCursorStore?,
         displayScale: AppleVideoDisplayScale,
-        synchronizesPresentation: Bool
+        synchronizesPresentation: Bool,
+        sourceRect: CGRect?
     ) {
         self.canvas = canvas
         self.frames = frames
@@ -71,6 +81,7 @@ final class RemoteVideoCanvasNSView: NSView {
         self.cursors = cursors
         self.displayScale = displayScale
         self.synchronizesPresentation = synchronizesPresentation
+        self.sourceRect = sourceRect
         let metalContext = AppleNV24MetalContext()
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
         displayLayers = (0..<canvas.tileCount).map { _ in
@@ -129,7 +140,8 @@ final class RemoteVideoCanvasNSView: NSView {
             canvas: canvas,
             bounds: bounds,
             slotHeight: slotHeight,
-            fixedScale: displayScale.fixedScale
+            fixedScale: displayScale.fixedScale,
+            sourceRect: sourceRect
         )
         for (index, layout) in layouts.enumerated() {
             tileContainers[index].frame = backingAlignedRect(
@@ -300,7 +312,8 @@ final class RemoteVideoCanvasNSView: NSView {
             location: convert(event.locationInWindow, from: nil),
             canvas: canvas,
             bounds: bounds,
-            fixedScale: displayScale.fixedScale
+            fixedScale: displayScale.fixedScale,
+            sourceRect: sourceRect
         )
     }
 
@@ -376,16 +389,22 @@ enum AppleVideoCanvasLayout {
         canvas: AppleCanvas,
         bounds: CGRect,
         slotHeight: CGFloat,
-        fixedScale: CGFloat?
+        fixedScale: CGFloat?,
+        sourceRect: CGRect? = nil
     ) -> [Tile] {
         guard canvas.tileCount > 0, canvas.width > 0, canvas.height > 0, slotHeight > 0 else {
             return []
         }
-        let canvasSize = CGSize(width: canvas.width, height: canvas.height)
+        let canvasBounds = CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
+        let source = sourceRect.map { $0.intersection(canvasBounds) } ?? canvasBounds
+        guard !source.isNull, !source.isEmpty else {
+            return Array(repeating: Tile(container: .zero, content: .zero), count: canvas.tileCount)
+        }
+        let sourceSize = source.size
         let scale = fixedScale
-            ?? min(bounds.width / canvasSize.width, bounds.height / canvasSize.height)
-        let outputSize = CGSize(width: canvasSize.width * scale, height: canvasSize.height * scale)
-        let canvasRect = CGRect(
+            ?? min(bounds.width / sourceSize.width, bounds.height / sourceSize.height)
+        let outputSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let outputRect = CGRect(
             x: bounds.midX - outputSize.width / 2,
             y: bounds.midY - outputSize.height / 2,
             width: outputSize.width,
@@ -393,18 +412,28 @@ enum AppleVideoCanvasLayout {
         )
         return (0..<canvas.tileCount).map { tileIndex in
             let pixelOrigin = CGFloat(tileIndex) * slotHeight
-            let visibleHeight = min(slotHeight, max(0, canvasSize.height - pixelOrigin))
+            let visibleHeight = min(slotHeight, max(0, canvasBounds.height - pixelOrigin))
             guard visibleHeight > 0 else { return Tile(container: .zero, content: .zero) }
+            let tileRect = CGRect(
+                x: 0,
+                y: pixelOrigin,
+                width: canvasBounds.width,
+                height: visibleHeight
+            )
+            let visibleRect = tileRect.intersection(source)
+            guard !visibleRect.isNull, !visibleRect.isEmpty else {
+                return Tile(container: .zero, content: .zero)
+            }
             let container = CGRect(
-                x: canvasRect.minX,
-                y: canvasRect.maxY - (pixelOrigin + visibleHeight) * scale,
-                width: canvasRect.width,
-                height: visibleHeight * scale
+                x: outputRect.minX + (visibleRect.minX - source.minX) * scale,
+                y: outputRect.maxY - (visibleRect.maxY - source.minY) * scale,
+                width: visibleRect.width * scale,
+                height: visibleRect.height * scale
             )
             let content = CGRect(
-                x: 0,
-                y: -(slotHeight - visibleHeight) * scale,
-                width: container.width,
+                x: (tileRect.minX - visibleRect.minX) * scale,
+                y: (visibleRect.maxY - tileRect.minY - slotHeight) * scale,
+                width: tileRect.width * scale,
                 height: slotHeight * scale
             )
             return Tile(container: container, content: content)
@@ -415,13 +444,17 @@ enum AppleVideoCanvasLayout {
         location: CGPoint,
         canvas: AppleCanvas,
         bounds: CGRect,
-        fixedScale: CGFloat?
+        fixedScale: CGFloat?,
+        sourceRect: CGRect? = nil
     ) -> (x: Int, y: Int)? {
         guard canvas.width > 0, canvas.height > 0 else { return nil }
+        let canvasBounds = CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
+        let source = sourceRect.map { $0.intersection(canvasBounds) } ?? canvasBounds
+        guard !source.isNull, !source.isEmpty else { return nil }
         let scale = fixedScale
-            ?? min(bounds.width / CGFloat(canvas.width), bounds.height / CGFloat(canvas.height))
+            ?? min(bounds.width / source.width, bounds.height / source.height)
         guard scale > 0 else { return nil }
-        let size = CGSize(width: CGFloat(canvas.width) * scale, height: CGFloat(canvas.height) * scale)
+        let size = CGSize(width: source.width * scale, height: source.height * scale)
         let rect = CGRect(
             x: bounds.midX - size.width / 2,
             y: bounds.midY - size.height / 2,
@@ -429,9 +462,11 @@ enum AppleVideoCanvasLayout {
             height: size.height
         )
         guard rect.contains(location) else { return nil }
+        let sourceX = Int(source.minX + (location.x - rect.minX) / scale)
+        let sourceY = Int(source.minY + (rect.maxY - location.y) / scale)
         return (
-            min(canvas.width - 1, max(0, Int((location.x - rect.minX) / scale))),
-            min(canvas.height - 1, max(0, Int((rect.maxY - location.y) / scale)))
+            min(Int(source.maxX) - 1, max(Int(source.minX), sourceX)),
+            min(Int(source.maxY) - 1, max(Int(source.minY), sourceY))
         )
     }
 }

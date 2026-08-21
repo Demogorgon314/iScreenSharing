@@ -50,4 +50,68 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
             )
         )
     }
+
+    func testCropsRightDisplayFromCombinedCanvas() {
+        let layouts = AppleVideoCanvasLayout.tiles(
+            canvas: AppleCanvas(width: 3840, height: 1080, tileCount: 1),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 540),
+            slotHeight: 1080,
+            fixedScale: nil,
+            sourceRect: CGRect(x: 1920, y: 0, width: 1920, height: 1080)
+        )
+
+        XCTAssertEqual(layouts, [
+            AppleVideoCanvasLayout.Tile(
+                container: CGRect(x: 0, y: 0, width: 960, height: 540),
+                content: CGRect(x: -960, y: 0, width: 1920, height: 540)
+            ),
+        ])
+    }
+
+    func testMapsCroppedDisplayCoordinatesIntoCombinedCanvas() {
+        let point = AppleVideoCanvasLayout.remotePoint(
+            location: CGPoint(x: 480, y: 270),
+            canvas: AppleCanvas(width: 3840, height: 1080, tileCount: 1),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 540),
+            fixedScale: nil,
+            sourceRect: CGRect(x: 1920, y: 0, width: 1920, height: 1080)
+        )
+
+        XCTAssertEqual(point?.x, 2880)
+        XCTAssertEqual(point?.y, 540)
+    }
+
+    func testCropsBottomDisplayFromVerticallyTiledCanvas() {
+        let layouts = AppleVideoCanvasLayout.tiles(
+            canvas: AppleCanvas(width: 1920, height: 2160, tileCount: 2),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 540),
+            slotHeight: 1080,
+            fixedScale: nil,
+            sourceRect: CGRect(x: 0, y: 1080, width: 1920, height: 1080)
+        )
+
+        XCTAssertEqual(layouts[0], AppleVideoCanvasLayout.Tile(container: .zero, content: .zero))
+        XCTAssertEqual(
+            layouts[1],
+            AppleVideoCanvasLayout.Tile(
+                container: CGRect(x: 0, y: 0, width: 960, height: 540),
+                content: CGRect(x: 0, y: 0, width: 960, height: 540)
+            )
+        )
+    }
+
+    func testHidesAllTilesWhenDisplayCropIsOutsideCanvas() {
+        let layouts = AppleVideoCanvasLayout.tiles(
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 2),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 540),
+            slotHeight: 540,
+            fixedScale: nil,
+            sourceRect: CGRect(x: 1920, y: 0, width: 1920, height: 1080)
+        )
+
+        XCTAssertEqual(
+            layouts,
+            Array(repeating: AppleVideoCanvasLayout.Tile(container: .zero, content: .zero), count: 2)
+        )
+    }
 }

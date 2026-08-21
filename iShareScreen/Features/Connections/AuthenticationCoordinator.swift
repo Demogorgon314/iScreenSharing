@@ -107,12 +107,17 @@ final class AuthenticationCoordinator: ObservableObject {
                     }
                     let cursorStore = AppleCursorStore()
                     session.install(cursorStore: cursorStore)
+                    let displayLayoutModel = AppleDisplayLayoutModel(
+                        expectedDisplayCount: savedConnection?.virtualDisplayCount.rawValue ?? 1
+                    )
+                    session.install(displayLayoutModel: displayLayoutModel)
                     let controlMessages = AppleControlMessageService(
                         session: session,
                         input: input,
                         clipboard: clipboard,
                         pendingMessages: negotiation.pendingMessages,
                         receiveDisplayLayout: { layout in
+                            await displayLayoutModel.receive(layout)
                             try? await dynamicResolutionController?.receive(layout)
                         },
                         receiveMediaCanvas: { canvas in

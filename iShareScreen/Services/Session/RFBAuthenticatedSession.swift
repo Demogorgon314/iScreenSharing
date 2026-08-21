@@ -17,6 +17,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var audioStream: AppleAudioStream?
     private(set) var dynamicResolutionController: AppleDynamicResolutionController?
     private(set) var cursorStore: AppleCursorStore?
+    private(set) var displayLayoutModel: AppleDisplayLayoutModel?
 
     private let transport: NWConnectionTransport
 
@@ -112,6 +113,11 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     func install(cursorStore: AppleCursorStore) {
         self.cursorStore = cursorStore
+    }
+
+    @MainActor
+    func install(displayLayoutModel: AppleDisplayLayoutModel) {
+        self.displayLayoutModel = displayLayoutModel
     }
 
     deinit {
