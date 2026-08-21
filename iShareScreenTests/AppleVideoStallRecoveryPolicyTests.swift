@@ -62,3 +62,68 @@ final class AppleVideoStallRecoveryPolicyTests: XCTestCase {
         )
     }
 }
+
+final class AppleVideoInitialRecoveryPolicyTests: XCTestCase {
+    private let policy = AppleVideoInitialRecoveryPolicy()
+
+    func testRequestsKeyFramesWhenPacketsFlowButParameterSetsAreMissing() {
+        XCTAssertTrue(
+            policy.shouldRequestKeyFrames(
+                now: 4,
+                initialBurstReadyTime: 1,
+                lastVideoPacketTime: 4,
+                lastKeyFrameRequestTime: 0,
+                hasSelectedSources: true,
+                hasCompleteParameterSets: false
+            )
+        )
+    }
+
+    func testDoesNothingBeforeSourcesAreSelected() {
+        XCTAssertFalse(
+            shouldRequest(hasSelectedSources: false)
+        )
+    }
+
+    func testDoesNothingWhenParameterSetsAreComplete() {
+        XCTAssertFalse(
+            shouldRequest(hasCompleteParameterSets: true)
+        )
+    }
+
+    func testDoesNothingWhenVideoPacketsStopped() {
+        XCTAssertFalse(
+            shouldRequest(now: 4, lastVideoPacketTime: 2)
+        )
+    }
+
+    func testWaitsForInitialParameterSetGracePeriod() {
+        XCTAssertFalse(
+            shouldRequest(now: 2, initialBurstReadyTime: 1)
+        )
+    }
+
+    func testRateLimitsKeyFrameRequests() {
+        XCTAssertFalse(
+            shouldRequest(now: 4, lastKeyFrameRequestTime: 3)
+        )
+    }
+
+    private func shouldRequest(
+        now: TimeInterval = 4,
+        initialBurstReadyTime: TimeInterval = 1,
+        lastVideoPacketTime: TimeInterval = 4,
+        lastKeyFrameRequestTime: TimeInterval = 0,
+        hasSelectedSources: Bool = true,
+        hasCompleteParameterSets: Bool = false
+    ) -> Bool {
+        policy.shouldRequestKeyFrames(
+            now: now,
+            initialBurstReadyTime: initialBurstReadyTime,
+            lastVideoPacketTime: lastVideoPacketTime,
+            lastKeyFrameRequestTime: lastKeyFrameRequestTime,
+            hasSelectedSources: hasSelectedSources,
+            hasCompleteParameterSets: hasCompleteParameterSets
+        )
+    }
+}

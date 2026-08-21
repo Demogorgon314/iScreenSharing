@@ -27,6 +27,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let sourceAdoptionStall: TimeInterval = 2
     private static let minimumAdoptionPacketsPerSource = 5
     private static let receiverReportInterval: TimeInterval = 0.5
+    private static let initialRecovery = AppleVideoInitialRecoveryPolicy()
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
@@ -50,6 +51,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var initialPacketCountBaseline = [UInt32: Int]()
     private var lastDecodedFrameTime: TimeInterval = 0
     private var lastVideoPacketTime: TimeInterval = 0
+    private var lastInitialKeyFrameRequestTime: TimeInterval = 0
     private var lastStallKeyFrameRequestTime: TimeInterval = 0
     private var lastDecoderRestartTime: TimeInterval = 0
 
@@ -93,6 +95,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 initialPacketCountBaseline.removeAll(keepingCapacity: false)
                 countLock.withVideoStreamLock { self.lastDecodedFrameTime = 0 }
                 lastVideoPacketTime = 0
+                lastInitialKeyFrameRequestTime = 0
                 lastStallKeyFrameRequestTime = 0
                 lastDecoderRestartTime = 0
                 DispatchQueue.main.async { [weak self] in
@@ -204,7 +207,23 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         )
         guard sources.count == canvas.tileCount else { return }
         sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
+        recoverMissingInitialParameterSetsIfNeeded(now: now)
         prepareDecoder(for: sources)
+    }
+
+    private func recoverMissingInitialParameterSetsIfNeeded(now: TimeInterval) {
+        let parameterSets = processor.currentParameterSets()
+        guard Self.initialRecovery.shouldRequestKeyFrames(
+            now: now,
+            initialBurstReadyTime: initialBurstReadyTime,
+            lastVideoPacketTime: lastVideoPacketTime,
+            lastKeyFrameRequestTime: lastInitialKeyFrameRequestTime,
+            hasSelectedSources: sourceToTile.count == canvas.tileCount,
+            hasCompleteParameterSets: parameterSets.isComplete
+        ) else { return }
+
+        lastInitialKeyFrameRequestTime = now
+        requestKeyFramesForAllTiles()
     }
 
     private func prepareDecoder(for sources: [UInt32]) {
@@ -386,6 +405,40 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func publishState(_ state: State) {
         DispatchQueue.main.async { [weak self] in self?.state = state }
+    }
+}
+
+struct AppleVideoInitialRecoveryPolicy {
+    let keyFrameRequestDelay: TimeInterval
+    let keyFrameRequestInterval: TimeInterval
+    let recentPacketWindow: TimeInterval
+
+    init(
+        keyFrameRequestDelay: TimeInterval = 2,
+        keyFrameRequestInterval: TimeInterval = 1.5,
+        recentPacketWindow: TimeInterval = 1.5
+    ) {
+        self.keyFrameRequestDelay = keyFrameRequestDelay
+        self.keyFrameRequestInterval = keyFrameRequestInterval
+        self.recentPacketWindow = recentPacketWindow
+    }
+
+    func shouldRequestKeyFrames(
+        now: TimeInterval,
+        initialBurstReadyTime: TimeInterval?,
+        lastVideoPacketTime: TimeInterval,
+        lastKeyFrameRequestTime: TimeInterval,
+        hasSelectedSources: Bool,
+        hasCompleteParameterSets: Bool
+    ) -> Bool {
+        guard hasSelectedSources,
+              !hasCompleteParameterSets,
+              let initialBurstReadyTime,
+              lastVideoPacketTime > 0,
+              now - initialBurstReadyTime >= keyFrameRequestDelay,
+              now - lastVideoPacketTime < recentPacketWindow,
+              now - lastKeyFrameRequestTime >= keyFrameRequestInterval else { return false }
+        return true
     }
 }
 
