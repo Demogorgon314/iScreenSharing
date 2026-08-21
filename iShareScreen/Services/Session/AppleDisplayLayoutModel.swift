@@ -2,15 +2,19 @@ import Combine
 import CoreGraphics
 
 struct AppleDisplayInputMapping: Equatable {
-    let scaledFrame: CGRect
+    let backingFrame: CGRect
+    let logicalFrame: CGRect
 
     func point(from backingPoint: CGPoint, isDisplayLocal: Bool) -> (x: Int, y: Int)? {
-        guard scaledFrame.width > 0, scaledFrame.height > 0 else { return nil }
-        let x = backingPoint.x + (isDisplayLocal ? scaledFrame.minX : 0)
-        let y = backingPoint.y + (isDisplayLocal ? scaledFrame.minY : 0)
+        guard backingFrame.width > 0, backingFrame.height > 0,
+              logicalFrame.width > 0, logicalFrame.height > 0 else { return nil }
+        let localX = backingPoint.x - (isDisplayLocal ? 0 : backingFrame.minX)
+        let localY = backingPoint.y - (isDisplayLocal ? 0 : backingFrame.minY)
+        let x = logicalFrame.minX + localX * logicalFrame.width / backingFrame.width
+        let y = logicalFrame.minY + localY * logicalFrame.height / backingFrame.height
         return (
-            Int(min(scaledFrame.maxX - 1, max(scaledFrame.minX, x))),
-            Int(min(scaledFrame.maxY - 1, max(scaledFrame.minY, y)))
+            Int(min(logicalFrame.maxX - 1, max(logicalFrame.minX, x)).rounded()),
+            Int(min(logicalFrame.maxY - 1, max(logicalFrame.minY, y)).rounded())
         )
     }
 }
@@ -80,11 +84,19 @@ final class AppleDisplayLayoutModel: ObservableObject {
         guard let displays = layout?.displays,
               displays.indices.contains(displayIndex) else { return nil }
         let display = displays[displayIndex]
-        return AppleDisplayInputMapping(scaledFrame: CGRect(
-            x: display.x,
-            y: display.y,
-            width: display.width,
-            height: display.height
-        ))
+        return AppleDisplayInputMapping(
+            backingFrame: CGRect(
+                x: display.x,
+                y: display.y,
+                width: display.width,
+                height: display.height
+            ),
+            logicalFrame: CGRect(
+                x: display.logicalX,
+                y: display.logicalY,
+                width: display.logicalWidth,
+                height: display.logicalHeight
+            )
+        )
     }
 }

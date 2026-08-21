@@ -347,18 +347,19 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func remotePoint(for event: NSEvent) -> (x: Int, y: Int)? {
-        guard let point = AppleVideoCanvasLayout.remotePoint(
-            location: convert(event.locationInWindow, from: nil),
+        let location = convert(event.locationInWindow, from: nil)
+        guard let canvasPoint = AppleVideoCanvasLayout.remotePoint(
+            location: location,
             canvas: canvas,
             bounds: bounds,
             fixedScale: displayScale.fixedScale,
             sourceRect: sourceRect
         ) else { return nil }
-        guard let inputMapping else { return point }
-        return inputMapping.point(
-            from: CGPoint(x: point.x, y: point.y),
+        let point = inputMapping?.point(
+            from: CGPoint(x: canvasPoint.x, y: canvasPoint.y),
             isDisplayLocal: inputCoordinatesAreDisplayLocal
-        )
+        ) ?? canvasPoint
+        return point
     }
 
     private func selectInputDisplay() {

@@ -95,7 +95,7 @@ final class AuthenticationCoordinator: ObservableObject {
                     let clipboard = AppleClipboardService()
                     try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
                     let dynamicResolutionController: AppleDynamicResolutionController?
-                    if let stream = session.videoStream {
+                    if virtualDisplayCount == .one, let stream = session.videoStream {
                         let controller = AppleDynamicResolutionController(
                             initialCanvas: negotiation.canvas,
                             mediaConfiguration: negotiation.configuration,
@@ -130,9 +130,9 @@ final class AuthenticationCoordinator: ObservableObject {
                         receiveDisplayLayout: { layout in
                             await displayLayoutModel.receive(layout)
                             if layout.displays.count > 1 {
-                                let width = layout.displays.map { $0.x + $0.width }.max()
+                                let width = layout.displays.map { $0.logicalX + $0.logicalWidth }.max()
                                     ?? negotiation.canvas.width
-                                let height = layout.displays.map { $0.y + $0.height }.max()
+                                let height = layout.displays.map { $0.logicalY + $0.logicalHeight }.max()
                                     ?? negotiation.canvas.height
                                 await input.update(canvas: AppleCanvas(
                                     width: width,

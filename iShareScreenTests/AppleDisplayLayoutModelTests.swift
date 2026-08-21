@@ -58,44 +58,100 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         XCTAssertTrue(model.supportsDynamicResolution)
     }
 
-    func testMapsCombinedBackingPixelsWithoutAdditionalHiDPIScaling() {
+    func testMapsCombinedBackingPixelsIntoLogicalDesktopCoordinates() {
         let mapping = AppleDisplayInputMapping(
-            scaledFrame: CGRect(x: 3840, y: 0, width: 2880, height: 1800)
+            backingFrame: CGRect(x: 2244, y: 0, width: 3020, height: 1788),
+            logicalFrame: CGRect(x: 1122, y: 0, width: 1510, height: 894)
         )
 
         XCTAssertEqual(
-            mapping.point(from: CGPoint(x: 5280, y: 900), isDisplayLocal: false)?.x,
-            5280
+            mapping.point(from: CGPoint(x: 3754, y: 894), isDisplayLocal: false)?.x,
+            1877
         )
         XCTAssertEqual(
-            mapping.point(from: CGPoint(x: 5280, y: 900), isDisplayLocal: false)?.y,
-            900
+            mapping.point(from: CGPoint(x: 3754, y: 894), isDisplayLocal: false)?.y,
+            447
         )
     }
 
-    func testMapsIndependentStreamsByAddingTheirScaledFrameOrigins() {
+    func testMapsCapturedIndependentDisplayCanvasesIntoLogicalDesktopCoordinates() {
         let displayOne = AppleDisplayInputMapping(
-            scaledFrame: CGRect(x: 2880, y: 0, width: 3840, height: 2160)
+            backingFrame: CGRect(x: 0, y: 0, width: 2244, height: 1872),
+            logicalFrame: CGRect(x: 0, y: 0, width: 1122, height: 936)
         )
         let displayTwo = AppleDisplayInputMapping(
-            scaledFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080)
+            backingFrame: CGRect(x: 2244, y: 0, width: 3020, height: 1788),
+            logicalFrame: CGRect(x: 1122, y: 0, width: 1510, height: 894)
         )
 
         XCTAssertEqual(
-            displayOne.point(from: CGPoint(x: 1920, y: 1080), isDisplayLocal: true)?.x,
-            4800
+            displayOne.point(from: CGPoint(x: 1122, y: 936), isDisplayLocal: true)?.x,
+            561
         )
         XCTAssertEqual(
-            displayOne.point(from: CGPoint(x: 1920, y: 1080), isDisplayLocal: true)?.y,
-            1080
+            displayOne.point(from: CGPoint(x: 1122, y: 936), isDisplayLocal: true)?.y,
+            468
         )
         XCTAssertEqual(
-            displayTwo.point(from: CGPoint(x: 960, y: 540), isDisplayLocal: true)?.x,
-            960
+            displayOne.point(from: CGPoint(x: 1, y: 1), isDisplayLocal: true)?.x,
+            1
         )
         XCTAssertEqual(
-            displayTwo.point(from: CGPoint(x: 960, y: 540), isDisplayLocal: true)?.y,
-            540
+            displayTwo.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.x,
+            1877
+        )
+        XCTAssertEqual(
+            displayTwo.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.y,
+            447
+        )
+        XCTAssertEqual(displayTwo.point(from: .zero, isDisplayLocal: true)?.x, 1122)
+        XCTAssertEqual(
+            displayTwo.point(from: CGPoint(x: 3019, y: 0), isDisplayLocal: true)?.x,
+            2631
+        )
+    }
+
+    func testBuildsInputMappingFromCapturedDualDisplayLayout() throws {
+        let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
+        model.receive(AppleDisplayLayout(
+            scaledWidth: 2632,
+            scaledHeight: 936,
+            backingWidth: 5264,
+            backingHeight: 1872,
+            displays: [
+                AppleDisplayRect(
+                    displayID: 318,
+                    x: 0,
+                    y: 0,
+                    width: 2244,
+                    height: 1872,
+                    logicalX: 0,
+                    logicalY: 0,
+                    logicalWidth: 1122,
+                    logicalHeight: 936
+                ),
+                AppleDisplayRect(
+                    displayID: 319,
+                    x: 2244,
+                    y: 0,
+                    width: 3020,
+                    height: 1788,
+                    logicalX: 1122,
+                    logicalY: 0,
+                    logicalWidth: 1510,
+                    logicalHeight: 894
+                ),
+            ]
+        ))
+
+        let mapping = try XCTUnwrap(model.inputMapping(for: 1))
+        XCTAssertEqual(
+            mapping.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.x,
+            1877
+        )
+        XCTAssertEqual(
+            mapping.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.y,
+            447
         )
     }
 
