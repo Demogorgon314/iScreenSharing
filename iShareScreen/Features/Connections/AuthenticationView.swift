@@ -113,8 +113,8 @@ struct AuthenticationView: View {
         }
         .padding(20)
         .frame(width: 440)
-        .onAppear {
-            if let saved = coordinator.savedCredentials() {
+        .task {
+            if let saved = await coordinator.savedCredentials() {
                 username = saved.username
                 password = saved.password
                 rememberPassword = true

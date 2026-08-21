@@ -45,8 +45,12 @@ final class AuthenticationCoordinator: ObservableObject {
         self.onAuthenticated = onAuthenticated
     }
 
-    func savedCredentials() -> ScreenSharingCredentials? {
-        try? credentialStore.load(for: endpoint)
+    func savedCredentials() async -> ScreenSharingCredentials? {
+        let credentialStore = credentialStore
+        let endpoint = endpoint
+        return await Task.detached {
+            try? credentialStore.load(for: endpoint)
+        }.value
     }
 
     func preferredUsername() -> String? {
@@ -122,11 +126,7 @@ final class AuthenticationCoordinator: ObservableObject {
                         audio.start()
                     }
                     try Task.checkCancellation()
-                    if rememberPassword {
-                        try credentialStore.save(credentials, for: endpoint)
-                    } else {
-                        try credentialStore.delete(for: endpoint)
-                    }
+                    try await persistCredentials(credentials, remember: rememberPassword)
                     sessionManager.install(session)
                     connectionStore.record(endpoint, preferredUsername: credentials.username)
                     onAuthenticated(endpoint)
@@ -146,6 +146,21 @@ final class AuthenticationCoordinator: ObservableObject {
         task?.cancel()
         task = nil
         state = .idle
+    }
+
+    private func persistCredentials(
+        _ credentials: ScreenSharingCredentials,
+        remember: Bool
+    ) async throws {
+        let credentialStore = credentialStore
+        let endpoint = endpoint
+        try await Task.detached {
+            if remember {
+                try credentialStore.save(credentials, for: endpoint)
+            } else {
+                try credentialStore.delete(for: endpoint)
+            }
+        }.value
     }
 }
 
