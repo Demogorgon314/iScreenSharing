@@ -24,7 +24,6 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
 }
 
 final class RemoteVideoCanvasNSView: NSView {
-    private static let pointerMoveInterval: TimeInterval = 1.0 / 60.0
     var displayScale: AppleVideoDisplayScale {
         didSet { needsLayout = true }
     }
@@ -44,9 +43,6 @@ final class RemoteVideoCanvasNSView: NSView {
     private var lastRemotePoint: (x: Int, y: Int)?
     private var scrollRemainder: CGFloat = 0
     private var activeModifiers = [UInt16: UInt32]()
-    private var pendingPointerMove: (buttons: UInt8, x: Int, y: Int)?
-    private var pointerMoveScheduled = false
-    private var lastPointerMoveSentTime: TimeInterval = 0
     private var inputTask: Task<Void, Never>?
 
     init(
@@ -154,44 +150,44 @@ final class RemoteVideoCanvasNSView: NSView {
         super.updateTrackingAreas()
     }
 
-    override func mouseMoved(with event: NSEvent) { sendPointer(event, coalescing: true) }
-    override func mouseDragged(with event: NSEvent) { sendPointer(event, coalescing: true) }
-    override func rightMouseDragged(with event: NSEvent) { sendPointer(event, coalescing: true) }
-    override func otherMouseDragged(with event: NSEvent) { sendPointer(event, coalescing: true) }
+    override func mouseMoved(with event: NSEvent) { sendPointer(event) }
+    override func mouseDragged(with event: NSEvent) { sendPointer(event) }
+    override func rightMouseDragged(with event: NSEvent) { sendPointer(event) }
+    override func otherMouseDragged(with event: NSEvent) { sendPointer(event) }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         buttonMask |= AppleInputController.leftButton
-        sendPointer(event, coalescing: false)
+        sendPointer(event)
     }
 
     override func mouseUp(with event: NSEvent) {
         buttonMask &= ~AppleInputController.leftButton
-        sendPointer(event, coalescing: false)
+        sendPointer(event)
     }
 
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         buttonMask |= AppleInputController.rightButton
-        sendPointer(event, coalescing: false)
+        sendPointer(event)
     }
 
     override func rightMouseUp(with event: NSEvent) {
         buttonMask &= ~AppleInputController.rightButton
-        sendPointer(event, coalescing: false)
+        sendPointer(event)
     }
 
     override func otherMouseDown(with event: NSEvent) {
         guard event.buttonNumber == 2 else { return }
         window?.makeFirstResponder(self)
         buttonMask |= AppleInputController.middleButton
-        sendPointer(event, coalescing: false)
+        sendPointer(event)
     }
 
     override func otherMouseUp(with event: NSEvent) {
         guard event.buttonNumber == 2 else { return }
         buttonMask &= ~AppleInputController.middleButton
-        sendPointer(event, coalescing: false)
+        sendPointer(event)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -270,29 +266,10 @@ final class RemoteVideoCanvasNSView: NSView {
         return super.resignFirstResponder()
     }
 
-    private func sendPointer(_ event: NSEvent, coalescing: Bool) {
+    private func sendPointer(_ event: NSEvent) {
         guard let input, let point = remotePoint(for: event) else { return }
         lastRemotePoint = point
         let buttons = buttonMask
-        if coalescing {
-            pendingPointerMove = (buttons, point.x, point.y)
-            guard !pointerMoveScheduled else { return }
-            pointerMoveScheduled = true
-            enqueueInput { [weak self] in
-                guard let self else { return }
-                let elapsed = ProcessInfo.processInfo.systemUptime - self.lastPointerMoveSentTime
-                let delay = Self.pointerMoveInterval - elapsed
-                if delay > 0 {
-                    try? await Task.sleep(for: .milliseconds(Int(ceil(delay * 1_000))))
-                }
-                guard !Task.isCancelled, let pending = self.pendingPointerMove else { return }
-                self.pendingPointerMove = nil
-                self.pointerMoveScheduled = false
-                self.lastPointerMoveSentTime = ProcessInfo.processInfo.systemUptime
-                await input.pointer(buttons: pending.buttons, x: pending.x, y: pending.y)
-            }
-            return
-        }
         enqueueInput { await input.pointer(buttons: buttons, x: point.x, y: point.y) }
     }
 

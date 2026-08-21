@@ -6,6 +6,8 @@ final class AppleVideoFrameStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private var frames = [Int: CVPixelBuffer]()
+    private var pendingFrames = [Int: CVPixelBuffer]()
+    private var deliveryScheduled = false
     private var observers = [UUID: Observer]()
 
     @discardableResult
@@ -28,17 +30,47 @@ final class AppleVideoFrameStore: @unchecked Sendable {
     }
 
     func removeAllFrames() {
-        lock.withFrameStoreLock { frames.removeAll(keepingCapacity: false) }
+        lock.withFrameStoreLock {
+            frames.removeAll(keepingCapacity: false)
+            pendingFrames.removeAll(keepingCapacity: false)
+        }
     }
 
     func publish(_ frame: CVPixelBuffer, at tileIndex: Int) {
-        let callbacks = lock.withFrameStoreLock {
+        let shouldSchedule = lock.withFrameStoreLock {
             frames[tileIndex] = frame
-            return Array(observers.values)
+            pendingFrames[tileIndex] = frame
+            guard !deliveryScheduled else { return false }
+            deliveryScheduled = true
+            return true
         }
+        if shouldSchedule { scheduleDelivery() }
+    }
+
+    private func scheduleDelivery() {
         DispatchQueue.main.async {
-            callbacks.forEach { $0(tileIndex, frame) }
+            self.deliverPendingFrames()
         }
+    }
+
+    @MainActor
+    private func deliverPendingFrames() {
+        let delivery = lock.withFrameStoreLock {
+            let frames = pendingFrames.sorted { $0.key < $1.key }
+            pendingFrames.removeAll(keepingCapacity: true)
+            return (frames, Array(observers.values))
+        }
+        for (tileIndex, frame) in delivery.0 {
+            delivery.1.forEach { $0(tileIndex, frame) }
+        }
+        let hasMoreFrames = lock.withFrameStoreLock {
+            guard !pendingFrames.isEmpty else {
+                deliveryScheduled = false
+                return false
+            }
+            return true
+        }
+        if hasMoreFrames { scheduleDelivery() }
     }
 }
 

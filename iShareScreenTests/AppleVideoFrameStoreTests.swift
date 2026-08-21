@@ -25,6 +25,26 @@ final class AppleVideoFrameStoreTests: XCTestCase {
         XCTAssertNil(store.frame(at: 2))
     }
 
+    @MainActor
+    func testCoalescesBurstUpdatesForTheSameTileToTheLatestFrame() async throws {
+        let store = AppleVideoFrameStore()
+        let firstFrame = try makePixelBuffer(width: 8, height: 8)
+        let latestFrame = try makePixelBuffer(width: 16, height: 8)
+        let published = expectation(description: "Latest frame published")
+        var receivedFrames = [CVPixelBuffer]()
+        _ = store.addObserver { _, frame in
+            receivedFrames.append(frame)
+            published.fulfill()
+        }
+
+        store.publish(firstFrame, at: 0)
+        store.publish(latestFrame, at: 0)
+
+        await fulfillment(of: [published], timeout: 1)
+        XCTAssertEqual(receivedFrames.count, 1)
+        XCTAssertTrue(receivedFrames.first === latestFrame)
+    }
+
     private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
         var pixelBuffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(
