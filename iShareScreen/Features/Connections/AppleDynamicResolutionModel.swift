@@ -1,19 +1,5 @@
 import Combine
-import CoreGraphics
 import Foundation
-
-struct AppleDynamicResolutionSize: Equatable, Sendable {
-    let width: Int
-    let height: Int
-
-    static func normalized(viewport: CGSize) -> AppleDynamicResolutionSize? {
-        guard viewport.width.isFinite, viewport.height.isFinite,
-              viewport.width > 0, viewport.height > 0 else { return nil }
-        let width = min(1920, max(640, Int(viewport.width.rounded(.down)))) & ~1
-        let height = min(1080, max(480, Int(viewport.height.rounded(.down)))) & ~1
-        return AppleDynamicResolutionSize(width: width, height: height)
-    }
-}
 
 @MainActor
 final class AppleDynamicResolutionModel: ObservableObject {
@@ -31,9 +17,19 @@ final class AppleDynamicResolutionModel: ObservableObject {
     private var lastRequestedSize: AppleDynamicResolutionSize?
     private var lastRequestTime: TimeInterval?
 
-    func schedule(viewport: CGSize, controller: AppleDynamicResolutionController) {
+    func schedule(
+        viewport: CGSize,
+        canvas: AppleCanvas? = nil,
+        controller: AppleDynamicResolutionController
+    ) {
         guard isEnabled, let size = AppleDynamicResolutionSize.normalized(viewport: viewport),
               size != lastRequestedSize else { return }
+        if let canvas,
+           canvas.width == size.width * 2,
+           canvas.height == size.height * 2 {
+            lastRequestedSize = size
+            return
+        }
         task?.cancel()
         task = Task { [weak self, weak controller] in
             do {

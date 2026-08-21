@@ -1,4 +1,24 @@
+import CoreGraphics
 import Foundation
+
+struct AppleDynamicResolutionSize: Equatable, Sendable {
+    let width: Int
+    let height: Int
+
+    static func normalized(viewport: CGSize) -> AppleDynamicResolutionSize? {
+        guard viewport.width.isFinite, viewport.height.isFinite,
+              viewport.width > 0, viewport.height > 0 else { return nil }
+        let maximumScale = min(1, 1920 / viewport.width, 1080 / viewport.height)
+        let boundedWidth = viewport.width * maximumScale
+        let boundedHeight = viewport.height * maximumScale
+        let desiredMinimumScale = max(1, 320 / boundedWidth, 200 / boundedHeight)
+        let availableScale = min(1920 / boundedWidth, 1080 / boundedHeight)
+        let finalScale = min(desiredMinimumScale, availableScale)
+        let width = max(2, Int((boundedWidth * finalScale).rounded(.down)) & ~1)
+        let height = max(2, Int((boundedHeight * finalScale).rounded(.down)) & ~1)
+        return AppleDynamicResolutionSize(width: width, height: height)
+    }
+}
 
 struct AppleDisplayRect: Equatable, Sendable {
     let displayID: UInt32

@@ -10,6 +10,7 @@ struct SessionView: View {
     @State private var viewportSize = CGSize.zero
     @StateObject private var dynamicResolution = AppleDynamicResolutionModel()
     @AppStorage("synchronizesVideoPresentation") private var synchronizesVideoPresentation = true
+    private let viewportStore = SessionViewportStore()
 
     var body: some View {
         Group {
@@ -136,6 +137,7 @@ struct SessionView: View {
 
     private func viewportChanged(_ size: CGSize) {
         viewportSize = size
+        viewportStore.save(size, for: endpoint)
         scheduleDynamicResolution()
     }
 
@@ -143,7 +145,11 @@ struct SessionView: View {
         guard let session = sessions.session(for: endpoint),
               session.videoStream?.state == .streaming,
               let controller = session.dynamicResolutionController else { return }
-        dynamicResolution.schedule(viewport: viewportSize, controller: controller)
+        dynamicResolution.schedule(
+            viewport: viewportSize,
+            canvas: session.videoStream?.canvas,
+            controller: controller
+        )
     }
 
     private func toggleObservationMode() {

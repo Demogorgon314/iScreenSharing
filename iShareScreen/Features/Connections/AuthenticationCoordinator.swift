@@ -19,6 +19,7 @@ final class AuthenticationCoordinator: ObservableObject {
     private let videoStreamStarter: any AppleVideoStreamStarting
     private let credentialStore: any CredentialStoring
     private let connectionStore: ConnectionStore
+    private let viewportStore: SessionViewportStore
     private let sessionManager: SessionManager
     private let onAuthenticated: @MainActor (ConnectionEndpoint) -> Void
     private var task: Task<Void, Never>?
@@ -31,6 +32,7 @@ final class AuthenticationCoordinator: ObservableObject {
         videoStreamStarter: any AppleVideoStreamStarting = AppleVideoStreamStarter(),
         credentialStore: any CredentialStoring = KeychainCredentialStore(),
         connectionStore: ConnectionStore,
+        viewportStore: SessionViewportStore = SessionViewportStore(),
         sessionManager: SessionManager,
         onAuthenticated: @escaping @MainActor (ConnectionEndpoint) -> Void = { _ in }
     ) {
@@ -41,6 +43,7 @@ final class AuthenticationCoordinator: ObservableObject {
         self.videoStreamStarter = videoStreamStarter
         self.credentialStore = credentialStore
         self.connectionStore = connectionStore
+        self.viewportStore = viewportStore
         self.sessionManager = sessionManager
         self.onAuthenticated = onAuthenticated
     }
@@ -62,6 +65,9 @@ final class AuthenticationCoordinator: ObservableObject {
         task?.cancel()
         do {
             let savedConnection = connectionStore.connection(for: endpoint)
+            let initialDisplaySize = viewportStore.size(for: endpoint)
+                .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
+                ?? AppleDynamicResolutionSize(width: 1440, height: 900)
             guard savedConnection?.sharingType != .standard else {
                 throw AuthenticationCoordinatorError.standardModeUnavailable
             }
@@ -72,7 +78,8 @@ final class AuthenticationCoordinator: ObservableObject {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
                     _ = try await controlChannelNegotiator.enableEncryption(
                         for: session,
-                        virtualDisplayCount: savedConnection?.virtualDisplayCount ?? .one
+                        virtualDisplayCount: savedConnection?.virtualDisplayCount ?? .one,
+                        displaySize: initialDisplaySize
                     )
                     let negotiation = try await mediaNegotiator.negotiate(session)
                     let input = AppleInputController(session: session, canvas: negotiation.canvas)

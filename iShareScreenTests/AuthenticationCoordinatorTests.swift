@@ -26,15 +26,19 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let credentials = MockCredentialStore()
         let connections = ConnectionStore(defaults: defaults)
         let sessions = SessionManager()
+        let viewportStore = SessionViewportStore(defaults: defaults)
+        viewportStore.save(CGSize(width: 1280, height: 720), for: endpoint)
+        let displaySizes = DisplaySizeRecorder()
         var authenticatedEndpoint: ConnectionEndpoint?
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
             authenticator: authenticator,
-            controlChannelNegotiator: MockControlChannelNegotiator(),
+            controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes),
             mediaNegotiator: MockMediaNegotiator(),
             videoStreamStarter: MockVideoStreamStarter(),
             credentialStore: credentials,
             connectionStore: connections,
+            viewportStore: viewportStore,
             sessionManager: sessions,
             onAuthenticated: { authenticatedEndpoint = $0 }
         )
@@ -46,6 +50,8 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertEqual(connections.connections.first?.endpoint, endpoint)
         XCTAssertEqual(connections.connections.first?.preferredUsername, "user")
         XCTAssertEqual(authenticatedEndpoint, endpoint)
+        let initialDisplaySize = await displaySizes.first()
+        XCTAssertEqual(initialDisplaySize, AppleDynamicResolutionSize(width: 1280, height: 720))
         XCTAssertEqual(
             credentials.saved,
             try ScreenSharingCredentials(username: "user", password: "password")
@@ -221,10 +227,18 @@ private extension NSLock {
 }
 
 private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
+    let recorder: DisplaySizeRecorder?
+
+    init(recorder: DisplaySizeRecorder? = nil) {
+        self.recorder = recorder
+    }
+
     func enableEncryption(
         for session: RFBAuthenticatedSession,
-        virtualDisplayCount: VirtualDisplayCount
+        virtualDisplayCount: VirtualDisplayCount,
+        displaySize: AppleDynamicResolutionSize
     ) async throws -> AppleEncryptedRecordLayer {
+        await recorder?.append(displaySize)
         let layer = AppleEncryptedRecordLayer(
             keys: try AppleRecordKeys(
                 key: Data(repeating: 0x11, count: 16),
@@ -234,6 +248,13 @@ private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
         session.install(recordLayer: layer, generation: 1)
         return layer
     }
+}
+
+private actor DisplaySizeRecorder {
+    private var sizes = [AppleDynamicResolutionSize]()
+
+    func append(_ size: AppleDynamicResolutionSize) { sizes.append(size) }
+    func first() -> AppleDynamicResolutionSize? { sizes.first }
 }
 
 private struct MockMediaNegotiator: AppleMediaNegotiating {

@@ -10,7 +10,7 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
     func testNormalizesViewportToEvenProtocolBounds() {
         XCTAssertEqual(
             AppleDynamicResolutionSize.normalized(viewport: CGSize(width: 100.9, height: 200.1)),
-            AppleDynamicResolutionSize(width: 640, height: 480)
+            AppleDynamicResolutionSize(width: 320, height: 634)
         )
         XCTAssertEqual(
             AppleDynamicResolutionSize.normalized(viewport: CGSize(width: 1201.9, height: 801.9)),
@@ -18,8 +18,34 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         )
         XCTAssertEqual(
             AppleDynamicResolutionSize.normalized(viewport: CGSize(width: 3000, height: 2000)),
-            AppleDynamicResolutionSize(width: 1920, height: 1080)
+            AppleDynamicResolutionSize(width: 1620, height: 1080)
         )
+        XCTAssertEqual(
+            AppleDynamicResolutionSize.normalized(viewport: CGSize(width: 1, height: 10_000)),
+            AppleDynamicResolutionSize(width: 2, height: 1080)
+        )
+    }
+
+    @MainActor
+    func testDoesNotRequestResolutionWhenCanvasAlreadyMatchesViewport() async throws {
+        let recorder = DynamicResolutionMessageRecorder()
+        let controller = AppleDynamicResolutionController(
+            initialCanvas: AppleCanvas(width: 2000, height: 1400, tileCount: 4),
+            mediaConfiguration: Data([0x1c]),
+            sendMessage: { message in await recorder.append(message) },
+            applyCanvas: { _ in }
+        )
+        let model = AppleDynamicResolutionModel()
+
+        model.schedule(
+            viewport: CGSize(width: 1000, height: 700),
+            canvas: AppleCanvas(width: 2000, height: 1400, tileCount: 4),
+            controller: controller
+        )
+        try await Task.sleep(for: .milliseconds(600))
+        let sentCount = await recorder.count()
+
+        XCTAssertEqual(sentCount, 0)
     }
 
     func testRejectsEmptyAndNonFiniteViewports() {
