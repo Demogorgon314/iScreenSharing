@@ -110,15 +110,34 @@ enum AppleRFBMessages {
         x: UInt16,
         y: UInt16,
         clickCount: Int = 0,
+        timestampDelta: UInt32 = 0,
         contentKey: Data
     ) throws -> Data {
         var plaintext = Data(repeating: 0, count: 10)
+        plaintext.writeUInt32BE(timestampDelta, at: 6)
         plaintext.append(0xff)
         plaintext.append(buttons)
         plaintext.appendUInt16BE(x)
         plaintext.appendUInt16BE(y)
         let flags = UInt8(1 | ((max(0, clickCount) & 7) << 1))
         return Data([0x10, flags]) + (try Cryptography.encryptAESECB(plaintext, key: contentKey))
+    }
+
+    static func encryptedKeyEvent(
+        isDown: Bool,
+        keySymbol: UInt32,
+        timestampDelta: UInt32,
+        keyboardType: UInt16,
+        keyCode: UInt16,
+        contentKey: Data
+    ) throws -> Data {
+        var plaintext = Data([0xff, isDown ? 1 : 0])
+        plaintext.appendUInt32BE(keySymbol)
+        plaintext.appendUInt32BE(timestampDelta)
+        plaintext.appendUInt16BE(0)
+        plaintext.appendUInt16BE(keyboardType)
+        plaintext.appendUInt16BE(keyCode)
+        return Data([0x10, 0x01]) + (try Cryptography.encryptAESECB(plaintext, key: contentKey))
     }
 }
 

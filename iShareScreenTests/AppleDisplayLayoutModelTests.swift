@@ -75,7 +75,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         )
     }
 
-    func testMapsCapturedIndependentDisplayCanvasesIntoLogicalDesktopCoordinates() {
+    func testKeepsIndependentDisplayCoordinatesInLocalBackingPixels() {
         let displayOne = AppleDisplayInputMapping(
             backingFrame: CGRect(x: 0, y: 0, width: 2244, height: 1872),
             logicalFrame: CGRect(x: 0, y: 0, width: 1122, height: 936)
@@ -87,11 +87,11 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
 
         XCTAssertEqual(
             displayOne.point(from: CGPoint(x: 1122, y: 936), isDisplayLocal: true)?.x,
-            561
+            1122
         )
         XCTAssertEqual(
             displayOne.point(from: CGPoint(x: 1122, y: 936), isDisplayLocal: true)?.y,
-            468
+            936
         )
         XCTAssertEqual(
             displayOne.point(from: CGPoint(x: 1, y: 1), isDisplayLocal: true)?.x,
@@ -99,16 +99,16 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         )
         XCTAssertEqual(
             displayTwo.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.x,
-            1877
+            1510
         )
         XCTAssertEqual(
             displayTwo.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.y,
-            447
+            894
         )
-        XCTAssertEqual(displayTwo.point(from: .zero, isDisplayLocal: true)?.x, 1122)
+        XCTAssertEqual(displayTwo.point(from: .zero, isDisplayLocal: true)?.x, 0)
         XCTAssertEqual(
             displayTwo.point(from: CGPoint(x: 3019, y: 0), isDisplayLocal: true)?.x,
-            2631
+            3019
         )
     }
 
@@ -148,11 +148,11 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         let mapping = try XCTUnwrap(model.inputMapping(for: 1))
         XCTAssertEqual(
             mapping.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.x,
-            1877
+            1510
         )
         XCTAssertEqual(
             mapping.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.y,
-            447
+            894
         )
     }
 

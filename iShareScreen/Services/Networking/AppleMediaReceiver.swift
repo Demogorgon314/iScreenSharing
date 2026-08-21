@@ -8,6 +8,7 @@ final class AppleMediaReceiver: @unchecked Sendable {
 
     private let lock = NSLock()
     private let queue: DispatchQueue
+    private let remoteAddress: in_addr
     private let controlSocket: Int32
     private let videoSocket: Int32
     private let secondaryVideoSocket: Int32?
@@ -26,6 +27,7 @@ final class AppleMediaReceiver: @unchecked Sendable {
             throw AppleMediaReceiverError.invalidPort
         }
         let remoteAddress = try Self.resolveIPv4(endpoint.host)
+        self.remoteAddress = remoteAddress
         controlSocket = try Self.makeSocket(localPort: endpoint.port, remoteAddress: remoteAddress, remotePort: endpoint.port)
         do {
             videoSocket = try Self.makeSocket(
@@ -121,6 +123,24 @@ final class AppleMediaReceiver: @unchecked Sendable {
             try send(datagram, through: secondaryVideoSocket)
         } else {
             try send(datagram, through: videoSocket)
+        }
+    }
+
+    func configureRemotePorts(_ ports: AppleMediaPorts) throws {
+        let expectedVideoCount = secondaryVideoSocket == nil ? 1 : 2
+        guard ports.videos.count == expectedVideoCount else {
+            throw AppleMediaReceiverError.invalidPort
+        }
+        let isOpen = lock.withLock { !isClosed }
+        guard isOpen else { throw AppleMediaReceiverError.closed }
+        try Self.connect(controlSocket, remoteAddress: remoteAddress, remotePort: ports.audio)
+        try Self.connect(videoSocket, remoteAddress: remoteAddress, remotePort: ports.videos[0])
+        if let secondaryVideoSocket {
+            try Self.connect(
+                secondaryVideoSocket,
+                remoteAddress: remoteAddress,
+                remotePort: ports.videos[1]
+            )
         }
     }
 
@@ -221,24 +241,32 @@ final class AppleMediaReceiver: @unchecked Sendable {
             }
             guard bindResult == 0 else { throw AppleMediaReceiverError.bindFailed(localPort, errno) }
 
-            var remote = sockaddr_in(
-                sin_len: UInt8(MemoryLayout<sockaddr_in>.size),
-                sin_family: sa_family_t(AF_INET),
-                sin_port: remotePort.bigEndian,
-                sin_addr: remoteAddress,
-                sin_zero: (0, 0, 0, 0, 0, 0, 0, 0)
-            )
-            let connectResult = withUnsafePointer(to: &remote) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                }
-            }
-            guard connectResult == 0 else { throw AppleMediaReceiverError.connectionFailed(errno) }
+            try connect(descriptor, remoteAddress: remoteAddress, remotePort: remotePort)
             return descriptor
         } catch {
             Darwin.close(descriptor)
             throw error
         }
+    }
+
+    private static func connect(
+        _ descriptor: Int32,
+        remoteAddress: in_addr,
+        remotePort: UInt16
+    ) throws {
+        var remote = sockaddr_in(
+            sin_len: UInt8(MemoryLayout<sockaddr_in>.size),
+            sin_family: sa_family_t(AF_INET),
+            sin_port: remotePort.bigEndian,
+            sin_addr: remoteAddress,
+            sin_zero: (0, 0, 0, 0, 0, 0, 0, 0)
+        )
+        let result = withUnsafePointer(to: &remote) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard result == 0 else { throw AppleMediaReceiverError.connectionFailed(errno) }
     }
 
     private static func resolveIPv4(_ host: String) throws -> in_addr {

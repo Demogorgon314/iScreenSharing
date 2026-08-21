@@ -40,4 +40,11 @@ final class AppleInputControllerTests: XCTestCase {
             ]
         )
     }
+
+    func testInputTimestampUsesWrappingMicrosecondDelta() {
+        var timestamp = AppleInputTimestamp()
+
+        XCTAssertEqual(timestamp.next(at: 0xffff_fff0), 0xffff_fff0)
+        XCTAssertEqual(timestamp.next(at: 0x1_0000_0010), 0x20)
+    }
 }

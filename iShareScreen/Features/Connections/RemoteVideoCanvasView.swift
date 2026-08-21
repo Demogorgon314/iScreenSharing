@@ -40,6 +40,11 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
 }
 
 final class RemoteVideoCanvasNSView: NSView {
+    private struct ActiveModifier {
+        let symbol: UInt32
+        let keyboardType: UInt16
+    }
+
     var displayScale: AppleVideoDisplayScale {
         didSet { needsLayout = true }
     }
@@ -74,7 +79,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private var lastRemotePoint: (x: Int, y: Int)?
     private var horizontalScrollRemainder: CGFloat = 0
     private var verticalScrollRemainder: CGFloat = 0
-    private var activeModifiers = [UInt16: UInt32]()
+    private var activeModifiers = [UInt16: ActiveModifier]()
     private var inputTask: Task<Void, Never>?
 
     init(
@@ -256,23 +261,44 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         guard let input, let modifier = AppleKeySymbol.modifier(for: event.keyCode) else { return }
+        let keyboardType = Self.keyboardType(for: event)
+        let symbol: UInt32
         let isDown: Bool
-        if activeModifiers[event.keyCode] != nil {
-            activeModifiers.removeValue(forKey: event.keyCode)
+        if let active = activeModifiers.removeValue(forKey: event.keyCode) {
+            symbol = active.symbol
             isDown = false
         } else if event.modifierFlags.contains(modifier.flag) {
-            activeModifiers[event.keyCode] = modifier.symbol
+            symbol = modifier.symbol
+            activeModifiers[event.keyCode] = ActiveModifier(
+                symbol: symbol,
+                keyboardType: keyboardType
+            )
             isDown = true
         } else {
             return
         }
-        enqueueInput { await input.key(isDown: isDown, symbol: modifier.symbol) }
+        enqueueInput {
+            await input.key(
+                isDown: isDown,
+                symbol: symbol,
+                keyCode: event.keyCode,
+                keyboardType: keyboardType
+            )
+        }
     }
 
     override func keyDown(with event: NSEvent) {
         guard let input else { return }
+        let keyboardType = Self.keyboardType(for: event)
         if let symbol = AppleKeySymbol.special[event.keyCode] {
-            enqueueInput { await input.key(isDown: true, symbol: symbol) }
+            enqueueInput {
+                await input.key(
+                    isDown: true,
+                    symbol: symbol,
+                    keyCode: event.keyCode,
+                    keyboardType: keyboardType
+                )
+            }
             return
         }
         let hasCommandModifier = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
@@ -280,32 +306,68 @@ final class RemoteVideoCanvasNSView: NSView {
         guard let symbols = characters?.unicodeScalars.map(\.value), !symbols.isEmpty else { return }
         enqueueInput {
             for symbol in symbols {
-                await input.key(isDown: true, symbol: symbol)
-                if !hasCommandModifier { await input.key(isDown: false, symbol: symbol) }
+                await input.key(
+                    isDown: true,
+                    symbol: symbol,
+                    keyCode: event.keyCode,
+                    keyboardType: keyboardType
+                )
+                if !hasCommandModifier {
+                    await input.key(
+                        isDown: false,
+                        symbol: symbol,
+                        keyCode: event.keyCode,
+                        keyboardType: keyboardType
+                    )
+                }
             }
         }
     }
 
     override func keyUp(with event: NSEvent) {
         guard let input else { return }
+        let keyboardType = Self.keyboardType(for: event)
         if let symbol = AppleKeySymbol.special[event.keyCode] {
-            enqueueInput { await input.key(isDown: false, symbol: symbol) }
+            enqueueInput {
+                await input.key(
+                    isDown: false,
+                    symbol: symbol,
+                    keyCode: event.keyCode,
+                    keyboardType: keyboardType
+                )
+            }
             return
         }
         guard !event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
               let symbols = event.charactersIgnoringModifiers?.unicodeScalars.map(\.value) else { return }
-        enqueueInput { for symbol in symbols { await input.key(isDown: false, symbol: symbol) } }
+        enqueueInput {
+            for symbol in symbols {
+                await input.key(
+                    isDown: false,
+                    symbol: symbol,
+                    keyCode: event.keyCode,
+                    keyboardType: keyboardType
+                )
+            }
+        }
     }
 
     override func resignFirstResponder() -> Bool {
         if let input {
-            let modifiers = Array(activeModifiers.values)
+            let modifiers = activeModifiers
             activeModifiers.removeAll()
             let shouldReleasePointer = buttonMask != 0
             buttonMask = 0
             let point = lastRemotePoint
             enqueueInput {
-                for symbol in modifiers { await input.key(isDown: false, symbol: symbol) }
+                for (keyCode, modifier) in modifiers {
+                    await input.key(
+                        isDown: false,
+                        symbol: modifier.symbol,
+                        keyCode: keyCode,
+                        keyboardType: modifier.keyboardType
+                    )
+                }
                 if shouldReleasePointer, let point {
                     await input.pointer(buttons: 0, x: point.x, y: point.y, displayID: self.inputDisplayID)
                 }
@@ -424,6 +486,13 @@ final class RemoteVideoCanvasNSView: NSView {
             image: cursorImage,
             hotSpot: NSPoint(x: image.hotspotX, y: image.hotspotY)
         )
+    }
+
+    private static func keyboardType(for event: NSEvent) -> UInt16 {
+        guard let value = event.cgEvent?.getIntegerValueField(.keyboardEventKeyboardType) else {
+            return 0
+        }
+        return UInt16(clamping: value)
     }
 
 }

@@ -55,6 +55,11 @@ struct AppleCanvas: Equatable, Hashable, Sendable {
     var isUsable: Bool { width > 0 && height > 0 }
 }
 
+struct AppleMediaPorts: Equatable, Sendable {
+    let audio: UInt16
+    let videos: [UInt16]
+}
+
 enum AppleMediaAnswer: Equatable, Sendable {
     case unrelated
     case degenerate
@@ -126,6 +131,23 @@ enum AppleMediaConfiguration {
         guard answer.first == 0 else { return .unrelated }
         if let canvas = canvases(from: answer).first { return .canvas(canvas) }
         return containsMediaAnswer(in: answer) ? .degenerate : .unrelated
+    }
+
+    static func ports(from answer: Data) -> AppleMediaPorts? {
+        guard answer.count >= 0x14,
+              (try? answer.uint16BE(at: 2)) == 1,
+              let version = try? answer.uint16BE(at: 4), version != 0,
+              let audio = try? answer.uint16BE(at: 0x0a), audio != 0,
+              let primaryVideo = try? answer.uint16BE(at: 0x10), primaryVideo != 0,
+              (try? answer.uint16BE(at: 0x12)) == 1 else { return nil }
+        var videos = [primaryVideo]
+        if answer.count > 0x18, answer[0x18] & 1 != 0 {
+            guard let secondaryVideo = try? answer.uint16BE(at: 0x16), secondaryVideo != 0 else {
+                return nil
+            }
+            videos.append(secondaryVideo)
+        }
+        return AppleMediaPorts(audio: audio, videos: videos)
     }
 
     static func canvases(from answer: Data) -> [AppleCanvas] {

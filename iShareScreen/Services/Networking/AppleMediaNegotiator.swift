@@ -111,8 +111,15 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
 
         var retryCount = 0
         var negotiatedCanvases = [AppleCanvas]()
+        var configuredExplicitPorts = false
         negotiationLoop: while retryCount <= Self.retryLimit {
             let response = try await session.receiveEncrypted()
+            if !configuredExplicitPorts,
+               let ports = AppleMediaConfiguration.ports(from: response),
+               ports.videos.count == displayCount {
+                try receiver.configureRemotePorts(ports)
+                configuredExplicitPorts = true
+            }
             let canvases = AppleMediaConfiguration.canvases(from: response)
             if !canvases.isEmpty {
                 negotiatedCanvases.append(contentsOf: canvases)

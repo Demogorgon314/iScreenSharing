@@ -108,4 +108,25 @@ final class AppleMediaConfigurationTests: XCTestCase {
             .degenerate
         )
     }
+
+    func testParsesExplicitMediaPortsFromServerAnswer() throws {
+        var answer = Data(repeating: 0, count: 0x19)
+        answer.writeUInt16BE(UInt16(answer.count), at: 0)
+        answer.writeUInt16BE(1, at: 2)
+        answer.writeUInt16BE(3, at: 4)
+        answer.writeUInt16BE(5_900, at: 0x0a)
+        answer.writeUInt16BE(6_001, at: 0x10)
+        answer.writeUInt16BE(1, at: 0x12)
+        answer.writeUInt16BE(6_777, at: 0x16)
+        answer[0x18] = 1
+
+        XCTAssertEqual(
+            AppleMediaConfiguration.ports(from: answer),
+            AppleMediaPorts(audio: 5_900, videos: [6_001, 6_777])
+        )
+    }
+
+    func testRejectsMalformedExplicitMediaPorts() {
+        XCTAssertNil(AppleMediaConfiguration.ports(from: Data(repeating: 0, count: 0x19)))
+    }
 }

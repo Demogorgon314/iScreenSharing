@@ -10,6 +10,16 @@ struct AppleInputDisplaySelection {
     }
 }
 
+struct AppleInputTimestamp {
+    private var previous: UInt32 = 0
+
+    mutating func next(at microseconds: UInt64) -> UInt32 {
+        let current = UInt32(truncatingIfNeeded: microseconds)
+        defer { previous = current }
+        return current &- previous
+    }
+}
+
 actor AppleInputController {
     static let leftButton: UInt8 = 1 << 0
     static let rightButton: UInt8 = 1 << 1
@@ -22,12 +32,21 @@ actor AppleInputController {
     private weak var session: RFBAuthenticatedSession?
     private var canvas: AppleCanvas
     private var displaySelection = AppleInputDisplaySelection()
+    private var inputTimestamp = AppleInputTimestamp()
+    private let microseconds: @Sendable () -> UInt64
     private var isClosed = false
     private(set) var sentEventCount = 0
 
-    init(session: RFBAuthenticatedSession, canvas: AppleCanvas) {
+    init(
+        session: RFBAuthenticatedSession,
+        canvas: AppleCanvas,
+        microseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds / 1_000
+        }
+    ) {
         self.session = session
         self.canvas = canvas
+        self.microseconds = microseconds
     }
 
     func pointer(
@@ -48,6 +67,7 @@ actor AppleInputController {
                 x: point.x,
                 y: point.y,
                 clickCount: clickCount,
+                timestampDelta: inputTimestamp.next(at: microseconds()),
                 contentKey: recordLayer.contentKey
             )
             try await session.sendEncrypted(message)
@@ -108,10 +128,23 @@ actor AppleInputController {
         }
     }
 
-    func key(isDown: Bool, symbol: UInt32) async {
-        guard symbol != 0, let session, !isClosed else { return }
+    func key(
+        isDown: Bool,
+        symbol: UInt32,
+        keyCode: UInt16 = 0,
+        keyboardType: UInt16 = 0
+    ) async {
+        guard symbol != 0, let session, let recordLayer = session.recordLayer, !isClosed else { return }
         do {
-            try await session.sendEncrypted(AppleRFBMessages.keyEvent(isDown: isDown, keySymbol: symbol))
+            let message = try AppleRFBMessages.encryptedKeyEvent(
+                isDown: isDown,
+                keySymbol: symbol,
+                timestampDelta: inputTimestamp.next(at: microseconds()),
+                keyboardType: keyboardType,
+                keyCode: keyCode,
+                contentKey: recordLayer.contentKey
+            )
+            try await session.sendEncrypted(message)
             sentEventCount += 1
         } catch {
             // A stale input event must not disrupt AppKit's event loop during disconnect.

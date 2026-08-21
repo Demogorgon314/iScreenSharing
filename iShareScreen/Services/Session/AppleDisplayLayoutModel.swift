@@ -8,8 +8,14 @@ struct AppleDisplayInputMapping: Equatable {
     func point(from backingPoint: CGPoint, isDisplayLocal: Bool) -> (x: Int, y: Int)? {
         guard backingFrame.width > 0, backingFrame.height > 0,
               logicalFrame.width > 0, logicalFrame.height > 0 else { return nil }
-        let localX = backingPoint.x - (isDisplayLocal ? 0 : backingFrame.minX)
-        let localY = backingPoint.y - (isDisplayLocal ? 0 : backingFrame.minY)
+        if isDisplayLocal {
+            return (
+                Int(min(backingFrame.width - 1, max(0, backingPoint.x)).rounded()),
+                Int(min(backingFrame.height - 1, max(0, backingPoint.y)).rounded())
+            )
+        }
+        let localX = backingPoint.x - backingFrame.minX
+        let localY = backingPoint.y - backingFrame.minY
         let x = logicalFrame.minX + localX * logicalFrame.width / backingFrame.width
         let y = logicalFrame.minY + localY * logicalFrame.height / backingFrame.height
         return (

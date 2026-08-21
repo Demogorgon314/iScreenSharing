@@ -100,13 +100,37 @@ final class AppleRFBMessagesTests: XCTestCase {
 
 
     func testEncryptedPointerMovementUsesVersionOneFlag() throws {
+        let key = Data(repeating: 0, count: 16)
         let message = try AppleRFBMessages.encryptedPointerEvent(
             buttons: 0,
             x: 1,
             y: 2,
-            contentKey: Data(repeating: 0, count: 16)
+            timestampDelta: 0x0102_0304,
+            contentKey: key
         )
 
         XCTAssertEqual(message[1], 1)
+        XCTAssertEqual(
+            try Cryptography.decryptAESECB(message.dropFirst(2), key: key),
+            Data([0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 0xff, 0, 0, 1, 0, 2])
+        )
+    }
+
+    func testBuildsEncryptedKeyboardEventWithNativeFields() throws {
+        let key = Data(repeating: 0, count: 16)
+        let message = try AppleRFBMessages.encryptedKeyEvent(
+            isDown: true,
+            keySymbol: 0xff51,
+            timestampDelta: 0x0102_0304,
+            keyboardType: 40,
+            keyCode: 123,
+            contentKey: key
+        )
+
+        XCTAssertEqual(message.prefix(2), Data([0x10, 0x01]))
+        XCTAssertEqual(
+            try Cryptography.decryptAESECB(message.dropFirst(2), key: key),
+            Data([0xff, 1, 0, 0, 0xff, 0x51, 1, 2, 3, 4, 0, 0, 0, 40, 0, 123])
+        )
     }
 }
