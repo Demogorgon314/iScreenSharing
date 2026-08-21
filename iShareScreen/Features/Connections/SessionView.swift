@@ -64,6 +64,12 @@ struct SessionView: View {
                 }
                 .help(isObserving ? "Switch to Control Mode" : "Switch to Observe Mode")
                 .disabled(isChangingMode || sessions.session(for: endpoint) == nil)
+                Toggle(isOn: $synchronizesVideoPresentation) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .toggleStyle(.button)
+                .help("Synchronize Video")
+                .accessibilityLabel("Synchronize Video")
                 if let audio = sessions.session(for: endpoint)?.audioStream {
                     AudioMuteButton(audio: audio)
                 }
