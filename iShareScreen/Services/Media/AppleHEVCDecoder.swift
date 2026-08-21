@@ -52,6 +52,14 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         }
     }
 
+    func restart() throws {
+        try lock.withDecoderLock {
+            let replacement = try Self.makeSession(formatDescription: formatDescription)
+            if let session { VTDecompressionSessionInvalidate(session) }
+            session = replacement
+        }
+    }
+
     deinit {
         close()
     }

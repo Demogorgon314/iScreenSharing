@@ -27,6 +27,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let sourceAdoptionStall: TimeInterval = 2
     private static let minimumAdoptionPacketsPerSource = 5
     private static let receiverReportInterval: TimeInterval = 0.5
+    private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
     private let receiver: AppleMediaReceiver
@@ -48,6 +49,9 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var initialBurstReadyTime: TimeInterval?
     private var initialPacketCountBaseline = [UInt32: Int]()
     private var lastDecodedFrameTime: TimeInterval = 0
+    private var lastVideoPacketTime: TimeInterval = 0
+    private var lastStallKeyFrameRequestTime: TimeInterval = 0
+    private var lastDecoderRestartTime: TimeInterval = 0
 
     init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
         self.receiver = receiver
@@ -88,6 +92,9 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 initialBurstReadyTime = nil
                 initialPacketCountBaseline.removeAll(keepingCapacity: false)
                 countLock.withVideoStreamLock { self.lastDecodedFrameTime = 0 }
+                lastVideoPacketTime = 0
+                lastStallKeyFrameRequestTime = 0
+                lastDecoderRestartTime = 0
                 DispatchQueue.main.async { [weak self] in
                     self?.canvas = canvas
                     self?.state = .preparing
@@ -137,9 +144,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 prepareDecoderIfPossible()
             } else {
                 adoptFreshSourcesIfNeeded()
+                recoverStalledDecoderIfNeeded()
             }
             return
         }
+        lastVideoPacketTime = ProcessInfo.processInfo.systemUptime
         if firstPacketTime == nil {
             firstPacketTime = ProcessInfo.processInfo.systemUptime
         }
@@ -147,7 +156,10 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         sendPendingNACKs()
         if decoder == nil { prepareDecoderIfPossible() }
         guard !accessUnits.isEmpty else {
-            if decoder != nil { adoptFreshSourcesIfNeeded() }
+            if decoder != nil {
+                adoptFreshSourcesIfNeeded()
+                recoverStalledDecoderIfNeeded()
+            }
             return
         }
 
@@ -159,6 +171,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         cache(accessUnits.filter { sourceToTile[$0.synchronizationSource] == nil })
         feed(accessUnits)
         adoptFreshSourcesIfNeeded()
+        recoverStalledDecoderIfNeeded()
     }
 
     private func cache(_ accessUnits: [AppleHEVCAccessUnit]) {
@@ -231,6 +244,40 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         countLock.withVideoStreamLock { self.lastDecodedFrameTime = now }
         prepareDecoder(for: sources)
         for tileIndex in sources.indices { requestKeyFrame(for: tileIndex) }
+    }
+
+    private func recoverStalledDecoderIfNeeded() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let lastDecodedFrameTime = countLock.withVideoStreamLock { self.lastDecodedFrameTime }
+        let action = Self.stallRecovery.action(
+            now: now,
+            lastDecodedFrameTime: lastDecodedFrameTime,
+            lastVideoPacketTime: lastVideoPacketTime,
+            lastKeyFrameRequestTime: lastStallKeyFrameRequestTime,
+            lastDecoderRestartTime: lastDecoderRestartTime
+        )
+        switch action {
+        case .none:
+            return
+        case .requestKeyFrames:
+            lastStallKeyFrameRequestTime = now
+            requestKeyFramesForAllTiles()
+        case .restartDecoderAndRequestKeyFrames:
+            lastDecoderRestartTime = now
+            lastStallKeyFrameRequestTime = now
+            do {
+                try decoder?.restart()
+                requestKeyFramesForAllTiles()
+            } catch {
+                Self.logger.error(
+                    "Stalled video decoder restart failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+    }
+
+    private func requestKeyFramesForAllTiles() {
+        for tileIndex in 0..<canvas.tileCount { requestKeyFrame(for: tileIndex) }
     }
 
     private func feedCachedUnitsRoundRobin(sources: [UInt32]) {
@@ -339,6 +386,57 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func publishState(_ state: State) {
         DispatchQueue.main.async { [weak self] in self?.state = state }
+    }
+}
+
+struct AppleVideoStallRecoveryPolicy {
+    enum Action: Equatable {
+        case none
+        case requestKeyFrames
+        case restartDecoderAndRequestKeyFrames
+    }
+
+    let keyFrameRequestDelay: TimeInterval
+    let keyFrameRequestInterval: TimeInterval
+    let decoderRestartDelay: TimeInterval
+    let decoderRestartInterval: TimeInterval
+    let recentPacketWindow: TimeInterval
+
+    init(
+        keyFrameRequestDelay: TimeInterval = 3,
+        keyFrameRequestInterval: TimeInterval = 1.5,
+        decoderRestartDelay: TimeInterval = 8,
+        decoderRestartInterval: TimeInterval = 8,
+        recentPacketWindow: TimeInterval = 1.5
+    ) {
+        self.keyFrameRequestDelay = keyFrameRequestDelay
+        self.keyFrameRequestInterval = keyFrameRequestInterval
+        self.decoderRestartDelay = decoderRestartDelay
+        self.decoderRestartInterval = decoderRestartInterval
+        self.recentPacketWindow = recentPacketWindow
+    }
+
+    func action(
+        now: TimeInterval,
+        lastDecodedFrameTime: TimeInterval,
+        lastVideoPacketTime: TimeInterval,
+        lastKeyFrameRequestTime: TimeInterval,
+        lastDecoderRestartTime: TimeInterval
+    ) -> Action {
+        guard lastDecodedFrameTime > 0,
+              lastVideoPacketTime > 0,
+              now - lastVideoPacketTime < recentPacketWindow else { return .none }
+
+        let frameGap = now - lastDecodedFrameTime
+        if frameGap >= decoderRestartDelay,
+           now - lastDecoderRestartTime >= decoderRestartInterval {
+            return .restartDecoderAndRequestKeyFrames
+        }
+        if frameGap >= keyFrameRequestDelay,
+           now - lastKeyFrameRequestTime >= keyFrameRequestInterval {
+            return .requestKeyFrames
+        }
+        return .none
     }
 }
 
