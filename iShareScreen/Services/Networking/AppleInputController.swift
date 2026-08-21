@@ -57,7 +57,11 @@ actor AppleInputController {
         clickCount: Int = 0
     ) async {
         guard let session, let recordLayer = session.recordLayer, !isClosed else { return }
-        let point = Self.clampedPoint(x: x, y: y, canvas: canvas)
+        let point = Self.clampedPoint(
+            x: x,
+            y: y,
+            canvas: displayID == nil ? canvas : nil
+        )
         do {
             if let selectionMessage = displaySelection.message(for: displayID) {
                 try await session.sendEncrypted(selectionMessage)
@@ -184,9 +188,11 @@ actor AppleInputController {
         sentEventCount += 1
     }
 
-    static func clampedPoint(x: Int, y: Int, canvas: AppleCanvas) -> (x: UInt16, y: UInt16) {
-        let maximumX = max(0, min(canvas.width - 1, Int(UInt16.max)))
-        let maximumY = max(0, min(canvas.height - 1, Int(UInt16.max)))
+    static func clampedPoint(x: Int, y: Int, canvas: AppleCanvas?) -> (x: UInt16, y: UInt16) {
+        let maximumX = canvas.map { max(0, min($0.width - 1, Int(UInt16.max))) }
+            ?? Int(UInt16.max)
+        let maximumY = canvas.map { max(0, min($0.height - 1, Int(UInt16.max))) }
+            ?? Int(UInt16.max)
         return (
             UInt16(min(max(x, 0), maximumX)),
             UInt16(min(max(y, 0), maximumY))

@@ -13,6 +13,17 @@ final class AppleInputControllerTests: XCTestCase {
         XCTAssertEqual(high.y, 99)
     }
 
+    func testSelectedDisplayCoordinatesAreNotClampedToCombinedCanvas() {
+        let point = AppleInputController.clampedPoint(x: 3_020, y: 1_786, canvas: nil)
+
+        XCTAssertEqual(point.x, 3_020)
+        XCTAssertEqual(point.y, 1_786)
+
+        let wireMaximum = AppleInputController.clampedPoint(x: 80_000, y: 80_000, canvas: nil)
+        XCTAssertEqual(wireMaximum.x, .max)
+        XCTAssertEqual(wireMaximum.y, .max)
+    }
+
     func testDisplaySelectionOnlyEmitsWhenTargetChanges() {
         var selection = AppleInputDisplaySelection()
 
