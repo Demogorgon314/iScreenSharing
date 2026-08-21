@@ -72,10 +72,6 @@ struct RFBAuthenticationService: RFBAuthenticating {
         let subjectPublicKeyInfo = try AppleRSA1.parsePublicKeyResponse(packet)
         let publicKey = try Cryptography.makeRSAPublicKey(subjectPublicKeyInfo: subjectPublicKeyInfo)
 
-        // Native Screen Sharing sends ViewerInfo after the RSA1 public-key
-        // exchange has selected the security mechanism, before credentials.
-        try await transport.send(AppleRFBMessages.viewerInfo())
-
         let masterKey = try Cryptography.randomBytes(count: 16)
         let plaintext = try AppleRSA1.credentialPlaintext(
             username: credentials.username,

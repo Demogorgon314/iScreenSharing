@@ -12,7 +12,9 @@ struct AppleControlChannelNegotiator: AppleControlChannelNegotiating {
         for session: RFBAuthenticatedSession,
         displaySizes: [AppleDynamicResolutionSize]
     ) async throws -> AppleEncryptedRecordLayer {
-        try await session.send(AppleRFBMessages.setEncryption)
+        try await session.send(
+            AppleRFBMessages.viewerInfo() + AppleRFBMessages.setEncryption
+        )
         try await Task.sleep(for: .milliseconds(100))
         try await session.send(try AppleRFBMessages.setEncodings())
 
