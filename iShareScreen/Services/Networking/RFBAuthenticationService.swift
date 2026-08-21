@@ -62,6 +62,9 @@ struct RFBAuthenticationService: RFBAuthenticating {
         credentials: ScreenSharingCredentials,
         transport: NWConnectionTransport
     ) async throws -> Data {
+        // Native Screen Sharing sends ViewerInfo after discovering the
+        // selected security type, before beginning the RSA1 exchange.
+        try await transport.send(AppleRFBMessages.viewerInfo())
         try await transport.send(AppleRSA1.publicKeyRequest)
         let packetLengthData = try await transport.receiveExactly(4)
         let packetLength = try Int(packetLengthData.uint32BE(at: 0))
