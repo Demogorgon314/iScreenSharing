@@ -41,6 +41,14 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(unit.nalUnits.count, 2)
     }
 
+    func testDropsIncompleteAccessUnitInsteadOfFeedingCorruptTile() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: payload)))
+        XCTAssertNil(processor.process(packet(sequence: 12, marker: true, payload: payload)))
+    }
+
     func testTracksSequenceGapsAndCancelsNACKForLatePacket() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: Data([1]))))

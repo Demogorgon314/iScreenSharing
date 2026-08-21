@@ -52,13 +52,15 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         }
         groups[key] = packets
         guard packets.contains(where: \.marker) else { return nil }
-        groups.removeValue(forKey: key)
-
         let ordered = Self.sequenceOrdered(packets)
         guard ordered.last?.marker == true else { return nil }
+        groups.removeValue(forKey: key)
         let units = AppleHEVCNALUnit.reassemble(ordered.map(\.payload))
         harvest(units)
-        guard !units.isEmpty else { return nil }
+        let isComplete = ordered.indices.dropLast().allSatisfy { index in
+            ordered[index].sequenceNumber &+ 1 == ordered[index + 1].sequenceNumber
+        }
+        guard isComplete, !units.isEmpty else { return nil }
         return AppleHEVCAccessUnit(
             synchronizationSource: key.source,
             timestamp: key.timestamp,

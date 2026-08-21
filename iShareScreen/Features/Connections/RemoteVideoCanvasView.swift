@@ -480,9 +480,11 @@ enum AppleVideoCanvasLayout {
         )
         return (0..<canvas.tileCount).map { tileIndex in
             let slotHeight = slotHeights[tileIndex]
-            let logicalStart = CGFloat(canvas.height * tileIndex / canvas.tileCount)
-            let logicalEnd = CGFloat(canvas.height * (tileIndex + 1) / canvas.tileCount)
-            let validHeight = logicalEnd - logicalStart
+            let logicalStart = slotHeights[..<tileIndex].reduce(0, +)
+            let validHeight = min(
+                slotHeight,
+                max(0, canvasBounds.height - logicalStart)
+            )
             guard validHeight > 0 else { return Tile(container: .zero, content: .zero) }
             let tileRect = CGRect(
                 x: 0,
