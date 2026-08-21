@@ -1,4 +1,5 @@
 import AVFAudio
+import CoreVideo
 import XCTest
 @testable import iShareScreen
 
@@ -97,6 +98,15 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertTrue((0..<media.canvas.tileCount).allSatisfy { stream.frames.frame(at: $0) != nil })
         XCTAssertGreaterThanOrEqual(stream.decodedFrameCount, media.canvas.tileCount)
         XCTAssertEqual(stream.state, .streaming)
+        if environment["ISHARESCREEN_TEST_EXPECT_VISIBLE_FRAME"] == "1" {
+            let ranges = (0..<media.canvas.tileCount).compactMap {
+                stream.frames.frame(at: $0).flatMap(lumaRange)
+            }
+            XCTAssertTrue(
+                ranges.contains { Int($0.upperBound) - Int($0.lowerBound) >= 8 },
+                "Decoded HEVC tiles have no visible luminance contrast: \(ranges)"
+            )
+        }
 
         let audioDeadline = clock.now.advanced(by: .seconds(3))
         while audioStream.decodedPacketCount == 0, clock.now < audioDeadline {
@@ -147,6 +157,32 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         let sentEventCount = await input.sentEventCount
         XCTAssertGreaterThanOrEqual(sentEventCount, countBeforeInput + 3)
     }
+}
+
+private func lumaRange(of pixelBuffer: CVPixelBuffer) -> ClosedRange<UInt8>? {
+    guard CVPixelBufferGetPlaneCount(pixelBuffer) > 0,
+          CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else { return nil }
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+    guard let baseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return nil }
+
+    let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
+    let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+    let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+    guard width > 0, height > 0 else { return nil }
+
+    let bytes = baseAddress.assumingMemoryBound(to: UInt8.self)
+    let horizontalStride = max(1, width / 128)
+    let verticalStride = max(1, height / 128)
+    var minimum = UInt8.max
+    var maximum = UInt8.min
+    for y in stride(from: 0, to: height, by: verticalStride) {
+        for x in stride(from: 0, to: width, by: horizontalStride) {
+            let value = bytes[y * bytesPerRow + x]
+            minimum = min(minimum, value)
+            maximum = max(maximum, value)
+        }
+    }
+    return minimum...maximum
 }
 
 @MainActor
