@@ -27,6 +27,7 @@ final class AppleInputControllerTests: XCTestCase {
     func testDisplaySelectionOnlyEmitsWhenTargetChanges() {
         var selection = AppleInputDisplaySelection()
 
+        XCTAssertNil(selection.message(for: nil))
         XCTAssertEqual(selection.message(for: 42), AppleRFBMessages.selectDisplay(42))
         XCTAssertNil(selection.message(for: 42))
         XCTAssertEqual(selection.message(for: 84), AppleRFBMessages.selectDisplay(84))

@@ -25,8 +25,8 @@ struct AppleDisplayInputMapping: Equatable {
             let x = backingPoint.x * backingFrame.width / sourceSize.width
             let y = backingPoint.y * backingFrame.height / sourceSize.height
             return (
-                Int(min(backingFrame.width - 1, max(0, x)).rounded()),
-                Int(min(backingFrame.height - 1, max(0, y)).rounded())
+                Int((backingFrame.minX + min(backingFrame.width - 1, max(0, x))).rounded()),
+                Int((backingFrame.minY + min(backingFrame.height - 1, max(0, y))).rounded())
             )
         }
         let localX = backingPoint.x - backingFrame.minX

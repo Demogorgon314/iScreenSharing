@@ -75,7 +75,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         )
     }
 
-    func testKeepsIndependentDisplayCoordinatesInLocalBackingPixels() {
+    func testMapsIndependentDisplayCoordinatesIntoCombinedBackingPixels() {
         let displayOne = AppleDisplayInputMapping(
             backingFrame: CGRect(x: 0, y: 0, width: 2244, height: 1872),
             logicalFrame: CGRect(x: 0, y: 0, width: 1122, height: 936)
@@ -99,20 +99,20 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         )
         XCTAssertEqual(
             displayTwo.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.x,
-            1510
+            3754
         )
         XCTAssertEqual(
             displayTwo.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.y,
             894
         )
-        XCTAssertEqual(displayTwo.point(from: .zero, isDisplayLocal: true)?.x, 0)
+        XCTAssertEqual(displayTwo.point(from: .zero, isDisplayLocal: true)?.x, 2244)
         XCTAssertEqual(
             displayTwo.point(from: CGPoint(x: 3019, y: 0), isDisplayLocal: true)?.x,
-            3019
+            5263
         )
     }
 
-    func testScalesIndependentCanvasCoordinatesToLocalBackingPixels() {
+    func testScalesIndependentCanvasCoordinatesToCombinedBackingPixels() {
         let mapping = AppleDisplayInputMapping(
             backingFrame: CGRect(x: 2244, y: 0, width: 3020, height: 1788),
             logicalFrame: CGRect(x: 1122, y: 0, width: 1510, height: 894),
@@ -121,7 +121,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
 
         XCTAssertEqual(
             mapping.point(from: CGPoint(x: 755, y: 447), isDisplayLocal: true)?.x,
-            1510
+            3754
         )
         XCTAssertEqual(
             mapping.point(from: CGPoint(x: 755, y: 447), isDisplayLocal: true)?.y,
@@ -169,7 +169,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         let mapping = try XCTUnwrap(model.inputMapping(for: 1))
         XCTAssertEqual(
             mapping.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.x,
-            1510
+            3754
         )
         XCTAssertEqual(
             mapping.point(from: CGPoint(x: 1510, y: 894), isDisplayLocal: true)?.y,

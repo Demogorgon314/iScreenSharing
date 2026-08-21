@@ -34,9 +34,7 @@ struct SessionView: View {
                             : nil
                     ),
                     inputCoordinatesAreDisplayLocal: usesIndependentVideoStreams,
-                    inputDisplayID: displayLayout.displayCount > 1
-                        ? displayLayout.displayID(for: displayIndex)
-                        : nil,
+                    inputDisplayID: nil,
                     onViewportChange: viewportChanged
                 )
                 .onChange(of: stream.state) { _, state in
