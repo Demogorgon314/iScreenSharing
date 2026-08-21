@@ -18,7 +18,7 @@ final class AppleHEVCDecoderTests: XCTestCase {
 
     func testRejectsIncompleteParameterSets() {
         XCTAssertThrowsError(
-            try AppleHEVCDecoder(parameterSets: AppleHEVCParameterSets()) { _, _ in }
+            try AppleHEVCDecoder(parameterSets: AppleHEVCParameterSets()) { _, _, _ in }
         ) { error in
             XCTAssertEqual(error as? AppleHEVCDecoderError, .incompleteParameterSets)
         }

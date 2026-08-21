@@ -59,6 +59,14 @@ enum AppleRTCP {
         return packet
     }
 
+    static func longTermReferenceAcknowledgement(sender: UInt32, frameID: UInt16) -> Data {
+        var packet = Data([0x80, 204, 0, 3])
+        packet.appendUInt32BE(sender)
+        packet.appendUInt32BE(5)
+        packet.appendUInt32BE(UInt32(frameID))
+        return packet
+    }
+
     static func compound(sender: UInt32, feedback: Data) -> Data {
         receiverReport(sender: sender) + feedback
     }

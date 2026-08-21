@@ -4,6 +4,11 @@ import Foundation
 import OSLog
 
 final class AppleVideoStream: ObservableObject, @unchecked Sendable {
+    private struct CachedUnit {
+        let data: Data
+        let decodingOrderNumber: UInt16?
+    }
+
     enum State: Equatable {
         case preparing
         case streaming
@@ -16,6 +21,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     let frames = AppleVideoFrameStore()
 
     private static let maximumCachedUnitsPerSource = 128
+    private static let initialSelectionDelay: TimeInterval = 0.3
+    private static let initialSelectionDeadline: TimeInterval = 2
+    private static let minimumInitialPacketCount = 100
+    private static let sourceAdoptionStall: TimeInterval = 2
+    private static let minimumAdoptionPacketsPerSource = 5
     private static let receiverReportInterval: TimeInterval = 0.5
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
@@ -28,10 +38,13 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var decoder: AppleHEVCDecoder?
     private var sourceToTile = [UInt32: Int]()
-    private var cachedUnits = [UInt32: [Data]]()
+    private var abandonedSources = Set<UInt32>()
+    private var cachedUnits = [UInt32: [CachedUnit]]()
     private var isClosed = false
     private var frameCount = 0
     private var lastReceiverReportTime: TimeInterval = 0
+    private var firstPacketTime: TimeInterval?
+    private var lastDecodedFrameTime: TimeInterval = 0
 
     init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
         self.receiver = receiver
@@ -60,10 +73,13 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 decoder?.close()
                 decoder = nil
                 sourceToTile.removeAll(keepingCapacity: false)
+                abandonedSources.removeAll(keepingCapacity: false)
                 cachedUnits.removeAll(keepingCapacity: false)
                 processor.reset()
                 frames.removeAllFrames()
                 countLock.withVideoStreamLock { self.frameCount = 0 }
+                firstPacketTime = nil
+                countLock.withVideoStreamLock { self.lastDecodedFrameTime = 0 }
                 DispatchQueue.main.async { [weak self] in
                     self?.canvas = canvas
                     self?.state = .preparing
@@ -108,7 +124,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private func processAvailablePackets() {
         sendReceiverReportIfNeeded()
         let datagrams = receiver.drainVideoPackets()
-        guard !datagrams.isEmpty else { return }
+        guard !datagrams.isEmpty else {
+            if decoder == nil { prepareDecoderIfPossible() }
+            return
+        }
+        if firstPacketTime == nil { firstPacketTime = ProcessInfo.processInfo.systemUptime }
         let accessUnits = processor.process(datagrams)
         sendPendingNACKs()
         guard !accessUnits.isEmpty else { return }
@@ -118,13 +138,17 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             prepareDecoderIfPossible()
             return
         }
+        cache(accessUnits.filter { sourceToTile[$0.synchronizationSource] == nil })
         feed(accessUnits)
+        adoptFreshSourcesIfNeeded()
     }
 
     private func cache(_ accessUnits: [AppleHEVCAccessUnit]) {
         for accessUnit in accessUnits {
             var units = cachedUnits[accessUnit.synchronizationSource, default: []]
-            units.append(contentsOf: accessUnit.nalUnits)
+            units.append(contentsOf: accessUnit.nalUnits.map {
+                CachedUnit(data: $0, decodingOrderNumber: accessUnit.decodingOrderNumber)
+            })
             if units.count > Self.maximumCachedUnitsPerSource {
                 units.removeFirst(units.count - Self.maximumCachedUnitsPerSource)
             }
@@ -133,16 +157,30 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     }
 
     private func prepareDecoderIfPossible() {
+        guard let firstPacketTime else { return }
+        let selectionAge = ProcessInfo.processInfo.systemUptime - firstPacketTime
+        guard selectionAge >= Self.initialSelectionDelay else {
+            return
+        }
         let sources = processor.primarySources(tileCount: canvas.tileCount)
         guard sources.count == canvas.tileCount else { return }
+        guard processor.packetCount(for: sources) >= Self.minimumInitialPacketCount
+                || selectionAge >= Self.initialSelectionDeadline else { return }
         sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
+        prepareDecoder(for: sources)
+    }
+
+    private func prepareDecoder(for sources: [UInt32]) {
         guard decoder == nil else { return }
 
         let parameterSets = processor.currentParameterSets()
         guard parameterSets.isComplete else { return }
         do {
-            decoder = try AppleHEVCDecoder(parameterSets: parameterSets) { [weak self] tileIndex, frame in
-                self?.publish(frame, tileIndex: tileIndex)
+            decoder = try AppleHEVCDecoder(parameterSets: parameterSets) { [weak self] tileIndex, decodingOrderNumber, frame in
+                self?.publish(frame, tileIndex: tileIndex, decodingOrderNumber: decodingOrderNumber)
+            }
+            countLock.withVideoStreamLock {
+                self.lastDecodedFrameTime = ProcessInfo.processInfo.systemUptime
             }
             feedCachedUnitsRoundRobin(sources: sources)
         } catch {
@@ -150,12 +188,38 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private func adoptFreshSourcesIfNeeded() {
+        let now = ProcessInfo.processInfo.systemUptime
+        let lastDecodedFrameTime = countLock.withVideoStreamLock { self.lastDecodedFrameTime }
+        guard lastDecodedFrameTime > 0,
+              now - lastDecodedFrameTime >= Self.sourceAdoptionStall else { return }
+        let excluded = Set(sourceToTile.keys).union(abandonedSources)
+        let sources = processor.primarySources(tileCount: canvas.tileCount, excluding: excluded)
+        guard sources.count == canvas.tileCount,
+              sources.allSatisfy({ processor.packetCount(for: [$0]) >= Self.minimumAdoptionPacketsPerSource }) else {
+            return
+        }
+
+        abandonedSources.formUnion(sourceToTile.keys)
+        sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
+        decoder?.close()
+        decoder = nil
+        countLock.withVideoStreamLock { self.lastDecodedFrameTime = now }
+        prepareDecoder(for: sources)
+        for tileIndex in sources.indices { requestKeyFrame(for: tileIndex) }
+    }
+
     private func feedCachedUnitsRoundRobin(sources: [UInt32]) {
         let maximumCount = sources.map { cachedUnits[$0]?.count ?? 0 }.max() ?? 0
         for unitIndex in 0..<maximumCount {
             for (tileIndex, source) in sources.enumerated() {
                 guard let units = cachedUnits[source], unitIndex < units.count else { continue }
-                decode(units[unitIndex], tileIndex: tileIndex)
+                let unit = units[unitIndex]
+                decode(
+                    unit.data,
+                    tileIndex: tileIndex,
+                    decodingOrderNumber: unit.decodingOrderNumber
+                )
             }
         }
         cachedUnits.removeAll(keepingCapacity: false)
@@ -165,14 +229,22 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         for accessUnit in accessUnits {
             guard let tileIndex = sourceToTile[accessUnit.synchronizationSource] else { continue }
             for nalUnit in accessUnit.nalUnits {
-                decode(nalUnit, tileIndex: tileIndex)
+                decode(
+                    nalUnit,
+                    tileIndex: tileIndex,
+                    decodingOrderNumber: accessUnit.decodingOrderNumber
+                )
             }
         }
     }
 
-    private func decode(_ nalUnit: Data, tileIndex: Int) {
+    private func decode(_ nalUnit: Data, tileIndex: Int, decodingOrderNumber: UInt16?) {
         do {
-            _ = try decoder?.decode(nalUnit, tileIndex: tileIndex)
+            _ = try decoder?.decode(
+                nalUnit,
+                tileIndex: tileIndex,
+                decodingOrderNumber: decodingOrderNumber
+            )
         } catch AppleHEVCDecoderError.decodeFailed {
             requestKeyFrame(for: tileIndex)
         } catch {
@@ -208,13 +280,27 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func publish(_ frame: CVPixelBuffer, tileIndex: Int) {
+    private func publish(
+        _ frame: CVPixelBuffer,
+        tileIndex: Int,
+        decodingOrderNumber: UInt16?
+    ) {
         frames.publish(frame, at: tileIndex)
-        let isFirstFrame = countLock.withVideoStreamLock {
-            frameCount += 1
-            return frameCount == 1
+        countLock.withVideoStreamLock {
+            self.lastDecodedFrameTime = ProcessInfo.processInfo.systemUptime
         }
-        if isFirstFrame { publishState(.streaming) }
+        if tileIndex == 0, let decodingOrderNumber {
+            do {
+                try feedback.acknowledgeLongTermReference(frameID: decodingOrderNumber)
+            } catch {
+                Self.logger.debug("LTR acknowledgement failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        let count = countLock.withVideoStreamLock {
+            frameCount += 1
+            return frameCount
+        }
+        if count == 1 { publishState(.streaming) }
     }
 
     private func fail(_ error: Error) {

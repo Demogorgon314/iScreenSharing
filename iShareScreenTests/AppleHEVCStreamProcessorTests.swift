@@ -16,9 +16,19 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         )
 
         XCTAssertEqual(unit.nalUnits, [vps, sps, pps])
+        XCTAssertEqual(unit.decodingOrderNumber, 1)
         XCTAssertEqual(
             processor.currentParameterSets(),
             AppleHEVCParameterSets(video: vps, sequence: sps, pictures: [pps])
+        )
+    }
+
+    func testExtractsDecodingOrderNumberFromFragmentedUnit() {
+        XCTAssertEqual(
+            AppleHEVCNALUnit.firstDecodingOrderNumber(
+                in: [Data([0x62, 0x01, 0x81, 0xab, 0xcd, 0xff])]
+            ),
+            0xabcd
         )
     }
 
@@ -63,13 +73,38 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(tracker.drainMissingSequences(), [0x1122_3344: [0]])
     }
 
-    private func packet(sequence: UInt16, marker: Bool, payload: Data) -> AppleRTPPacket {
+    func testPrimarySourcesSelectsBusiestCompleteGroupAndCanExcludeIt() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        for sequence in 0..<8 {
+            for source in [UInt32(100), 101, 102, 103] {
+                _ = processor.process(packet(sequence: UInt16(sequence), marker: true, payload: Data([0x42, 1, 0, 1, 1]), source: source))
+            }
+        }
+        for sequence in 0..<3 {
+            for source in [UInt32(200), 201, 202, 203] {
+                _ = processor.process(packet(sequence: UInt16(sequence), marker: true, payload: Data([0x42, 1, 0, 1, 1]), source: source))
+            }
+        }
+
+        XCTAssertEqual(processor.primarySources(tileCount: 4), [100, 101, 102, 103])
+        XCTAssertEqual(
+            processor.primarySources(tileCount: 4, excluding: [100, 101, 102, 103]),
+            [200, 201, 202, 203]
+        )
+    }
+
+    private func packet(
+        sequence: UInt16,
+        marker: Bool,
+        payload: Data,
+        source: UInt32 = 0x1122_3344
+    ) -> AppleRTPPacket {
         AppleRTPPacket(
             header: Data(),
             payload: payload,
             sequenceNumber: sequence,
             timestamp: 7,
-            synchronizationSource: 0x1122_3344,
+            synchronizationSource: source,
             payloadType: 96,
             marker: marker
         )

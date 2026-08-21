@@ -11,6 +11,7 @@ struct AppleHEVCParameterSets: Equatable, Sendable {
 struct AppleHEVCAccessUnit: Equatable, Sendable {
     let synchronizationSource: UInt32
     let timestamp: UInt32
+    let decodingOrderNumber: UInt16?
     let nalUnits: [Data]
 }
 
@@ -61,6 +62,9 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         return AppleHEVCAccessUnit(
             synchronizationSource: key.source,
             timestamp: key.timestamp,
+            decodingOrderNumber: AppleHEVCNALUnit.firstDecodingOrderNumber(
+                in: ordered.map(\.payload)
+            ),
             nalUnits: units
         )
     }
@@ -82,10 +86,10 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         }
     }
 
-    func primarySources(tileCount: Int) -> [UInt32] {
+    func primarySources(tileCount: Int, excluding excludedSources: Set<UInt32> = []) -> [UInt32] {
         lock.withStreamLock {
             guard tileCount > 0 else { return [] }
-            let sources = sourcePacketCounts.keys.sorted()
+            let sources = sourcePacketCounts.keys.filter { !excludedSources.contains($0) }.sorted()
             var groups = [[UInt32]]()
             for source in sources {
                 if let last = groups.indices.last,
@@ -105,6 +109,12 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
                 }
                 return lhsCount < rhsCount
             } ?? []
+        }
+    }
+
+    func packetCount(for sources: some Sequence<UInt32>) -> Int {
+        lock.withStreamLock {
+            sources.reduce(0) { $0 + sourcePacketCounts[$1, default: 0] }
         }
     }
 

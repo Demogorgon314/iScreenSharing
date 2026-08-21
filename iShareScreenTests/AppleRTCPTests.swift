@@ -49,6 +49,16 @@ final class AppleRTCPTests: XCTestCase {
             "84ce00041122334400000000556677880700000081ce0002112233445566778880c0000155667788"
         )
     }
+
+    func testBuildsAppleLongTermReferenceAcknowledgement() {
+        XCTAssertEqual(
+            AppleRTCP.longTermReferenceAcknowledgement(
+                sender: 0x1122_3344,
+                frameID: 0xabcd
+            ).hex,
+            "80cc000311223344000000050000abcd"
+        )
+    }
 }
 
 private extension Data {

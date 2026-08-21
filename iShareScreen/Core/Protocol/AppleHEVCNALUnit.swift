@@ -65,4 +65,14 @@ enum AppleHEVCNALUnit {
         }
         return units
     }
+
+    static func firstDecodingOrderNumber(in payloads: [Data]) -> UInt16? {
+        for payload in payloads {
+            guard let type = type(of: payload) else { continue }
+            let offset = type == fragmentationType ? 3 : 2
+            guard let value = try? payload.uint16BE(at: offset) else { continue }
+            return value
+        }
+        return nil
+    }
 }

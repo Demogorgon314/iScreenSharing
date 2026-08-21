@@ -4,7 +4,7 @@ import Foundation
 import VideoToolbox
 
 final class AppleHEVCDecoder: @unchecked Sendable {
-    typealias FrameHandler = @Sendable (Int, CVPixelBuffer) -> Void
+    typealias FrameHandler = @Sendable (Int, UInt16?, CVPixelBuffer) -> Void
 
     static let nativePixelFormat = OSType(0x3434_3466) // '444f' (NV24)
 
@@ -21,7 +21,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     }
 
     @discardableResult
-    func decode(_ nalUnit: Data, tileIndex: Int) throws -> Bool {
+    func decode(_ nalUnit: Data, tileIndex: Int, decodingOrderNumber: UInt16?) throws -> Bool {
         guard let type = AppleHEVCNALUnit.type(of: nalUnit), type < 32 else { return false }
         let sampleBuffer = try Self.makeSampleBuffer(
             nalUnit: nalUnit,
@@ -37,7 +37,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                 infoFlagsOut: &decodeInfo
             ) { [frameHandler] status, _, imageBuffer, _, _ in
                 guard status == noErr, let imageBuffer else { return }
-                frameHandler(tileIndex, imageBuffer)
+                frameHandler(tileIndex, decodingOrderNumber, imageBuffer)
             }
             guard status == noErr else { throw AppleHEVCDecoderError.decodeFailed(status) }
             return true

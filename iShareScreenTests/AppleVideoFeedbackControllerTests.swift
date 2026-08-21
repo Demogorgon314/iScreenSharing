@@ -46,6 +46,21 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
         )
         XCTAssertThrowsError(try controller.sendReceiverReport())
     }
+
+    func testAcknowledgesEachLongTermReferenceOnce() throws {
+        let sender = FeedbackSenderSpy()
+        let controller = try AppleVideoFeedbackController(
+            sender: sender,
+            keyBlob: Data(0..<46),
+            synchronizationSource: 0x1122_3344
+        )
+
+        try controller.acknowledgeLongTermReference(frameID: 7)
+        try controller.acknowledgeLongTermReference(frameID: 7)
+        try controller.acknowledgeLongTermReference(frameID: 8)
+
+        XCTAssertEqual(sender.datagrams.count, 2)
+    }
 }
 
 private final class FeedbackSenderSpy: AppleMediaControlSending, @unchecked Sendable {

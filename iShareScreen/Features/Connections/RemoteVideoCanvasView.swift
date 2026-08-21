@@ -1,4 +1,4 @@
-import AVFoundation
+import CoreVideo
 import SwiftUI
 
 struct RemoteVideoCanvasView: NSViewRepresentable {
@@ -33,7 +33,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private let input: AppleInputController?
     private let cursors: AppleCursorStore?
     private let tileContainers: [CALayer]
-    private let displayLayers: [AVSampleBufferDisplayLayer]
+    private let displayLayers: [CALayer]
     private var observer: UUID?
     private var cursorObserver: UUID?
     private var remoteCursor = NSCursor.arrow
@@ -57,15 +57,20 @@ final class RemoteVideoCanvasNSView: NSView {
         self.input = input
         self.cursors = cursors
         self.displayScale = displayScale
+        let metalContext = AppleNV24MetalContext()
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
-        displayLayers = (0..<canvas.tileCount).map { _ in AVSampleBufferDisplayLayer() }
+        displayLayers = (0..<canvas.tileCount).map { _ in
+            if let metalContext { return AppleNV24MetalLayer(context: metalContext) }
+            let fallback = CALayer()
+            fallback.backgroundColor = NSColor.black.cgColor
+            return fallback
+        }
         super.init(frame: .zero)
 
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
         for (container, displayLayer) in zip(tileContainers, displayLayers) {
             container.masksToBounds = true
-            displayLayer.videoGravity = .resize
             container.addSublayer(displayLayer)
             layer?.addSublayer(container)
         }
@@ -92,6 +97,18 @@ final class RemoteVideoCanvasNSView: NSView {
         if let cursorObserver { cursors?.removeObserver(cursorObserver) }
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        let scale = window?.backingScaleFactor ?? 1
+        displayLayers.forEach { $0.contentsScale = scale }
+        for tileIndex in displayLayers.indices {
+            if let frame = frames.frame(at: tileIndex) {
+                display(frame, at: tileIndex)
+            }
+        }
+    }
+
     override func layout() {
         super.layout()
         let slotHeight = decodedTileHeight ?? ceil(CGFloat(canvas.height) / CGFloat(canvas.tileCount))
@@ -102,9 +119,16 @@ final class RemoteVideoCanvasNSView: NSView {
             fixedScale: displayScale.fixedScale
         )
         for (index, layout) in layouts.enumerated() {
-            tileContainers[index].frame = layout.container
-            displayLayers[index].frame = layout.content
+            tileContainers[index].frame = backingAlignedRect(
+                layout.container,
+                options: [.alignMinXOutward, .alignMaxXOutward, .alignMinYOutward, .alignMaxYOutward]
+            )
+            displayLayers[index].frame = backingAlignedRect(
+                layout.content,
+                options: [.alignMinXOutward, .alignMaxXOutward, .alignMinYOutward, .alignMaxYOutward]
+            )
             tileContainers[index].isHidden = layout.container.isEmpty
+            displayLayers[index].display()
         }
     }
 
@@ -276,14 +300,7 @@ final class RemoteVideoCanvasNSView: NSView {
             needsLayout = true
         }
 
-        let displayLayer = displayLayers[tileIndex]
-        let renderer = displayLayer.sampleBufferRenderer
-        if renderer.status == .failed {
-            renderer.flush(removingDisplayedImage: true, completionHandler: nil)
-        }
-        guard renderer.isReadyForMoreMediaData,
-              let sampleBuffer = Self.sampleBuffer(for: pixelBuffer) else { return }
-        renderer.enqueue(sampleBuffer)
+        (displayLayers[tileIndex] as? AppleNV24MetalLayer)?.present(pixelBuffer)
     }
 
     private func applyCursor(_ image: AppleCursorImage?) {
@@ -318,35 +335,6 @@ final class RemoteVideoCanvasNSView: NSView {
         )
     }
 
-    private static func sampleBuffer(for pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
-        var formatDescription: CMVideoFormatDescription?
-        guard CMVideoFormatDescriptionCreateForImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            formatDescriptionOut: &formatDescription
-        ) == noErr, let formatDescription else { return nil }
-
-        var timing = CMSampleTimingInfo(
-            duration: .invalid,
-            presentationTimeStamp: .invalid,
-            decodeTimeStamp: .invalid
-        )
-        var sampleBuffer: CMSampleBuffer?
-        guard CMSampleBufferCreateReadyWithImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            formatDescription: formatDescription,
-            sampleTiming: &timing,
-            sampleBufferOut: &sampleBuffer
-        ) == noErr, let sampleBuffer else { return nil }
-        CMSetAttachment(
-            sampleBuffer,
-            key: kCMSampleAttachmentKey_DisplayImmediately,
-            value: kCFBooleanTrue,
-            attachmentMode: kCMAttachmentMode_ShouldPropagate
-        )
-        return sampleBuffer
-    }
 }
 
 enum AppleVideoCanvasLayout {

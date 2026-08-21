@@ -10,6 +10,7 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
     private let now: () -> TimeInterval
     private var feedbackSequence: UInt8 = 0
     private var lastKeyFrameRequest = [UInt32: TimeInterval]()
+    private var lastAcknowledgedFrameID: UInt16?
 
     init(
         sender: AppleMediaControlSending,
@@ -58,6 +59,19 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
 
     func sendReceiverReport() throws {
         try sender.sendControl(encryptor.protect(AppleRTCP.receiverReport(sender: synchronizationSource)))
+    }
+
+    func acknowledgeLongTermReference(frameID: UInt16) throws {
+        let packet = lock.withFeedbackLock { () -> Data? in
+            guard lastAcknowledgedFrameID != frameID else { return nil }
+            lastAcknowledgedFrameID = frameID
+            return AppleRTCP.longTermReferenceAcknowledgement(
+                sender: synchronizationSource,
+                frameID: frameID
+            )
+        }
+        guard let packet else { return }
+        try sender.sendControl(encryptor.protect(packet))
     }
 
     private func send(feedback: Data) throws {
