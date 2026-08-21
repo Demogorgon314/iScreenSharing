@@ -82,6 +82,7 @@ final class AppleDisplayLayoutModel: ObservableObject {
 
     func inputMapping(for displayIndex: Int) -> AppleDisplayInputMapping? {
         guard let displays = layout?.displays,
+              displays.count > 1,
               displays.indices.contains(displayIndex) else { return nil }
         let display = displays[displayIndex]
         return AppleDisplayInputMapping(

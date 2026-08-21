@@ -55,6 +55,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         ))
 
         XCTAssertNil(model.sourceRect(for: 0))
+        XCTAssertNil(model.inputMapping(for: 0))
         XCTAssertTrue(model.supportsDynamicResolution)
     }
 
