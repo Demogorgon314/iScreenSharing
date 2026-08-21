@@ -20,7 +20,6 @@ final class AppleMediaNegotiatorTests: XCTestCase {
                 try AppleRFBMessages.setEncodings(),
                 AppleRFBMessages.framebufferUpdateRequest(),
                 AppleRFBMessages.autoFramebufferUpdate(),
-                AppleRFBMessages.selectCombinedDisplays,
             ]
         )
     }

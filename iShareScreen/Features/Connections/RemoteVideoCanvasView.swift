@@ -410,11 +410,29 @@ final class RemoteVideoCanvasNSView: NSView {
             fixedScale: displayScale.fixedScale,
             sourceRect: sourceRect
         ) else { return nil }
-        let point = inputMapping?.point(
+        return Self.mappedInputPoint(
+            canvasPoint,
+            mapping: inputMapping,
+            requiresDisplayMapping: inputCoordinatesAreDisplayLocal
+        )
+    }
+
+    static func mappedInputPoint(
+        _ canvasPoint: (x: Int, y: Int),
+        mapping: AppleDisplayInputMapping?,
+        requiresDisplayMapping: Bool
+    ) -> (x: Int, y: Int)? {
+        if requiresDisplayMapping {
+            guard let mapping else { return nil }
+            return mapping.point(
+                from: CGPoint(x: canvasPoint.x, y: canvasPoint.y),
+                isDisplayLocal: true
+            )
+        }
+        return mapping?.point(
             from: CGPoint(x: canvasPoint.x, y: canvasPoint.y),
-            isDisplayLocal: inputCoordinatesAreDisplayLocal
+            isDisplayLocal: false
         ) ?? canvasPoint
-        return point
     }
 
     private func selectInputDisplay() {

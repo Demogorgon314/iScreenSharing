@@ -2,6 +2,28 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleVideoCanvasLayoutTests: XCTestCase {
+    func testIndependentDisplayInputWaitsForDisplayMapping() {
+        XCTAssertNil(RemoteVideoCanvasNSView.mappedInputPoint(
+            (x: 100, y: 200),
+            mapping: nil,
+            requiresDisplayMapping: true
+        ))
+
+        let mapping = AppleDisplayInputMapping(
+            backingFrame: CGRect(x: 2_000, y: 0, width: 1_000, height: 800),
+            logicalFrame: CGRect(x: 1_000, y: 0, width: 500, height: 400),
+            localSourceSize: CGSize(width: 1_000, height: 800)
+        )
+        let point = RemoteVideoCanvasNSView.mappedInputPoint(
+            (x: 100, y: 200),
+            mapping: mapping,
+            requiresDisplayMapping: true
+        )
+
+        XCTAssertEqual(point?.x, 2_100)
+        XCTAssertEqual(point?.y, 200)
+    }
+
     func testStacksDecodedTilesAndCropsOnlyCanvasOverflow() throws {
         let layouts = AppleVideoCanvasLayout.tiles(
             canvas: AppleCanvas(width: 1920, height: 1200, tileCount: 4),
