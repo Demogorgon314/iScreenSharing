@@ -4,14 +4,29 @@ import CoreGraphics
 struct AppleDisplayInputMapping: Equatable {
     let backingFrame: CGRect
     let logicalFrame: CGRect
+    let localSourceSize: CGSize?
+
+    init(
+        backingFrame: CGRect,
+        logicalFrame: CGRect,
+        localSourceSize: CGSize? = nil
+    ) {
+        self.backingFrame = backingFrame
+        self.logicalFrame = logicalFrame
+        self.localSourceSize = localSourceSize
+    }
 
     func point(from backingPoint: CGPoint, isDisplayLocal: Bool) -> (x: Int, y: Int)? {
         guard backingFrame.width > 0, backingFrame.height > 0,
               logicalFrame.width > 0, logicalFrame.height > 0 else { return nil }
         if isDisplayLocal {
+            let sourceSize = localSourceSize ?? backingFrame.size
+            guard sourceSize.width > 0, sourceSize.height > 0 else { return nil }
+            let x = backingPoint.x * backingFrame.width / sourceSize.width
+            let y = backingPoint.y * backingFrame.height / sourceSize.height
             return (
-                Int(min(backingFrame.width - 1, max(0, backingPoint.x)).rounded()),
-                Int(min(backingFrame.height - 1, max(0, backingPoint.y)).rounded())
+                Int(min(backingFrame.width - 1, max(0, x)).rounded()),
+                Int(min(backingFrame.height - 1, max(0, y)).rounded())
             )
         }
         let localX = backingPoint.x - backingFrame.minX
@@ -86,7 +101,10 @@ final class AppleDisplayLayoutModel: ObservableObject {
         inputDisplay(for: displayIndex)?.displayID
     }
 
-    func inputMapping(for displayIndex: Int) -> AppleDisplayInputMapping? {
+    func inputMapping(
+        for displayIndex: Int,
+        localSourceSize: CGSize? = nil
+    ) -> AppleDisplayInputMapping? {
         guard displayCount > 1,
               let display = inputDisplay(for: displayIndex) else { return nil }
         return AppleDisplayInputMapping(
@@ -101,7 +119,8 @@ final class AppleDisplayLayoutModel: ObservableObject {
                 y: display.logicalY,
                 width: display.logicalWidth,
                 height: display.logicalHeight
-            )
+            ),
+            localSourceSize: localSourceSize
         )
     }
 

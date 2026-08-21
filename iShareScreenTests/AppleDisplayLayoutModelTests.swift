@@ -112,6 +112,27 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         )
     }
 
+    func testScalesIndependentCanvasCoordinatesToLocalBackingPixels() {
+        let mapping = AppleDisplayInputMapping(
+            backingFrame: CGRect(x: 2244, y: 0, width: 3020, height: 1788),
+            logicalFrame: CGRect(x: 1122, y: 0, width: 1510, height: 894),
+            localSourceSize: CGSize(width: 1510, height: 894)
+        )
+
+        XCTAssertEqual(
+            mapping.point(from: CGPoint(x: 755, y: 447), isDisplayLocal: true)?.x,
+            1510
+        )
+        XCTAssertEqual(
+            mapping.point(from: CGPoint(x: 755, y: 447), isDisplayLocal: true)?.y,
+            894
+        )
+        XCTAssertEqual(
+            mapping.point(from: CGPoint(x: 1509, y: 893), isDisplayLocal: true)?.y,
+            1786
+        )
+    }
+
     func testBuildsInputMappingFromCapturedDualDisplayLayout() throws {
         let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
         model.receive(AppleDisplayLayout(

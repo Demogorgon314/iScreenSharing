@@ -27,7 +27,12 @@ struct SessionView: View {
                     displayScale: displayScale,
                     synchronizesPresentation: synchronizesVideoPresentation,
                     sourceRect: usesIndependentVideoStreams ? nil : displayLayout.sourceRect(for: displayIndex),
-                    inputMapping: displayLayout.inputMapping(for: displayIndex),
+                    inputMapping: displayLayout.inputMapping(
+                        for: displayIndex,
+                        localSourceSize: usesIndependentVideoStreams
+                            ? CGSize(width: stream.canvas.width, height: stream.canvas.height)
+                            : nil
+                    ),
                     inputCoordinatesAreDisplayLocal: usesIndependentVideoStreams,
                     inputDisplayID: displayLayout.displayCount > 1
                         ? displayLayout.displayID(for: displayIndex)
