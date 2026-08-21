@@ -14,6 +14,22 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         XCTAssertEqual(messages[1], AppleRFBMessages.framebufferUpdateRequest())
     }
 
+    func testRequestsDifferentResolutionForEachDisplay() async throws {
+        let recorder = MessageRecorder()
+        let controller = makeController(recorder: recorder)
+
+        try await controller.request(displaySizes: [
+            AppleDynamicResolutionSize(width: 1440, height: 900),
+            AppleDynamicResolutionSize(width: 1200, height: 800),
+        ])
+
+        let messages = await recorder.messages
+        XCTAssertEqual(try messages[0].uint16BE(at: 6), 2)
+        XCTAssertEqual(try messages[0].uint32BE(at: 12 + 0x9c), 2880)
+        XCTAssertEqual(try messages[0].uint32BE(at: 308 + 0x9c), 2400)
+        XCTAssertEqual(messages[1], AppleRFBMessages.framebufferUpdateRequest())
+    }
+
     func testChangedLayoutAppliesCanvasAndReoffersMedia() async throws {
         let recorder = MessageRecorder()
         let applied = CanvasRecorder()

@@ -58,6 +58,47 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
     }
 
+    func testRestoresEachVirtualDisplaySizeDuringAuthentication() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = makeSession(endpoint: endpoint)
+        let connections = ConnectionStore(defaults: defaults)
+        connections.record(endpoint)
+        let saved = try XCTUnwrap(connections.connection(for: endpoint))
+        try connections.update(
+            saved,
+            name: saved.name,
+            endpoint: endpoint,
+            preferredUsername: "",
+            sharingType: .highPerformance,
+            virtualDisplayCount: .two
+        )
+        let viewportStore = SessionViewportStore(defaults: defaults)
+        viewportStore.save(CGSize(width: 1200, height: 800), for: endpoint, displayIndex: 0)
+        viewportStore.save(CGSize(width: 900, height: 700), for: endpoint, displayIndex: 1)
+        let displaySizes = DisplaySizeRecorder()
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(result: .success(session)),
+            controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: MockCredentialStore(),
+            connectionStore: connections,
+            viewportStore: viewportStore,
+            sessionManager: SessionManager()
+        )
+
+        coordinator.signIn(username: "user", password: "password", rememberPassword: false)
+        try await waitUntil { coordinator.state == .authenticated }
+
+        let request = await displaySizes.firstRequest()
+        XCTAssertEqual(request, [
+            AppleDynamicResolutionSize(width: 1200, height: 800),
+            AppleDynamicResolutionSize(width: 900, height: 700),
+        ])
+        XCTAssertNotNil(session.dynamicResolutionModel)
+    }
+
     func testRejectedSignInSurfacesErrorWithoutRecordingConnection() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let authenticator = MockAuthenticator(
@@ -235,10 +276,9 @@ private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
 
     func enableEncryption(
         for session: RFBAuthenticatedSession,
-        virtualDisplayCount: VirtualDisplayCount,
-        displaySize: AppleDynamicResolutionSize
+        displaySizes: [AppleDynamicResolutionSize]
     ) async throws -> AppleEncryptedRecordLayer {
-        await recorder?.append(displaySize)
+        await recorder?.append(displaySizes)
         let layer = AppleEncryptedRecordLayer(
             keys: try AppleRecordKeys(
                 key: Data(repeating: 0x11, count: 16),
@@ -251,10 +291,11 @@ private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
 }
 
 private actor DisplaySizeRecorder {
-    private var sizes = [AppleDynamicResolutionSize]()
+    private var requests = [[AppleDynamicResolutionSize]]()
 
-    func append(_ size: AppleDynamicResolutionSize) { sizes.append(size) }
-    func first() -> AppleDynamicResolutionSize? { sizes.first }
+    func append(_ sizes: [AppleDynamicResolutionSize]) { requests.append(sizes) }
+    func first() -> AppleDynamicResolutionSize? { requests.first?.first }
+    func firstRequest() -> [AppleDynamicResolutionSize]? { requests.first }
 }
 
 private struct MockMediaNegotiator: AppleMediaNegotiating {

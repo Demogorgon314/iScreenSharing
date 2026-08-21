@@ -12,7 +12,7 @@ final class AppleDisplayLayoutModel: ObservableObject {
 
     var displayCount: Int { layout?.displays.count ?? expectedDisplayCount }
     var supportsDynamicResolution: Bool {
-        expectedDisplayCount == 1 && displayCount == 1
+        (1...2).contains(displayCount)
     }
 
     func receive(_ layout: AppleDisplayLayout) {

@@ -3,16 +3,14 @@ import Foundation
 protocol AppleControlChannelNegotiating: Sendable {
     func enableEncryption(
         for session: RFBAuthenticatedSession,
-        virtualDisplayCount: VirtualDisplayCount,
-        displaySize: AppleDynamicResolutionSize
+        displaySizes: [AppleDynamicResolutionSize]
     ) async throws -> AppleEncryptedRecordLayer
 }
 
 struct AppleControlChannelNegotiator: AppleControlChannelNegotiating {
     func enableEncryption(
         for session: RFBAuthenticatedSession,
-        virtualDisplayCount: VirtualDisplayCount,
-        displaySize: AppleDynamicResolutionSize
+        displaySizes: [AppleDynamicResolutionSize]
     ) async throws -> AppleEncryptedRecordLayer {
         try await session.send(
             AppleRFBMessages.viewerInfo() + AppleRFBMessages.setEncryption
@@ -29,9 +27,7 @@ struct AppleControlChannelNegotiator: AppleControlChannelNegotiating {
         try await Task.sleep(for: .milliseconds(200))
         try await session.sendEncrypted(
             AppleDisplayConfiguration.message(
-                width: displaySize.width,
-                height: displaySize.height,
-                displayCount: virtualDisplayCount.rawValue
+                displaySizes: displaySizes
             )
         )
         return recordLayer

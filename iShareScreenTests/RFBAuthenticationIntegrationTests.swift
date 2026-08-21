@@ -29,8 +29,10 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
 
         let recordLayer = try await AppleControlChannelNegotiator().enableEncryption(
             for: session,
-            virtualDisplayCount: virtualDisplayCount,
-            displaySize: AppleDynamicResolutionSize(width: 1440, height: 900)
+            displaySizes: Array(
+                repeating: AppleDynamicResolutionSize(width: 1440, height: 900),
+                count: virtualDisplayCount.rawValue
+            )
         )
         XCTAssertEqual(recordLayer.contentKey.count, 16)
         XCTAssertEqual(session.recordLayer?.contentKey, recordLayer.contentKey)

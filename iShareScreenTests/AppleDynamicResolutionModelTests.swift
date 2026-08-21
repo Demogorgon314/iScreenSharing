@@ -76,6 +76,45 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         let finalCount = await recorder.count()
         XCTAssertEqual(finalCount, 2)
     }
+
+    @MainActor
+    func testWaitsForBothDisplayViewportsAndRequestsThemTogether() async throws {
+        let recorder = DynamicResolutionMessageRecorder()
+        let controller = AppleDynamicResolutionController(
+            initialCanvas: AppleCanvas(width: 3840, height: 1080, tileCount: 4),
+            mediaConfiguration: Data([0x1c]),
+            sendMessage: { message in await recorder.append(message) },
+            applyCanvas: { _ in }
+        )
+        let model = AppleDynamicResolutionModel(displayCount: 2)
+
+        model.schedule(
+            displayIndex: 0,
+            viewport: CGSize(width: 1000, height: 700),
+            controller: controller
+        )
+        try await Task.sleep(for: .milliseconds(600))
+        let incompleteRequestCount = await recorder.count()
+        XCTAssertEqual(incompleteRequestCount, 0)
+
+        model.schedule(
+            displayIndex: 1,
+            viewport: CGSize(width: 1200, height: 800),
+            controller: controller
+        )
+        model.schedule(
+            displayIndex: 1,
+            viewport: CGSize(width: 1200, height: 800),
+            controller: controller
+        )
+        try await Task.sleep(for: .milliseconds(600))
+
+        let messages = await recorder.allMessages()
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(try messages[0].uint16BE(at: 6), 2)
+        XCTAssertEqual(try messages[0].uint32BE(at: 12 + 0x9c + 8), 1000)
+        XCTAssertEqual(try messages[0].uint32BE(at: 308 + 0x9c + 8), 1200)
+    }
 }
 
 private actor DynamicResolutionMessageRecorder {
@@ -83,4 +122,5 @@ private actor DynamicResolutionMessageRecorder {
 
     func append(_ message: Data) { messages.append(message) }
     func count() -> Int { messages.count }
+    func allMessages() -> [Data] { messages }
 }

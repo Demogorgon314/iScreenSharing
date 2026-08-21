@@ -20,15 +20,23 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             window.makeKeyAndOrderFront(nil)
             return
         }
-        guard let displayLayout = sessions.session(for: endpoint)?.displayLayoutModel else { return }
+        guard let session = sessions.session(for: endpoint),
+              let displayLayout = session.displayLayoutModel,
+              let dynamicResolution = session.dynamicResolutionModel else { return }
 
         showWindow(
             key: primaryKey,
             sessions: sessions,
             displayLayout: displayLayout,
+            dynamicResolution: dynamicResolution,
             disconnectsSessionOnDisappear: true
         )
-        observeDisplayLayout(displayLayout, endpoint: endpoint, sessions: sessions)
+        observeDisplayLayout(
+            displayLayout,
+            dynamicResolution: dynamicResolution,
+            endpoint: endpoint,
+            sessions: sessions
+        )
         NSApp.activate(ignoringOtherApps: true)
         windowControllers[primaryKey]?.window?.makeKeyAndOrderFront(nil)
     }
@@ -57,6 +65,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
     private func observeDisplayLayout(
         _ displayLayout: AppleDisplayLayoutModel,
+        dynamicResolution: AppleDynamicResolutionModel,
         endpoint: ConnectionEndpoint,
         sessions: SessionManager
     ) {
@@ -67,6 +76,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
                 self.updateWindows(
                     for: endpoint,
                     displayLayout: displayLayout,
+                    dynamicResolution: dynamicResolution,
                     layout: layout,
                     sessions: sessions
                 )
@@ -76,6 +86,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
     private func updateWindows(
         for endpoint: ConnectionEndpoint,
         displayLayout: AppleDisplayLayoutModel,
+        dynamicResolution: AppleDynamicResolutionModel,
         layout: AppleDisplayLayout?,
         sessions: SessionManager
     ) {
@@ -88,6 +99,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
                     key: key,
                     sessions: sessions,
                     displayLayout: displayLayout,
+                    dynamicResolution: dynamicResolution,
                     disconnectsSessionOnDisappear: false
                 )
             }
@@ -104,13 +116,6 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             let key = WindowKey(endpoint: endpoint, displayIndex: displayIndex)
             guard let window = windowControllers[key]?.window else { continue }
             window.title = windowTitle(for: key, displayCount: displayCount)
-            if let displays = layout?.displays,
-               displays.indices.contains(displayIndex) {
-                let display = displays[displayIndex]
-                if display.width > 0, display.height > 0 {
-                    window.contentAspectRatio = NSSize(width: display.width, height: display.height)
-                }
-            }
         }
     }
 
@@ -118,12 +123,14 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         key: WindowKey,
         sessions: SessionManager,
         displayLayout: AppleDisplayLayoutModel,
+        dynamicResolution: AppleDynamicResolutionModel,
         disconnectsSessionOnDisappear: Bool
     ) {
         let content = SessionView(
             endpoint: key.endpoint,
             sessions: sessions,
             displayLayout: displayLayout,
+            dynamicResolution: dynamicResolution,
             displayIndex: key.displayIndex,
             disconnectsSessionOnDisappear: disconnectsSessionOnDisappear
         )

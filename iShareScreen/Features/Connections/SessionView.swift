@@ -4,6 +4,7 @@ struct SessionView: View {
     let endpoint: ConnectionEndpoint
     @ObservedObject var sessions: SessionManager
     @ObservedObject var displayLayout: AppleDisplayLayoutModel
+    @ObservedObject var dynamicResolution: AppleDynamicResolutionModel
     let displayIndex: Int
     let disconnectsSessionOnDisappear: Bool
     @State private var displayScale = AppleVideoDisplayScale()
@@ -11,7 +12,6 @@ struct SessionView: View {
     @State private var isChangingMode = false
     @State private var modeError: String?
     @State private var viewportSize = CGSize.zero
-    @StateObject private var dynamicResolution = AppleDynamicResolutionModel()
     @AppStorage("synchronizesVideoPresentation") private var synchronizesVideoPresentation = true
     private let viewportStore = SessionViewportStore()
 
@@ -35,8 +35,10 @@ struct SessionView: View {
             }
         }
         .onDisappear {
-            dynamicResolution.cancel()
-            if disconnectsSessionOnDisappear { sessions.disconnect(endpoint) }
+            if disconnectsSessionOnDisappear {
+                dynamicResolution.cancel()
+                sessions.disconnect(endpoint)
+            }
         }
         .navigationTitle(endpoint.displayName)
         .focusedSceneValue(\.sessionEndpoint, endpoint)
@@ -145,7 +147,7 @@ struct SessionView: View {
 
     private func viewportChanged(_ size: CGSize) {
         viewportSize = size
-        viewportStore.save(size, for: endpoint)
+        viewportStore.save(size, for: endpoint, displayIndex: displayIndex)
         scheduleDynamicResolution()
     }
 
@@ -155,15 +157,16 @@ struct SessionView: View {
               session.videoStream?.state == .streaming,
               let controller = session.dynamicResolutionController else { return }
         dynamicResolution.schedule(
+            displayIndex: displayIndex,
             viewport: viewportSize,
             canvas: session.videoStream?.canvas,
+            layout: displayLayout.layout,
             controller: controller
         )
     }
 
     private var canUseDynamicResolution: Bool {
-        displayIndex == 0
-            && displayLayout.supportsDynamicResolution
+        displayLayout.supportsDynamicResolution
             && sessions.session(for: endpoint)?.dynamicResolutionController != nil
     }
 

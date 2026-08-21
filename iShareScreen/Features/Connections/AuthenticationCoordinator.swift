@@ -65,9 +65,15 @@ final class AuthenticationCoordinator: ObservableObject {
         task?.cancel()
         do {
             let savedConnection = connectionStore.connection(for: endpoint)
-            let initialDisplaySize = viewportStore.size(for: endpoint)
+            let virtualDisplayCount = savedConnection?.virtualDisplayCount ?? .one
+            let fallbackDisplaySize = viewportStore.size(for: endpoint)
                 .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
                 ?? AppleDynamicResolutionSize(width: 1440, height: 900)
+            let initialDisplaySizes = (0..<virtualDisplayCount.rawValue).map { displayIndex in
+                viewportStore.size(for: endpoint, displayIndex: displayIndex)
+                    .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
+                    ?? fallbackDisplaySize
+            }
             guard savedConnection?.sharingType != .standard else {
                 throw AuthenticationCoordinatorError.standardModeUnavailable
             }
@@ -78,8 +84,7 @@ final class AuthenticationCoordinator: ObservableObject {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
                     _ = try await controlChannelNegotiator.enableEncryption(
                         for: session,
-                        virtualDisplayCount: savedConnection?.virtualDisplayCount ?? .one,
-                        displaySize: initialDisplaySize
+                        displaySizes: initialDisplaySizes
                     )
                     let negotiation = try await mediaNegotiator.negotiate(session)
                     let input = AppleInputController(session: session, canvas: negotiation.canvas)
@@ -108,9 +113,12 @@ final class AuthenticationCoordinator: ObservableObject {
                     let cursorStore = AppleCursorStore()
                     session.install(cursorStore: cursorStore)
                     let displayLayoutModel = AppleDisplayLayoutModel(
-                        expectedDisplayCount: savedConnection?.virtualDisplayCount.rawValue ?? 1
+                        expectedDisplayCount: virtualDisplayCount.rawValue
                     )
                     session.install(displayLayoutModel: displayLayoutModel)
+                    session.install(dynamicResolutionModel: AppleDynamicResolutionModel(
+                        displayCount: virtualDisplayCount.rawValue
+                    ))
                     let controlMessages = AppleControlMessageService(
                         session: session,
                         input: input,

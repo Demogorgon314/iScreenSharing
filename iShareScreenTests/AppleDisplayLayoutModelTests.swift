@@ -3,11 +3,11 @@ import XCTest
 
 @MainActor
 final class AppleDisplayLayoutModelTests: XCTestCase {
-    func testExpectedMultipleDisplaysDisableDynamicResolutionBeforeLayoutArrives() {
+    func testExpectedMultipleDisplaysSupportCoordinatedDynamicResolution() {
         let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
 
         XCTAssertEqual(model.displayCount, 2)
-        XCTAssertFalse(model.supportsDynamicResolution)
+        XCTAssertTrue(model.supportsDynamicResolution)
 
         model.receive(AppleDisplayLayout(
             scaledWidth: 960,
@@ -16,7 +16,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
             backingHeight: 1080,
             displays: [AppleDisplayRect(displayID: 1, x: 0, y: 0, width: 1920, height: 1080)]
         ))
-        XCTAssertFalse(model.supportsDynamicResolution)
+        XCTAssertTrue(model.supportsDynamicResolution)
     }
 
     func testPublishesEachDisplayCropForMultiDisplayLayout() {
@@ -36,7 +36,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
 
         XCTAssertEqual(model.layout, layout)
         XCTAssertEqual(model.displayCount, 2)
-        XCTAssertFalse(model.supportsDynamicResolution)
+        XCTAssertTrue(model.supportsDynamicResolution)
         XCTAssertEqual(model.sourceRect(for: 0), CGRect(x: 0, y: 0, width: 1920, height: 1080))
         XCTAssertEqual(model.sourceRect(for: 1), CGRect(x: 1920, y: 0, width: 1920, height: 1080))
     }

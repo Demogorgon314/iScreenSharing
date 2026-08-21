@@ -37,4 +37,24 @@ final class SessionViewportStoreTests: XCTestCase {
 
         XCTAssertNil(store.size(for: endpoint))
     }
+
+    func testSavesEachDisplayViewportSeparately() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = SessionViewportStore(defaults: defaults)
+
+        store.save(CGSize(width: 1200, height: 800), for: endpoint, displayIndex: 0)
+        store.save(CGSize(width: 900, height: 700), for: endpoint, displayIndex: 1)
+
+        XCTAssertEqual(store.size(for: endpoint, displayIndex: 0), CGSize(width: 1200, height: 800))
+        XCTAssertEqual(store.size(for: endpoint, displayIndex: 1), CGSize(width: 900, height: 700))
+    }
+
+    func testIgnoresNegativeDisplayIndex() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = SessionViewportStore(defaults: defaults)
+
+        store.save(CGSize(width: 900, height: 700), for: endpoint, displayIndex: -1)
+
+        XCTAssertNil(store.size(for: endpoint, displayIndex: -1))
+    }
 }

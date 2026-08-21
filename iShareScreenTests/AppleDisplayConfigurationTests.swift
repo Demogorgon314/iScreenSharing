@@ -51,6 +51,20 @@ final class AppleDisplayConfigurationTests: XCTestCase {
         XCTAssertEqual(message[12..<308], message[308..<604])
     }
 
+    func testBuildsDifferentModesForEachVirtualDisplay() throws {
+        let message = try AppleDisplayConfiguration.message(displaySizes: [
+            AppleDynamicResolutionSize(width: 1440, height: 900),
+            AppleDynamicResolutionSize(width: 1200, height: 800),
+        ])
+
+        XCTAssertEqual(try message.uint16BE(at: 6), 2)
+        XCTAssertEqual(try message.uint32BE(at: 12 + 0x9c), 2880)
+        XCTAssertEqual(try message.uint32BE(at: 12 + 0x9c + 4), 1800)
+        XCTAssertEqual(try message.uint32BE(at: 308 + 0x9c), 2400)
+        XCTAssertEqual(try message.uint32BE(at: 308 + 0x9c + 4), 1600)
+        XCTAssertNotEqual(message[12..<308], message[308..<604])
+    }
+
     func testRejectsInvalidGeometryAndScale() {
         XCTAssertThrowsError(try AppleDisplayConfiguration.message(width: 0, height: 900)) {
             XCTAssertEqual($0 as? AppleDisplayConfigurationError, .invalidDimensions)
@@ -60,6 +74,15 @@ final class AppleDisplayConfigurationTests: XCTestCase {
         }
         XCTAssertThrowsError(try AppleDisplayConfiguration.message(width: 1440, height: 900, displayCount: 3)) {
             XCTAssertEqual($0 as? AppleDisplayConfigurationError, .invalidDisplayCount)
+        }
+        XCTAssertThrowsError(try AppleDisplayConfiguration.message(displaySizes: [])) {
+            XCTAssertEqual($0 as? AppleDisplayConfigurationError, .invalidDisplayCount)
+        }
+        XCTAssertThrowsError(try AppleDisplayConfiguration.message(
+            displaySizes: [AppleDynamicResolutionSize(width: 1440, height: 900)],
+            backingScale: .greatestFiniteMagnitude
+        )) {
+            XCTAssertEqual($0 as? AppleDisplayConfigurationError, .invalidDimensions)
         }
     }
 

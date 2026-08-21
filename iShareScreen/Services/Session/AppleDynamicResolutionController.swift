@@ -24,9 +24,20 @@ actor AppleDynamicResolutionController {
     }
 
     func request(width: Int, height: Int, backingScale: Double = 2, hdr: Bool = false) async throws {
+        try await request(
+            displaySizes: [AppleDynamicResolutionSize(width: width, height: height)],
+            backingScale: backingScale,
+            hdr: hdr
+        )
+    }
+
+    func request(
+        displaySizes: [AppleDynamicResolutionSize],
+        backingScale: Double = 2,
+        hdr: Bool = false
+    ) async throws {
         let configuration = try AppleDisplayConfiguration.message(
-            width: width,
-            height: height,
+            displaySizes: displaySizes,
             backingScale: backingScale,
             hdr: hdr
         )

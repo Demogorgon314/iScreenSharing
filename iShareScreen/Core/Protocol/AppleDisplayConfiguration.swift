@@ -60,17 +60,68 @@ enum AppleDisplayConfiguration {
         displayCount: Int = 1,
         displayName: String = "iShareScreen Virtual Display"
     ) throws -> Data {
-        guard width > 0, height > 0 else {
-            throw AppleDisplayConfigurationError.invalidDimensions
+        guard (1...2).contains(displayCount) else {
+            throw AppleDisplayConfigurationError.invalidDisplayCount
+        }
+        return try message(
+            displaySizes: Array(
+                repeating: AppleDynamicResolutionSize(width: width, height: height),
+                count: displayCount
+            ),
+            backingScale: backingScale,
+            hdr: hdr,
+            displayName: displayName
+        )
+    }
+
+    static func message(
+        displaySizes: [AppleDynamicResolutionSize],
+        backingScale: Double = 2,
+        hdr: Bool = false,
+        displayName: String = "iShareScreen Virtual Display"
+    ) throws -> Data {
+        guard (1...2).contains(displaySizes.count) else {
+            throw AppleDisplayConfigurationError.invalidDisplayCount
         }
         guard backingScale.isFinite, backingScale > 0 else {
             throw AppleDisplayConfigurationError.invalidBackingScale
         }
-        guard (1...2).contains(displayCount) else {
-            throw AppleDisplayConfigurationError.invalidDisplayCount
+        let maximumDimension = Double(UInt32.max)
+        guard displaySizes.allSatisfy({ size in
+            size.width > 0 && size.height > 0
+                && Double(size.width) * backingScale <= maximumDimension
+                && Double(size.height) * backingScale <= maximumDimension
+        }) else {
+            throw AppleDisplayConfigurationError.invalidDimensions
         }
 
         let descriptorSize = descriptorHeaderSize + modeSize * modes.count
+        let descriptors = try displaySizes.map {
+            try descriptor(
+                size: $0,
+                backingScale: backingScale,
+                hdr: hdr,
+                displayName: displayName,
+                descriptorSize: descriptorSize
+            )
+        }
+        let messageSize = 8 + descriptorSize * descriptors.count
+        var message = Data([0x1d, 0])
+        message.appendUInt16BE(UInt16(messageSize))
+        message.appendUInt16BE(1)
+        message.appendUInt16BE(UInt16(descriptors.count))
+        message.appendUInt32BE(0)
+        descriptors.forEach { message.append($0) }
+        return message
+    }
+
+    private static func descriptor(
+        size: AppleDynamicResolutionSize,
+        backingScale: Double,
+        hdr: Bool,
+        displayName: String,
+        descriptorSize: Int
+    ) throws -> Data {
         var descriptor = Data(repeating: 0, count: descriptorSize)
         descriptor.writeUInt16BE(UInt16(descriptorSize), at: 0)
         let name = Data(displayName.utf8.prefix(maximumNameLength))
@@ -84,8 +135,8 @@ enum AppleDisplayConfiguration {
         descriptor.writeUInt32BE(7, at: 0x96)
         descriptor.writeUInt16BE(UInt16(modes.count), at: 0x9a)
 
-        let horizontalScale = Double(width) / 1920
-        let verticalScale = Double(height) / 1080
+        let horizontalScale = Double(size.width) / 1920
+        let verticalScale = Double(size.height) / 1080
         for (index, mode) in modes.enumerated() {
             let pointWidth = Int((Double(mode.pointWidth) * horizontalScale).rounded())
             let pointHeight = Int((Double(mode.pointHeight) * verticalScale).rounded())
@@ -105,15 +156,7 @@ enum AppleDisplayConfiguration {
             descriptor.writeUInt64BE(60.0.bitPattern, at: offset + 16)
             descriptor.writeUInt32BE(hdr ? 1 : 0, at: offset + 24)
         }
-
-        let messageSize = 8 + descriptorSize * displayCount
-        var message = Data([0x1d, 0])
-        message.appendUInt16BE(UInt16(messageSize))
-        message.appendUInt16BE(1)
-        message.appendUInt16BE(UInt16(displayCount))
-        message.appendUInt32BE(0)
-        for _ in 0..<displayCount { message.append(descriptor) }
-        return message
+        return descriptor
     }
 
     static func layout(from payload: Data) -> AppleDisplayLayout? {

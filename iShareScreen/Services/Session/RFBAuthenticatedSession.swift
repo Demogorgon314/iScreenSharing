@@ -18,6 +18,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var dynamicResolutionController: AppleDynamicResolutionController?
     private(set) var cursorStore: AppleCursorStore?
     private(set) var displayLayoutModel: AppleDisplayLayoutModel?
+    private(set) var dynamicResolutionModel: AppleDynamicResolutionModel?
 
     private let transport: NWConnectionTransport
 
@@ -118,6 +119,11 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     @MainActor
     func install(displayLayoutModel: AppleDisplayLayoutModel) {
         self.displayLayoutModel = displayLayoutModel
+    }
+
+    @MainActor
+    func install(dynamicResolutionModel: AppleDynamicResolutionModel) {
+        self.dynamicResolutionModel = dynamicResolutionModel
     }
 
     deinit {
