@@ -93,7 +93,14 @@ enum AppleMediaConfiguration {
         message[0] = 0x1c
         message.writeUInt16BE(UInt16(messageSize), at: 2)
         message.writeUInt16BE(3, at: 4)
-        message[6] = secondaryVideoOffer.isEmpty ? 0x05 : 0x07
+        if secondaryVideoOffer.isEmpty {
+            // Preserve the original single-stream wire format. Changing these
+            // bytes when dual-stream support was added also changed whether
+            // the server composites its software cursor into the HEVC stream.
+            message.writeUInt32BE(7, at: 6)
+        } else {
+            message[6] = 0x07
+        }
         message.writeUInt16BE(UInt16(audioOffer.count), at: 10)
         message.writeUInt16BE(UInt16(videoOffer.count), at: 12)
         message.writeUInt16BE(UInt16(secondaryVideoOffer.count), at: 14)
