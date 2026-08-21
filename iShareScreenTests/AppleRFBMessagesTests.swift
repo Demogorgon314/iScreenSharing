@@ -53,6 +53,13 @@ final class AppleRFBMessagesTests: XCTestCase {
         XCTAssertEqual(AppleRFBMessages.controlMode(observing: false), Data([0x0a, 0, 0, 1]))
     }
 
+    func testSelectsCombinedDisplayAggregate() {
+        XCTAssertEqual(
+            AppleRFBMessages.selectCombinedDisplays,
+            Data([0x0d, 0x01, 0, 0, 0, 0, 0, 0])
+        )
+    }
+
     func testBuildsAppleEncryptedPointerEvent() throws {
         let message = try AppleRFBMessages.encryptedPointerEvent(
             buttons: 3,

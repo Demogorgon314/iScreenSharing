@@ -10,6 +10,7 @@ actor AppleDynamicResolutionController {
     private let applyCanvas: ApplyCanvas
     private var mediaReofferPending = false
     private var hasReceivedInitialLayout = false
+    private var combinedDisplaySelectionPending = false
 
     init(
         initialCanvas: AppleCanvas,
@@ -41,11 +42,16 @@ actor AppleDynamicResolutionController {
             backingScale: backingScale,
             hdr: hdr
         )
+        combinedDisplaySelectionPending = displaySizes.count > 1
         try await sendMessage(configuration)
         try await sendMessage(AppleRFBMessages.framebufferUpdateRequest())
     }
 
     func receive(_ layout: AppleDisplayLayout) async throws {
+        if combinedDisplaySelectionPending, layout.displays.count > 1 {
+            try await sendMessage(AppleRFBMessages.selectCombinedDisplays)
+            combinedDisplaySelectionPending = false
+        }
         try await sendMessage(AppleRFBMessages.framebufferUpdateRequest())
         guard hasReceivedInitialLayout else {
             hasReceivedInitialLayout = true

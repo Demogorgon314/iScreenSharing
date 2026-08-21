@@ -25,6 +25,10 @@ enum AppleRFBMessages {
         0x12, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x00,
     ])
 
+    static let selectCombinedDisplays = Data([
+        0x0d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ])
+
     static func viewerInfo(
         applicationVersion: (UInt32, UInt32, UInt32) = (6, 1, 0),
         operatingSystemVersion: (UInt32, UInt32, UInt32) = (15, 3, 0)

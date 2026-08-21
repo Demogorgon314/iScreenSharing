@@ -30,6 +30,29 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         XCTAssertEqual(messages[1], AppleRFBMessages.framebufferUpdateRequest())
     }
 
+    func testReselectsCombinedCanvasBeforeMultiDisplayMediaReoffer() async throws {
+        let recorder = MessageRecorder()
+        let controller = makeController(recorder: recorder)
+
+        try await controller.receive(makeLayout(width: 1920, height: 1080))
+        try await controller.request(displaySizes: [
+            AppleDynamicResolutionSize(width: 1440, height: 900),
+            AppleDynamicResolutionSize(width: 1200, height: 800),
+        ])
+        try await controller.receive(makeLayout(
+            width: 5280,
+            height: 1800,
+            displays: [
+                AppleDisplayRect(displayID: 1, x: 0, y: 0, width: 2880, height: 1800),
+                AppleDisplayRect(displayID: 2, x: 2880, y: 0, width: 2400, height: 1600),
+            ]
+        ))
+
+        let messages = await recorder.messages
+        XCTAssertEqual(messages.map(\.first), [0x03, 0x1d, 0x03, 0x0d, 0x03, 0x1c])
+        XCTAssertEqual(messages[3], AppleRFBMessages.selectCombinedDisplays)
+    }
+
     func testChangedLayoutAppliesCanvasAndReoffersMedia() async throws {
         let recorder = MessageRecorder()
         let applied = CanvasRecorder()
@@ -123,13 +146,19 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         )
     }
 
-    private func makeLayout(width: Int, height: Int) -> AppleDisplayLayout {
+    private func makeLayout(
+        width: Int,
+        height: Int,
+        displays: [AppleDisplayRect]? = nil
+    ) -> AppleDisplayLayout {
         AppleDisplayLayout(
             scaledWidth: width / 2,
             scaledHeight: height / 2,
             backingWidth: width,
             backingHeight: height,
-            displays: [AppleDisplayRect(displayID: 1, x: 0, y: 0, width: width, height: height)]
+            displays: displays ?? [
+                AppleDisplayRect(displayID: 1, x: 0, y: 0, width: width, height: height),
+            ]
         )
     }
 }
