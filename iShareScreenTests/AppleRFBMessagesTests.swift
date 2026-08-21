@@ -47,10 +47,12 @@ final class AppleRFBMessagesTests: XCTestCase {
         let message = try AppleRFBMessages.setEncodings()
 
         XCTAssertEqual(message.count, 4 + AppleRFBMessages.highPerformanceEncodings.count * 4)
-        XCTAssertEqual(message.prefix(4), Data([0x02, 0x00, 0x00, 0x0d]))
+        XCTAssertEqual(message.prefix(4), Data([0x02, 0x00, 0x00, 0x0b]))
         XCTAssertEqual(try message.int32BE(at: 4), 1010)
-        XCTAssertEqual(try message.int32BE(at: 4 + 7 * 4), -223)
+        XCTAssertEqual(try message.int32BE(at: 4 + 5 * 4), -223)
         XCTAssertEqual(try message.int32BE(at: message.count - 4), 1110)
+        XCTAssertFalse(AppleRFBMessages.highPerformanceEncodings.contains(6))
+        XCTAssertFalse(AppleRFBMessages.highPerformanceEncodings.contains(16))
     }
 
     func testBuildsKeyEventWithX11KeySymbol() {
@@ -84,14 +86,27 @@ final class AppleRFBMessagesTests: XCTestCase {
             buttons: 3,
             x: 0x1234,
             y: 0x5678,
+            clickCount: 2,
             contentKey: Data(repeating: 0, count: 16)
         )
         XCTAssertEqual(
             message,
             Data([
-                0x10, 0x00, 0xe9, 0x3e, 0x9b, 0xe4, 0x74, 0xb5, 0xae,
+                0x10, 0x05, 0xe9, 0x3e, 0x9b, 0xe4, 0x74, 0xb5, 0xae,
                 0x84, 0xd2, 0x92, 0x49, 0xa6, 0xf6, 0x8f, 0xfd, 0x77,
             ])
         )
+    }
+
+
+    func testEncryptedPointerMovementUsesVersionOneFlag() throws {
+        let message = try AppleRFBMessages.encryptedPointerEvent(
+            buttons: 0,
+            x: 1,
+            y: 2,
+            contentKey: Data(repeating: 0, count: 16)
+        )
+
+        XCTAssertEqual(message[1], 1)
     }
 }

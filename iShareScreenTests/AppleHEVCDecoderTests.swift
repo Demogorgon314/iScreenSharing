@@ -23,4 +23,30 @@ final class AppleHEVCDecoderTests: XCTestCase {
             XCTAssertEqual(error as? AppleHEVCDecoderError, .incompleteParameterSets)
         }
     }
+
+    func testRequiresDecoderReplacementWhenParameterSetsChange() {
+        let configured = AppleHEVCParameterSets(
+            video: Data([1]),
+            sequence: Data([2]),
+            pictures: [Data([3])]
+        )
+        let changed = AppleHEVCParameterSets(
+            video: Data([1]),
+            sequence: Data([4]),
+            pictures: [Data([3])]
+        )
+
+        XCTAssertFalse(AppleHEVCDecoder.requiresReplacement(
+            configured: configured,
+            current: configured
+        ))
+        XCTAssertTrue(AppleHEVCDecoder.requiresReplacement(
+            configured: configured,
+            current: changed
+        ))
+        XCTAssertFalse(AppleHEVCDecoder.requiresReplacement(
+            configured: configured,
+            current: AppleHEVCParameterSets()
+        ))
+    }
 }

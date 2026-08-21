@@ -46,9 +46,7 @@ final class RemoteVideoCanvasNSView: NSView {
     var synchronizesPresentation: Bool {
         didSet {
             guard synchronizesPresentation != oldValue else { return }
-            displayLayers.compactMap { $0 as? AppleNV24MetalLayer }.forEach {
-                $0.synchronizesPresentation = synchronizesPresentation
-            }
+            (displayLayer as? AppleNV24MetalLayer)?.synchronizesPresentation = synchronizesPresentation
         }
     }
     var sourceRect: CGRect? {
@@ -65,8 +63,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private let frames: AppleVideoFrameStore
     private let input: AppleInputController?
     private let cursors: AppleCursorStore?
-    private let tileContainers: [CALayer]
-    private let displayLayers: [CALayer]
+    private let displayLayer: CALayer
     private var observer: UUID?
     private var cursorObserver: UUID?
     private var remoteCursor = NSCursor.arrow
@@ -75,7 +72,8 @@ final class RemoteVideoCanvasNSView: NSView {
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var buttonMask: UInt8 = 0
     private var lastRemotePoint: (x: Int, y: Int)?
-    private var scrollRemainder: CGFloat = 0
+    private var horizontalScrollRemainder: CGFloat = 0
+    private var verticalScrollRemainder: CGFloat = 0
     private var activeModifiers = [UInt16: UInt32]()
     private var inputTask: Task<Void, Never>?
 
@@ -102,28 +100,22 @@ final class RemoteVideoCanvasNSView: NSView {
         self.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         self.inputDisplayID = inputDisplayID
         let metalContext = AppleNV24MetalContext()
-        tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
         decodedTileHeights = Array(repeating: nil, count: canvas.tileCount)
-        displayLayers = (0..<canvas.tileCount).map { _ in
-            if let metalContext {
-                return AppleNV24MetalLayer(
-                    context: metalContext,
-                    synchronizesPresentation: synchronizesPresentation
-                )
-            }
+        if let metalContext {
+            displayLayer = AppleNV24MetalLayer(
+                context: metalContext,
+                synchronizesPresentation: synchronizesPresentation
+            )
+        } else {
             let fallback = CALayer()
             fallback.backgroundColor = NSColor.black.cgColor
-            return fallback
+            displayLayer = fallback
         }
         super.init(frame: .zero)
 
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
-        for (container, displayLayer) in zip(tileContainers, displayLayers) {
-            container.masksToBounds = true
-            container.addSublayer(displayLayer)
-            layer?.addSublayer(container)
-        }
+        layer?.addSublayer(displayLayer)
         observer = frames.addObserver { [weak self] frames in
             self?.display(frames)
         }
@@ -164,7 +156,7 @@ final class RemoteVideoCanvasNSView: NSView {
         }
         if window.isKeyWindow { selectInputDisplay() }
         let scale = window.backingScaleFactor
-        displayLayers.forEach { $0.contentsScale = scale }
+        displayLayer.contentsScale = scale
         display(currentFrames())
     }
 
@@ -179,18 +171,9 @@ final class RemoteVideoCanvasNSView: NSView {
             fixedScale: displayScale.fixedScale,
             sourceRect: sourceRect
         )
-        for (index, layout) in layouts.enumerated() {
-            tileContainers[index].frame = backingAlignedRect(
-                layout.container,
-                options: [.alignMinXOutward, .alignMaxXOutward, .alignMinYOutward, .alignMaxYOutward]
-            )
-            displayLayers[index].frame = backingAlignedRect(
-                layout.content,
-                options: [.alignMinXOutward, .alignMaxXOutward, .alignMinYOutward, .alignMaxYOutward]
-            )
-            tileContainers[index].isHidden = layout.container.isEmpty
-        }
-        presentMetalLayers()
+        displayLayer.frame = bounds
+        (displayLayer as? AppleNV24MetalLayer)?.update(layouts: layouts, bounds: bounds)
+        presentMetalLayer()
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -253,14 +236,17 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let input, let point = remotePoint(for: event) ?? lastRemotePoint else { return }
-        scrollRemainder += event.scrollingDeltaY
-        let wholeTicks = Int(scrollRemainder)
-        guard wholeTicks != 0 else { return }
-        scrollRemainder -= CGFloat(wholeTicks)
+        horizontalScrollRemainder += event.scrollingDeltaX
+        verticalScrollRemainder += event.scrollingDeltaY
+        let horizontalTicks = Int(horizontalScrollRemainder)
+        let verticalTicks = Int(verticalScrollRemainder)
+        guard horizontalTicks != 0 || verticalTicks != 0 else { return }
+        horizontalScrollRemainder -= CGFloat(horizontalTicks)
+        verticalScrollRemainder -= CGFloat(verticalTicks)
         enqueueInput {
             await input.scroll(
-                up: wholeTicks > 0,
-                ticks: abs(wholeTicks),
+                verticalTicks: verticalTicks,
+                horizontalTicks: horizontalTicks,
                 x: point.x,
                 y: point.y,
                 displayID: self.inputDisplayID
@@ -332,8 +318,15 @@ final class RemoteVideoCanvasNSView: NSView {
         guard let input, let point = remotePoint(for: event) else { return }
         lastRemotePoint = point
         let buttons = buttonMask
+        let clickCount = event.clickCount
         enqueueInput {
-            await input.pointer(buttons: buttons, x: point.x, y: point.y, displayID: self.inputDisplayID)
+            await input.pointer(
+                buttons: buttons,
+                x: point.x,
+                y: point.y,
+                displayID: self.inputDisplayID,
+                clickCount: clickCount
+            )
         }
     }
 
@@ -377,26 +370,26 @@ final class RemoteVideoCanvasNSView: NSView {
         for (tileIndex, pixelBuffer) in frames.sorted(by: { $0.key < $1.key }) {
             display(pixelBuffer, at: tileIndex)
         }
-        presentMetalLayers()
+        presentMetalLayer()
     }
 
     private func display(_ pixelBuffer: CVPixelBuffer, at tileIndex: Int) {
-        guard displayLayers.indices.contains(tileIndex) else { return }
+        guard decodedTileHeights.indices.contains(tileIndex) else { return }
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
         if decodedTileHeights[tileIndex] != height {
             decodedTileHeights[tileIndex] = height
             needsLayout = true
         }
 
-        (displayLayers[tileIndex] as? AppleNV24MetalLayer)?.update(pixelBuffer)
+        (displayLayer as? AppleNV24MetalLayer)?.update(pixelBuffer, at: tileIndex)
     }
 
-    private func presentMetalLayers() {
-        AppleNV24MetalLayer.present(displayLayers.compactMap { $0 as? AppleNV24MetalLayer })
+    private func presentMetalLayer() {
+        (displayLayer as? AppleNV24MetalLayer)?.present()
     }
 
     private func currentFrames() -> AppleVideoFrameStore.FrameBatch {
-        displayLayers.indices.reduce(into: [:]) { result, tileIndex in
+        (0..<canvas.tileCount).reduce(into: [:]) { result, tileIndex in
             result[tileIndex] = frames.frame(at: tileIndex)
         }
     }

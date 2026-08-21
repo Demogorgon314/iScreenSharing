@@ -22,4 +22,22 @@ final class AppleInputControllerTests: XCTestCase {
         XCTAssertEqual(selection.message(for: nil), AppleRFBMessages.selectCombinedDisplays)
         XCTAssertNil(selection.message(for: nil))
     }
+
+    func testBuildsVerticalAndHorizontalFallbackScrollButtons() {
+        XCTAssertEqual(
+            AppleInputController.scrollButtons(verticalTicks: 2, horizontalTicks: -1),
+            [
+                AppleInputController.scrollUp, 0,
+                AppleInputController.scrollUp, 0,
+                AppleInputController.scrollRight, 0,
+            ]
+        )
+        XCTAssertEqual(
+            AppleInputController.scrollButtons(verticalTicks: -1, horizontalTicks: 1),
+            [
+                AppleInputController.scrollDown, 0,
+                AppleInputController.scrollLeft, 0,
+            ]
+        )
+    }
 }

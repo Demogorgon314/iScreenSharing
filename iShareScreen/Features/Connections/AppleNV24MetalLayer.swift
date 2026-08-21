@@ -42,18 +42,18 @@ final class AppleNV24MetalContext {
         float2 textureCoordinate;
     };
 
-    vertex VertexOutput nv24Vertex(uint index [[vertex_id]]) {
-        const float2 positions[] = {
-            float2(-1.0, -1.0),
-            float2( 3.0, -1.0),
-            float2(-1.0,  3.0)
+    struct VertexInput {
+        float2 position;
+        float2 textureCoordinate;
+    };
+
+    vertex VertexOutput nv24Vertex(
+        uint index [[vertex_id]],
+        constant VertexInput *vertices [[buffer(0)]]) {
+        return {
+            float4(vertices[index].position, 0.0, 1.0),
+            vertices[index].textureCoordinate
         };
-        const float2 coordinates[] = {
-            float2(0.0, 1.0),
-            float2(2.0, 1.0),
-            float2(0.0, -1.0)
-        };
-        return { float4(positions[index], 0.0, 1.0), coordinates[index] };
     }
 
     fragment float4 nv24Fragment(
@@ -75,9 +75,16 @@ final class AppleNV24MetalContext {
 
 @MainActor
 final class AppleNV24MetalLayer: CAMetalLayer {
+    private struct Vertex {
+        let position: SIMD2<Float>
+        let textureCoordinate: SIMD2<Float>
+    }
+
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoRenderer")
     private let context: AppleNV24MetalContext
-    private var latestFrame: CVPixelBuffer?
+    private var latestFrames = [Int: CVPixelBuffer]()
+    private var tileLayouts = [AppleVideoCanvasLayout.Tile]()
+    private var renderingBounds = CGRect.zero
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
     }
@@ -98,7 +105,9 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             fatalError("AppleNV24MetalLayer can only copy its own presentation layer")
         }
         context = source.context
-        latestFrame = source.latestFrame
+        latestFrames = source.latestFrames
+        tileLayouts = source.tileLayouts
+        renderingBounds = source.renderingBounds
         synchronizesPresentation = source.synchronizesPresentation
         super.init(layer: layer)
         configurePresentation()
@@ -109,21 +118,20 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         fatalError("init(coder:) is not supported")
     }
 
-    func update(_ pixelBuffer: CVPixelBuffer) {
-        latestFrame = pixelBuffer
+    func update(_ pixelBuffer: CVPixelBuffer, at tileIndex: Int) {
+        latestFrames[tileIndex] = pixelBuffer
     }
 
-    static func present(_ layers: [AppleNV24MetalLayer]) {
-        guard let first = layers.first,
-              layers.allSatisfy({ $0.latestFrame != nil }),
-              layers.dropFirst().allSatisfy({ $0.context === first.context }),
-              let commandBuffer = first.context.commandQueue.makeCommandBuffer() else { return }
-        var drawables = [CAMetalDrawable]()
-        for layer in layers {
-            guard let drawable = layer.encode(into: commandBuffer) else { return }
-            drawables.append(drawable)
-        }
-        drawables.forEach { commandBuffer.present($0) }
+    func update(layouts: [AppleVideoCanvasLayout.Tile], bounds: CGRect) {
+        tileLayouts = layouts
+        renderingBounds = bounds
+    }
+
+    func present() {
+        guard !latestFrames.isEmpty,
+              let commandBuffer = context.commandQueue.makeCommandBuffer(),
+              let drawable = encode(into: commandBuffer) else { return }
+        commandBuffer.present(drawable)
         let logger = Self.logger
         commandBuffer.addCompletedHandler { commandBuffer in
             guard commandBuffer.status == .error else { return }
@@ -140,28 +148,17 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     override func display() {
-        Self.present([self])
+        present()
     }
 
     private func encode(into commandBuffer: MTLCommandBuffer) -> CAMetalDrawable? {
-        guard let frame = latestFrame,
-              CVPixelBufferGetPlaneCount(frame) >= 2 else { return nil }
+        guard renderingBounds.width > 0, renderingBounds.height > 0 else { return nil }
         let scale = max(contentsScale, 1)
         drawableSize = CGSize(
             width: max(1, bounds.width * scale),
             height: max(1, bounds.height * scale)
         )
-        guard let drawable = nextDrawable(),
-              let luma = texture(
-                  from: frame,
-                  plane: 0,
-                  format: .r8Unorm
-              ),
-              let chroma = texture(
-                  from: frame,
-                  plane: 1,
-                  format: .rg8Unorm
-              ) else { return nil }
+        guard let drawable = nextDrawable() else { return nil }
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
@@ -170,11 +167,44 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
         encoder.setRenderPipelineState(context.pipeline)
-        encoder.setFragmentTexture(luma, index: 0)
-        encoder.setFragmentTexture(chroma, index: 1)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        for (tileIndex, frame) in latestFrames.sorted(by: { $0.key < $1.key }) {
+            guard tileLayouts.indices.contains(tileIndex),
+                  CVPixelBufferGetPlaneCount(frame) >= 2,
+                  let vertices = vertices(for: tileLayouts[tileIndex]),
+                  let luma = texture(from: frame, plane: 0, format: .r8Unorm),
+                  let chroma = texture(from: frame, plane: 1, format: .rg8Unorm) else { continue }
+            encoder.setVertexBytes(
+                vertices,
+                length: MemoryLayout<Vertex>.stride * vertices.count,
+                index: 0
+            )
+            encoder.setFragmentTexture(luma, index: 0)
+            encoder.setFragmentTexture(chroma, index: 1)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
         encoder.endEncoding()
         return drawable
+    }
+
+    private func vertices(for layout: AppleVideoCanvasLayout.Tile) -> [Vertex]? {
+        let container = layout.container
+        let content = layout.content
+        guard !container.isEmpty, !content.isEmpty else { return nil }
+
+        let left = Float((container.minX - renderingBounds.minX) / renderingBounds.width * 2 - 1)
+        let right = Float((container.maxX - renderingBounds.minX) / renderingBounds.width * 2 - 1)
+        let bottom = Float((container.minY - renderingBounds.minY) / renderingBounds.height * 2 - 1)
+        let top = Float((container.maxY - renderingBounds.minY) / renderingBounds.height * 2 - 1)
+        let u0 = Float((0 - content.minX) / content.width)
+        let u1 = Float((container.width - content.minX) / content.width)
+        let vBottom = Float(1 - (0 - content.minY) / content.height)
+        let vTop = Float(1 - (container.height - content.minY) / content.height)
+        return [
+            Vertex(position: SIMD2(left, bottom), textureCoordinate: SIMD2(u0, vBottom)),
+            Vertex(position: SIMD2(right, bottom), textureCoordinate: SIMD2(u1, vBottom)),
+            Vertex(position: SIMD2(left, top), textureCoordinate: SIMD2(u0, vTop)),
+            Vertex(position: SIMD2(right, top), textureCoordinate: SIMD2(u1, vTop)),
+        ]
     }
 
     private func texture(

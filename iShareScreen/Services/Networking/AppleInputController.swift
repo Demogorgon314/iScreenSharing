@@ -16,6 +16,8 @@ actor AppleInputController {
     static let middleButton: UInt8 = 1 << 2
     static let scrollUp: UInt8 = 1 << 3
     static let scrollDown: UInt8 = 1 << 4
+    static let scrollLeft: UInt8 = 1 << 5
+    static let scrollRight: UInt8 = 1 << 6
 
     private weak var session: RFBAuthenticatedSession?
     private var canvas: AppleCanvas
@@ -28,7 +30,13 @@ actor AppleInputController {
         self.canvas = canvas
     }
 
-    func pointer(buttons: UInt8, x: Int, y: Int, displayID: UInt32? = nil) async {
+    func pointer(
+        buttons: UInt8,
+        x: Int,
+        y: Int,
+        displayID: UInt32? = nil,
+        clickCount: Int = 0
+    ) async {
         guard let session, let recordLayer = session.recordLayer, !isClosed else { return }
         let point = Self.clampedPoint(x: x, y: y, canvas: canvas)
         do {
@@ -39,6 +47,7 @@ actor AppleInputController {
                 buttons: buttons,
                 x: point.x,
                 y: point.y,
+                clickCount: clickCount,
                 contentKey: recordLayer.contentKey
             )
             try await session.sendEncrypted(message)
@@ -50,11 +59,40 @@ actor AppleInputController {
     }
 
     func scroll(up: Bool, ticks: Int, x: Int, y: Int, displayID: UInt32? = nil) async {
-        let count = min(max(ticks, 0), 50)
-        guard count > 0 else { return }
-        for _ in 0..<count {
-            await pointer(buttons: up ? Self.scrollUp : Self.scrollDown, x: x, y: y, displayID: displayID)
-            await pointer(buttons: 0, x: x, y: y, displayID: displayID)
+        await scroll(
+            verticalTicks: up ? ticks : -ticks,
+            horizontalTicks: 0,
+            x: x,
+            y: y,
+            displayID: displayID
+        )
+    }
+
+    func scroll(
+        verticalTicks: Int,
+        horizontalTicks: Int,
+        x: Int,
+        y: Int,
+        displayID: UInt32? = nil
+    ) async {
+        for button in Self.scrollButtons(
+            verticalTicks: verticalTicks,
+            horizontalTicks: horizontalTicks
+        ) {
+            await pointer(buttons: button, x: x, y: y, displayID: displayID)
+        }
+    }
+
+    static func scrollButtons(verticalTicks: Int, horizontalTicks: Int) -> [UInt8] {
+        let axes: [(ticks: Int, positive: UInt8, negative: UInt8)] = [
+            (verticalTicks, scrollUp, scrollDown),
+            (horizontalTicks, scrollLeft, scrollRight),
+        ]
+        return axes.flatMap { ticks, positiveButton, negativeButton -> [UInt8] in
+            let count = min(abs(ticks), 50)
+            guard count > 0 else { return [] }
+            let button = ticks > 0 ? positiveButton : negativeButton
+            return Array(repeating: [button, 0], count: count).flatMap { $0 }
         }
     }
 

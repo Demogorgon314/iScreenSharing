@@ -2,7 +2,7 @@ import Foundation
 
 enum AppleRFBMessages {
     static let highPerformanceEncodings: [Int32] = [
-        1010, 1011, 1002, 6, 16, 1104, 1100,
+        1010, 1011, 1002, 1104, 1100,
         -223, 1101, 1105, 1107, 1109, 1110,
     ]
 
@@ -109,6 +109,7 @@ enum AppleRFBMessages {
         buttons: UInt8,
         x: UInt16,
         y: UInt16,
+        clickCount: Int = 0,
         contentKey: Data
     ) throws -> Data {
         var plaintext = Data(repeating: 0, count: 10)
@@ -116,7 +117,8 @@ enum AppleRFBMessages {
         plaintext.append(buttons)
         plaintext.appendUInt16BE(x)
         plaintext.appendUInt16BE(y)
-        return Data([0x10, 0x00]) + (try Cryptography.encryptAESECB(plaintext, key: contentKey))
+        let flags = UInt8(1 | ((max(0, clickCount) & 7) << 1))
+        return Data([0x10, flags]) + (try Cryptography.encryptAESECB(plaintext, key: contentKey))
     }
 }
 

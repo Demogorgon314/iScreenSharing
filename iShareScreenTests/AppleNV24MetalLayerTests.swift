@@ -18,4 +18,24 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertFalse(layer.displaySyncEnabled)
         XCTAssertFalse(layer.presentsWithTransaction)
     }
+
+    func testVideoCanvasUsesOneMetalLayerForAllTiles() {
+        let view = RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            frames: AppleVideoFrameStore(),
+            input: nil,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+
+        XCTAssertEqual(
+            view.layer?.sublayers?.filter { $0 is AppleNV24MetalLayer }.count,
+            1
+        )
+    }
 }

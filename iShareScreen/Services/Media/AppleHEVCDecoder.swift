@@ -74,6 +74,13 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         return payload
     }
 
+    static func requiresReplacement(
+        configured: AppleHEVCParameterSets,
+        current: AppleHEVCParameterSets
+    ) -> Bool {
+        current.isComplete && current != configured
+    }
+
     private static func makeFormatDescription(
         _ parameterSets: AppleHEVCParameterSets
     ) throws -> CMVideoFormatDescription {

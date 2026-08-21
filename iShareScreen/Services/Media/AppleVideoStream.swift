@@ -41,6 +41,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private let countLock = NSLock()
     private var timer: DispatchSourceTimer?
     private var decoder: AppleHEVCDecoder?
+    private var decoderParameterSets: AppleHEVCParameterSets?
     private var sourceToTile = [UInt32: Int]()
     private var abandonedSources = Set<UInt32>()
     private var cachedUnits = [UInt32: [CachedUnit]]()
@@ -89,6 +90,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 }
                 decoder?.close()
                 decoder = nil
+                decoderParameterSets = nil
                 sourceToTile.removeAll(keepingCapacity: false)
                 abandonedSources.removeAll(keepingCapacity: false)
                 cachedUnits.removeAll(keepingCapacity: false)
@@ -139,6 +141,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         queue.async { [weak self] in
             self?.decoder?.close()
             self?.decoder = nil
+            self?.decoderParameterSets = nil
         }
         publishState(.stopped)
     }
@@ -166,6 +169,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         let accessUnits = processor.process(datagrams)
         sendPendingNACKs()
         if decoder == nil { prepareDecoderIfPossible() }
+        replaceDecoderForChangedParameterSetsIfNeeded()
         guard !accessUnits.isEmpty else {
             if decoder != nil {
                 adoptFreshSourcesIfNeeded()
@@ -243,6 +247,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             decoder = try AppleHEVCDecoder(parameterSets: parameterSets) { [weak self] tileIndex, decodingOrderNumber, frame in
                 self?.publish(frame, tileIndex: tileIndex, decodingOrderNumber: decodingOrderNumber)
             }
+            decoderParameterSets = parameterSets
             countLock.withVideoStreamLock {
                 self.lastDecodedFrameTime = ProcessInfo.processInfo.systemUptime
             }
@@ -268,6 +273,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
         decoder?.close()
         decoder = nil
+        decoderParameterSets = nil
         countLock.withVideoStreamLock { self.lastDecodedFrameTime = now }
         prepareDecoder(for: sources)
         for tileIndex in sources.indices { requestKeyFrame(for: tileIndex) }
@@ -301,6 +307,20 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 )
             }
         }
+    }
+
+    private func replaceDecoderForChangedParameterSetsIfNeeded() {
+        guard decoder != nil,
+              let decoderParameterSets,
+              AppleHEVCDecoder.requiresReplacement(
+                  configured: decoderParameterSets,
+                  current: processor.currentParameterSets()
+              ) else { return }
+        let sources = sourceToTile.sorted(by: { $0.value < $1.value }).map(\.key)
+        decoder?.close()
+        decoder = nil
+        self.decoderParameterSets = nil
+        prepareDecoder(for: sources)
     }
 
     private func requestKeyFramesForAllTiles() {
