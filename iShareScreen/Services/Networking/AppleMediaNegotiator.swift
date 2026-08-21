@@ -7,6 +7,18 @@ enum AppleMediaStreamDisplayMapping {
         }
         return 1 - mediaStreamIndex
     }
+
+    static func canvas(
+        forMediaStreamIndex mediaStreamIndex: Int,
+        from displayCanvases: [AppleCanvas]
+    ) -> AppleCanvas? {
+        let displayIndex = displayIndex(
+            forMediaStreamIndex: mediaStreamIndex,
+            displayCount: displayCanvases.count
+        )
+        guard displayCanvases.indices.contains(displayIndex) else { return nil }
+        return displayCanvases[displayIndex]
+    }
 }
 
 struct AppleVideoNegotiation: Equatable, Sendable {
@@ -113,11 +125,15 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                 negotiatedCanvases.append(contentsOf: canvases)
                 let expectedCanvasCount = secondaryOffers == nil ? 1 : 2
                 guard negotiatedCanvases.count >= expectedCanvasCount else { continue }
+                guard let firstCanvas = AppleMediaStreamDisplayMapping.canvas(
+                    forMediaStreamIndex: 0,
+                    from: negotiatedCanvases
+                ) else { continue }
                 var videos = [AppleVideoNegotiation(
                     viewerKey: keys.videoViewer,
                     serverKey: keys.videoServer,
                     synchronizationSource: offers.videoSynchronizationSource,
-                    canvas: negotiatedCanvases[0],
+                    canvas: firstCanvas,
                     mediaStreamIndex: 0,
                     displayIndex: AppleMediaStreamDisplayMapping.displayIndex(
                         forMediaStreamIndex: 0,
@@ -126,12 +142,16 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                 )]
                 if let secondaryOffers,
                    let viewerKey = keys.secondaryVideoViewer,
-                   let serverKey = keys.secondaryVideoServer {
+                   let serverKey = keys.secondaryVideoServer,
+                   let secondCanvas = AppleMediaStreamDisplayMapping.canvas(
+                       forMediaStreamIndex: 1,
+                       from: negotiatedCanvases
+                   ) {
                     videos.append(AppleVideoNegotiation(
                         viewerKey: viewerKey,
                         serverKey: serverKey,
                         synchronizationSource: secondaryOffers.videoSynchronizationSource,
-                        canvas: negotiatedCanvases[1],
+                        canvas: secondCanvas,
                         mediaStreamIndex: 1,
                         displayIndex: AppleMediaStreamDisplayMapping.displayIndex(
                             forMediaStreamIndex: 1,

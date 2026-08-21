@@ -39,4 +39,24 @@ final class AppleMediaNegotiatorTests: XCTestCase {
         )
     }
 
+    func testDualMediaStreamsUseCanvasForTheirMappedDisplay() throws {
+        let displayOne = AppleCanvas(width: 2560, height: 1440, tileCount: 4)
+        let displayTwo = AppleCanvas(width: 1920, height: 1200, tileCount: 4)
+
+        XCTAssertEqual(
+            AppleMediaStreamDisplayMapping.canvas(
+                forMediaStreamIndex: 0,
+                from: [displayOne, displayTwo]
+            ),
+            displayTwo
+        )
+        XCTAssertEqual(
+            AppleMediaStreamDisplayMapping.canvas(
+                forMediaStreamIndex: 1,
+                from: [displayOne, displayTwo]
+            ),
+            displayOne
+        )
+    }
+
 }
