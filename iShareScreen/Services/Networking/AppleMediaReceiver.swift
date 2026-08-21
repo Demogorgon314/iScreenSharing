@@ -91,9 +91,9 @@ final class AppleMediaReceiver: @unchecked Sendable {
         lock.withLock { videoPackets.count }
     }
 
-    func drainVideoPackets(displayIndex: Int = 0) -> [Data] {
+    func drainVideoPackets(mediaStreamIndex: Int = 0) -> [Data] {
         lock.withLock {
-            if displayIndex == 1 {
+            if mediaStreamIndex == 1 {
                 defer { secondaryVideoPackets.removeAll(keepingCapacity: true) }
                 return secondaryVideoPackets
             }
@@ -113,8 +113,8 @@ final class AppleMediaReceiver: @unchecked Sendable {
         try send(datagram, through: controlSocket)
     }
 
-    func sendVideoControl(_ datagram: Data, displayIndex: Int) throws {
-        if displayIndex == 1 {
+    func sendVideoControl(_ datagram: Data, mediaStreamIndex: Int) throws {
+        if mediaStreamIndex == 1 {
             guard let secondaryVideoSocket else {
                 throw AppleMediaReceiverError.secondaryVideoUnavailable
             }

@@ -32,7 +32,8 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
     private let receiver: AppleMediaReceiver
-    private let displayIndex: Int
+    let displayIndex: Int
+    private let mediaStreamIndex: Int
     private let processor: AppleHEVCStreamProcessor
     private let feedback: AppleVideoFeedbackController
     private let queue = DispatchQueue(label: "com.isharescreen.video-stream", qos: .userInteractive)
@@ -62,11 +63,12 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     init(receiver: AppleMediaReceiver, video: AppleVideoNegotiation) throws {
         self.receiver = receiver
+        mediaStreamIndex = video.mediaStreamIndex
         displayIndex = video.displayIndex
         canvas = video.canvas
         processor = try AppleHEVCStreamProcessor(keyBlob: video.serverKey)
         feedback = try AppleVideoFeedbackController(
-            sender: AppleVideoFeedbackSender(receiver: receiver, displayIndex: video.displayIndex),
+            sender: AppleVideoFeedbackSender(receiver: receiver, mediaStreamIndex: video.mediaStreamIndex),
             keyBlob: video.viewerKey,
             synchronizationSource: video.synchronizationSource
         )
@@ -147,7 +149,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func processAvailablePackets() {
         sendReceiverReportIfNeeded()
-        let datagrams = receiver.drainVideoPackets(displayIndex: displayIndex)
+        let datagrams = receiver.drainVideoPackets(mediaStreamIndex: mediaStreamIndex)
         guard !datagrams.isEmpty else {
             if decoder == nil {
                 prepareDecoderIfPossible()
@@ -416,15 +418,15 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
 private final class AppleVideoFeedbackSender: AppleMediaControlSending, @unchecked Sendable {
     private let receiver: AppleMediaReceiver
-    private let displayIndex: Int
+    private let mediaStreamIndex: Int
 
-    init(receiver: AppleMediaReceiver, displayIndex: Int) {
+    init(receiver: AppleMediaReceiver, mediaStreamIndex: Int) {
         self.receiver = receiver
-        self.displayIndex = displayIndex
+        self.mediaStreamIndex = mediaStreamIndex
     }
 
     func sendControl(_ datagram: Data) throws {
-        try receiver.sendVideoControl(datagram, displayIndex: displayIndex)
+        try receiver.sendVideoControl(datagram, mediaStreamIndex: mediaStreamIndex)
     }
 }
 

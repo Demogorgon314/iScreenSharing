@@ -11,7 +11,9 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var mediaNegotiation: AppleMediaNegotiationResult?
     private(set) var mediaReceiver: AppleMediaReceiver?
     private(set) var videoStreams = [AppleVideoStream]()
-    var videoStream: AppleVideoStream? { videoStreams.first }
+    var videoStream: AppleVideoStream? {
+        videoStreams.first(where: { $0.displayIndex == 0 }) ?? videoStreams.first
+    }
     private(set) var inputController: AppleInputController?
     private(set) var controlMessageService: AppleControlMessageService?
     private(set) var clipboardService: AppleClipboardService?
@@ -95,8 +97,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
 
     func videoStream(for displayIndex: Int) -> AppleVideoStream? {
-        guard videoStreams.indices.contains(displayIndex) else { return videoStream }
-        return videoStreams[displayIndex]
+        videoStreams.first(where: { $0.displayIndex == displayIndex }) ?? videoStream
     }
 
     func install(inputController: AppleInputController) {

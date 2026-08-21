@@ -1,10 +1,20 @@
 import Foundation
 
+enum AppleMediaStreamDisplayMapping {
+    static func displayIndex(forMediaStreamIndex mediaStreamIndex: Int, displayCount: Int) -> Int {
+        guard displayCount == 2, (0...1).contains(mediaStreamIndex) else {
+            return mediaStreamIndex
+        }
+        return 1 - mediaStreamIndex
+    }
+}
+
 struct AppleVideoNegotiation: Equatable, Sendable {
     let viewerKey: Data
     let serverKey: Data
     let synchronizationSource: UInt32
     let canvas: AppleCanvas
+    let mediaStreamIndex: Int
     let displayIndex: Int
 }
 
@@ -34,6 +44,7 @@ struct AppleMediaNegotiationResult: Equatable, Sendable {
             serverKey: keys.videoServer,
             synchronizationSource: videoSynchronizationSource,
             canvas: canvas,
+            mediaStreamIndex: 0,
             displayIndex: 0
         )]
     }
@@ -107,7 +118,11 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                     serverKey: keys.videoServer,
                     synchronizationSource: offers.videoSynchronizationSource,
                     canvas: negotiatedCanvases[0],
-                    displayIndex: 0
+                    mediaStreamIndex: 0,
+                    displayIndex: AppleMediaStreamDisplayMapping.displayIndex(
+                        forMediaStreamIndex: 0,
+                        displayCount: displayCount
+                    )
                 )]
                 if let secondaryOffers,
                    let viewerKey = keys.secondaryVideoViewer,
@@ -117,12 +132,18 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                         serverKey: serverKey,
                         synchronizationSource: secondaryOffers.videoSynchronizationSource,
                         canvas: negotiatedCanvases[1],
-                        displayIndex: 1
+                        mediaStreamIndex: 1,
+                        displayIndex: AppleMediaStreamDisplayMapping.displayIndex(
+                            forMediaStreamIndex: 1,
+                            displayCount: displayCount
+                        )
                     ))
                 }
+                let primaryCanvas = videos.first(where: { $0.displayIndex == 0 })?.canvas
+                    ?? videos[0].canvas
                 let result = AppleMediaNegotiationResult(
                     keys: keys,
-                    canvas: videos[0].canvas,
+                    canvas: primaryCanvas,
                     videoSynchronizationSource: offers.videoSynchronizationSource,
                     configuration: configuration,
                     pendingMessages: pendingMessages,
