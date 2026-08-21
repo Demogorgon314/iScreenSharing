@@ -4,14 +4,22 @@ import CoreGraphics
 struct AppleDisplayInputMapping: Equatable {
     let backingFrame: CGRect
     let logicalFrame: CGRect
+    let localBackingSize: CGSize?
+
+    init(backingFrame: CGRect, logicalFrame: CGRect, localBackingSize: CGSize? = nil) {
+        self.backingFrame = backingFrame
+        self.logicalFrame = logicalFrame
+        self.localBackingSize = localBackingSize
+    }
 
     func point(from backingPoint: CGPoint, isDisplayLocal: Bool) -> (x: Int, y: Int)? {
-        guard backingFrame.width > 0, backingFrame.height > 0,
+        let sourceSize = isDisplayLocal ? (localBackingSize ?? backingFrame.size) : backingFrame.size
+        guard sourceSize.width > 0, sourceSize.height > 0,
               logicalFrame.width > 0, logicalFrame.height > 0 else { return nil }
         let localX = backingPoint.x - (isDisplayLocal ? 0 : backingFrame.minX)
         let localY = backingPoint.y - (isDisplayLocal ? 0 : backingFrame.minY)
-        let x = logicalFrame.minX + localX * logicalFrame.width / backingFrame.width
-        let y = logicalFrame.minY + localY * logicalFrame.height / backingFrame.height
+        let x = logicalFrame.minX + localX * logicalFrame.width / sourceSize.width
+        let y = logicalFrame.minY + localY * logicalFrame.height / sourceSize.height
         return (
             Int(min(logicalFrame.maxX - 1, max(logicalFrame.minX, x))),
             Int(min(logicalFrame.maxY - 1, max(logicalFrame.minY, y)))
@@ -80,7 +88,7 @@ final class AppleDisplayLayoutModel: ObservableObject {
         return displays[displayIndex].displayID
     }
 
-    func inputMapping(for displayIndex: Int) -> AppleDisplayInputMapping? {
+    func inputMapping(for displayIndex: Int, localCanvas: AppleCanvas? = nil) -> AppleDisplayInputMapping? {
         guard let displays = layout?.displays,
               displays.indices.contains(displayIndex) else { return nil }
         let display = displays[displayIndex]
@@ -91,7 +99,8 @@ final class AppleDisplayLayoutModel: ObservableObject {
                 y: display.logicalY,
                 width: display.logicalWidth,
                 height: display.logicalHeight
-            )
+            ),
+            localBackingSize: localCanvas.map { CGSize(width: $0.width, height: $0.height) }
         )
     }
 }

@@ -78,6 +78,36 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         )
     }
 
+    func testMapsIndependentStreamsUsingTheirNegotiatedCanvasSizes() {
+        let displayOne = AppleDisplayInputMapping(
+            backingFrame: CGRect(x: 2880, y: 0, width: 3840, height: 2160),
+            logicalFrame: CGRect(x: 1440, y: 0, width: 1920, height: 1080),
+            localBackingSize: CGSize(width: 2560, height: 1440)
+        )
+        let displayTwo = AppleDisplayInputMapping(
+            backingFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            logicalFrame: CGRect(x: 0, y: 0, width: 960, height: 540),
+            localBackingSize: CGSize(width: 2560, height: 1440)
+        )
+
+        XCTAssertEqual(
+            displayOne.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.x,
+            2400
+        )
+        XCTAssertEqual(
+            displayOne.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.y,
+            540
+        )
+        XCTAssertEqual(
+            displayTwo.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.x,
+            480
+        )
+        XCTAssertEqual(
+            displayTwo.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.y,
+            270
+        )
+    }
+
     func testIgnoresIncompleteLayoutBeforeInitialDualDisplayLayout() {
         let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
         let first = AppleDisplayRect(displayID: 11, x: 200, y: 0, width: 300, height: 100)

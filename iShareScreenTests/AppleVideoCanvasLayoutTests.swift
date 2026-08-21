@@ -18,6 +18,20 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
         XCTAssertEqual(layouts[3].content, CGRect(x: 0, y: -2, width: 960, height: 152))
     }
 
+    func testUsesEachDecodedTileHeightWithoutChangingOtherTileGeometry() {
+        let layouts = AppleVideoCanvasLayout.tiles(
+            canvas: AppleCanvas(width: 1920, height: 1200, tileCount: 4),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 600),
+            slotHeights: [304, 304, 304, 320],
+            fixedScale: nil
+        )
+
+        XCTAssertEqual(layouts[0].content, CGRect(x: 0, y: -2, width: 960, height: 152))
+        XCTAssertEqual(layouts[2].content, CGRect(x: 0, y: -2, width: 960, height: 152))
+        XCTAssertEqual(layouts[3].container, CGRect(x: 0, y: 0, width: 960, height: 150))
+        XCTAssertEqual(layouts[3].content, CGRect(x: 0, y: -10, width: 960, height: 160))
+    }
+
     func testCentersCanvasWhenShowingActualSize() {
         let layouts = AppleVideoCanvasLayout.tiles(
             canvas: AppleCanvas(width: 100, height: 80, tileCount: 2),

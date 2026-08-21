@@ -70,7 +70,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private var observer: UUID?
     private var cursorObserver: UUID?
     private var remoteCursor = NSCursor.arrow
-    private var decodedTileHeight: CGFloat?
+    private var decodedTileHeights: [CGFloat?]
     private var trackingArea: NSTrackingArea?
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var buttonMask: UInt8 = 0
@@ -103,6 +103,7 @@ final class RemoteVideoCanvasNSView: NSView {
         self.inputDisplayID = inputDisplayID
         let metalContext = AppleNV24MetalContext()
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
+        decodedTileHeights = Array(repeating: nil, count: canvas.tileCount)
         displayLayers = (0..<canvas.tileCount).map { _ in
             if let metalContext {
                 return AppleNV24MetalLayer(
@@ -169,11 +170,12 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func layout() {
         super.layout()
-        let slotHeight = decodedTileHeight ?? ceil(CGFloat(canvas.height) / CGFloat(canvas.tileCount))
+        let fallbackHeight = ceil(CGFloat(canvas.height) / CGFloat(canvas.tileCount))
+        let slotHeights = decodedTileHeights.map { $0 ?? fallbackHeight }
         let layouts = AppleVideoCanvasLayout.tiles(
             canvas: canvas,
             bounds: bounds,
-            slotHeight: slotHeight,
+            slotHeights: slotHeights,
             fixedScale: displayScale.fixedScale,
             sourceRect: sourceRect
         )
@@ -379,8 +381,8 @@ final class RemoteVideoCanvasNSView: NSView {
     private func display(_ pixelBuffer: CVPixelBuffer, at tileIndex: Int) {
         guard displayLayers.indices.contains(tileIndex) else { return }
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
-        if decodedTileHeight != height {
-            decodedTileHeight = height
+        if decodedTileHeights[tileIndex] != height {
+            decodedTileHeights[tileIndex] = height
             needsLayout = true
         }
 
@@ -440,7 +442,26 @@ enum AppleVideoCanvasLayout {
         fixedScale: CGFloat?,
         sourceRect: CGRect? = nil
     ) -> [Tile] {
-        guard canvas.tileCount > 0, canvas.width > 0, canvas.height > 0, slotHeight > 0 else {
+        guard canvas.tileCount > 0 else { return [] }
+        return tiles(
+            canvas: canvas,
+            bounds: bounds,
+            slotHeights: Array(repeating: slotHeight, count: canvas.tileCount),
+            fixedScale: fixedScale,
+            sourceRect: sourceRect
+        )
+    }
+
+    static func tiles(
+        canvas: AppleCanvas,
+        bounds: CGRect,
+        slotHeights: [CGFloat],
+        fixedScale: CGFloat?,
+        sourceRect: CGRect? = nil
+    ) -> [Tile] {
+        guard canvas.tileCount > 0, canvas.width > 0, canvas.height > 0,
+              slotHeights.count == canvas.tileCount,
+              slotHeights.allSatisfy({ $0 > 0 }) else {
             return []
         }
         let canvasBounds = CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
@@ -459,6 +480,7 @@ enum AppleVideoCanvasLayout {
             height: outputSize.height
         )
         return (0..<canvas.tileCount).map { tileIndex in
+            let slotHeight = slotHeights[tileIndex]
             let logicalStart = CGFloat(canvas.height * tileIndex / canvas.tileCount)
             let logicalEnd = CGFloat(canvas.height * (tileIndex + 1) / canvas.tileCount)
             let validHeight = logicalEnd - logicalStart
