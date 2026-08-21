@@ -12,12 +12,8 @@ enum AppleMediaStreamDisplayMapping {
         forMediaStreamIndex mediaStreamIndex: Int,
         from displayCanvases: [AppleCanvas]
     ) -> AppleCanvas? {
-        let displayIndex = displayIndex(
-            forMediaStreamIndex: mediaStreamIndex,
-            displayCount: displayCanvases.count
-        )
-        guard displayCanvases.indices.contains(displayIndex) else { return nil }
-        return displayCanvases[displayIndex]
+        guard displayCanvases.indices.contains(mediaStreamIndex) else { return nil }
+        return displayCanvases[mediaStreamIndex]
     }
 }
 
