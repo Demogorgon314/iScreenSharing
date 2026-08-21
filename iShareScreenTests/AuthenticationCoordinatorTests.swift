@@ -99,6 +99,42 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertNotNil(session.dynamicResolutionModel)
     }
 
+    func testSeedsDualDisplayLayoutBeforePublishingSession() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = makeSession(endpoint: endpoint)
+        let connections = ConnectionStore(defaults: defaults)
+        connections.record(endpoint)
+        let saved = try XCTUnwrap(connections.connection(for: endpoint))
+        try connections.update(
+            saved,
+            name: saved.name,
+            endpoint: endpoint,
+            preferredUsername: "",
+            sharingType: .highPerformance,
+            virtualDisplayCount: .two
+        )
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(result: .success(session)),
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(pendingMessages: [dualDisplayLayoutMessage()]),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: MockCredentialStore(),
+            connectionStore: connections,
+            sessionManager: SessionManager()
+        )
+
+        coordinator.signIn(username: "user", password: "password", rememberPassword: false)
+        try await waitUntil { coordinator.state == .authenticated }
+
+        let layoutModel = try XCTUnwrap(session.displayLayoutModel)
+        XCTAssertEqual(layoutModel.displayCount, 2)
+        XCTAssertEqual(
+            try XCTUnwrap(layoutModel.inputMapping(for: 1)).backingFrame,
+            CGRect(x: 2160, y: 0, width: 2160, height: 1752)
+        )
+    }
+
     func testRejectedSignInSurfacesErrorWithoutRecordingConnection() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let authenticator = MockAuthenticator(
@@ -211,6 +247,32 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
     }
+
+    private func dualDisplayLayoutMessage() -> Data {
+        var payload = Data(repeating: 0, count: 132)
+        payload.writeUInt16BE(5, at: 0)
+        payload.writeUInt16BE(2160, at: 2)
+        payload.writeUInt16BE(876, at: 4)
+        payload.writeUInt16BE(4320, at: 6)
+        payload.writeUInt16BE(1752, at: 8)
+        payload.writeUInt16BE(2, at: 18)
+        for (index, x) in [0, 2160].enumerated() {
+            let offset = 20 + index * 56
+            payload.writeUInt32BE(UInt32(100 + index), at: offset + 16)
+            payload.writeUInt16BE(UInt16(x / 2), at: offset + 22)
+            payload.writeUInt16BE(UInt16((x + 2160) / 2), at: offset + 26)
+            payload.writeUInt16BE(UInt16(x), at: offset + 30)
+            payload.writeUInt16BE(UInt16(x + 2160), at: offset + 34)
+            payload.writeUInt16BE(876, at: offset + 24)
+            payload.writeUInt16BE(1752, at: offset + 32)
+        }
+        var message = Data([0, 0, 0, 1])
+        message.append(Data(repeating: 0, count: 8))
+        message.appendInt32BE(0x451)
+        message.appendUInt16BE(UInt16(payload.count))
+        message.append(payload)
+        return message
+    }
 }
 
 private final class MockAuthenticator: RFBAuthenticating, @unchecked Sendable {
@@ -299,6 +361,12 @@ private actor DisplaySizeRecorder {
 }
 
 private struct MockMediaNegotiator: AppleMediaNegotiating {
+    let pendingMessages: [Data]
+
+    init(pendingMessages: [Data] = []) {
+        self.pendingMessages = pendingMessages
+    }
+
     func negotiate(
         _ session: RFBAuthenticatedSession,
         displayCount: Int
@@ -314,7 +382,7 @@ private struct MockMediaNegotiator: AppleMediaNegotiating {
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
             videoSynchronizationSource: 0x1122_3344,
             configuration: Data([0x1c]),
-            pendingMessages: []
+            pendingMessages: pendingMessages
         )
         session.install(mediaNegotiation: result)
         return result

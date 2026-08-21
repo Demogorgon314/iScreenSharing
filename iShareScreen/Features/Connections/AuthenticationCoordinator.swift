@@ -118,6 +118,13 @@ final class AuthenticationCoordinator: ObservableObject {
                     let displayLayoutModel = AppleDisplayLayoutModel(
                         expectedDisplayCount: virtualDisplayCount.rawValue
                     )
+                    displayLayoutModel.receivePendingMessages(negotiation.pendingMessages)
+                    if let initialLayout = displayLayoutModel.layout,
+                       initialLayout.displays.count > 1 {
+                        await input.update(canvas: initialLayout.canvas(
+                            tileCount: negotiation.canvas.tileCount
+                        ))
+                    }
                     session.install(displayLayoutModel: displayLayoutModel)
                     session.install(dynamicResolutionModel: AppleDynamicResolutionModel(
                         displayCount: virtualDisplayCount.rawValue

@@ -1,5 +1,6 @@
 import Combine
 import CoreGraphics
+import Foundation
 
 struct AppleDisplayInputMapping: Equatable {
     let backingFrame: CGRect
@@ -74,6 +75,14 @@ final class AppleDisplayLayoutModel: ObservableObject {
             backingHeight: layout.backingHeight,
             displays: displays
         )
+    }
+
+    func receivePendingMessages(_ messages: [Data]) {
+        for message in messages {
+            for layout in AppleFramebufferUpdate.displayLayouts(from: message) {
+                receive(layout)
+            }
+        }
     }
 
     private static func isSpatiallyOrdered(_ lhs: AppleDisplayRect, _ rhs: AppleDisplayRect) -> Bool {
