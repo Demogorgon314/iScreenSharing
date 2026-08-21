@@ -24,7 +24,7 @@ final class AppleMediaConfigurationTests: XCTestCase {
         XCTAssertEqual(message[0], 0x1c)
         XCTAssertEqual(try message.uint16BE(at: 2), UInt16(message.count - 4))
         XCTAssertEqual(try message.uint16BE(at: 4), 3)
-        XCTAssertEqual(message[6..<10], Data([0, 0, 0, 0x07]))
+        XCTAssertEqual(message[6..<10], Data([0, 0, 0, 0x05]))
         XCTAssertEqual(try message.uint16BE(at: 10), 3)
         XCTAssertEqual(try message.uint16BE(at: 12), 2)
         XCTAssertEqual(try message.uint16BE(at: 14), 0)
@@ -56,7 +56,7 @@ final class AppleMediaConfigurationTests: XCTestCase {
             secondaryVideoOffer: Data([0xc1, 0xc2, 0xc3]),
             keys: keys
         )
-        XCTAssertEqual(message[6..<10], Data([0x03, 0, 0, 0]))
+        XCTAssertEqual(message[6..<10], Data([0, 0, 0, 0x07]))
         XCTAssertEqual(try message.uint16BE(at: 14), 3)
         XCTAssertEqual(message.suffix(3), Data([0xc1, 0xc2, 0xc3]))
     }

@@ -93,15 +93,10 @@ enum AppleMediaConfiguration {
         message[0] = 0x1c
         message.writeUInt16BE(UInt16(messageSize), at: 2)
         message.writeUInt16BE(3, at: 4)
-        if secondaryVideoOffer.isEmpty {
-            // Preserve the original single-stream wire format, which keeps
-            // the software cursor out of the HEVC stream.
-            message.writeUInt32BE(7, at: 6)
-        } else {
-            // Bits 0 and 1 enable the primary and secondary video slots. Bit
-            // 2 makes the server composite its cursor into both video streams.
-            message[6] = 0x03
-        }
+        // Bit 0 enables 60 FPS for video 1, bit 1 does the same for video 2,
+        // and bit 2 tells the server not to composite its cursor into video.
+        let flags: UInt32 = secondaryVideoOffer.isEmpty ? 0x05 : 0x07
+        message.writeUInt32BE(flags, at: 6)
         message.writeUInt16BE(UInt16(audioOffer.count), at: 10)
         message.writeUInt16BE(UInt16(videoOffer.count), at: 12)
         message.writeUInt16BE(UInt16(secondaryVideoOffer.count), at: 14)
