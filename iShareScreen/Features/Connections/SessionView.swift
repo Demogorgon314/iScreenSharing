@@ -19,14 +19,19 @@ struct SessionView: View {
         Group {
             if let session = sessions.session(for: endpoint),
                let stream = session.videoStream(for: displayIndex) {
+                let usesIndependentVideoStreams = session.videoStreams.count > 1
                 ActiveVideoSessionView(
                     stream: stream,
                     input: isObserving ? nil : session.inputController,
                     cursors: session.cursorStore,
                     displayScale: displayScale,
                     synchronizesPresentation: synchronizesVideoPresentation,
-                    sourceRect: session.videoStreams.count > 1 ? nil : displayLayout.sourceRect(for: displayIndex),
-                    inputOrigin: displayLayout.inputOrigin(for: displayIndex),
+                    sourceRect: usesIndependentVideoStreams ? nil : displayLayout.sourceRect(for: displayIndex),
+                    inputMapping: displayLayout.inputMapping(for: displayIndex),
+                    inputCoordinatesAreDisplayLocal: usesIndependentVideoStreams,
+                    inputDisplayID: displayLayout.displayCount > 1
+                        ? displayLayout.displayID(for: displayIndex)
+                        : nil,
                     onViewportChange: viewportChanged
                 )
                 .onChange(of: stream.state) { _, state in
@@ -211,7 +216,9 @@ private struct ActiveVideoSessionView: View {
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
     let sourceRect: CGRect?
-    let inputOrigin: CGPoint
+    let inputMapping: AppleDisplayInputMapping?
+    let inputCoordinatesAreDisplayLocal: Bool
+    let inputDisplayID: UInt32?
     let onViewportChange: (CGSize) -> Void
 
     var body: some View {
@@ -225,7 +232,9 @@ private struct ActiveVideoSessionView: View {
                 displayScale: displayScale,
                 synchronizesPresentation: synchronizesPresentation,
                 sourceRect: sourceRect,
-                inputOrigin: inputOrigin
+                inputMapping: inputMapping,
+                inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
+                inputDisplayID: inputDisplayID
             )
             .id(stream.canvas)
             if stream.state != .streaming {

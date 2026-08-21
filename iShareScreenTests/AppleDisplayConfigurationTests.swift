@@ -95,6 +95,10 @@ final class AppleDisplayConfigurationTests: XCTestCase {
         payload.writeUInt16BE(1800, at: 8)
         payload.writeUInt16BE(1, at: 18)
         payload.writeUInt32BE(42, at: 36)
+        payload.writeUInt16BE(10, at: 40)
+        payload.writeUInt16BE(5, at: 42)
+        payload.writeUInt16BE(910, at: 44)
+        payload.writeUInt16BE(1445, at: 46)
         payload.writeUInt16BE(20, at: 48)
         payload.writeUInt16BE(10, at: 50)
         payload.writeUInt16BE(1820, at: 52)
@@ -106,7 +110,17 @@ final class AppleDisplayConfigurationTests: XCTestCase {
         XCTAssertEqual(layout.scaledHeight, 900)
         XCTAssertEqual(layout.canvas(tileCount: 4), AppleCanvas(width: 2880, height: 1800, tileCount: 4))
         XCTAssertEqual(layout.displays, [
-            AppleDisplayRect(displayID: 42, x: 10, y: 20, width: 2880, height: 1800),
+            AppleDisplayRect(
+                displayID: 42,
+                x: 10,
+                y: 20,
+                width: 2880,
+                height: 1800,
+                logicalX: 5,
+                logicalY: 10,
+                logicalWidth: 1440,
+                logicalHeight: 900
+            ),
         ])
     }
 

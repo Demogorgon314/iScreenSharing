@@ -10,7 +10,9 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
     let sourceRect: CGRect?
-    let inputOrigin: CGPoint
+    let inputMapping: AppleDisplayInputMapping?
+    let inputCoordinatesAreDisplayLocal: Bool
+    let inputDisplayID: UInt32?
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
@@ -21,7 +23,9 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             displayScale: displayScale,
             synchronizesPresentation: synchronizesPresentation,
             sourceRect: sourceRect,
-            inputOrigin: inputOrigin
+            inputMapping: inputMapping,
+            inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
+            inputDisplayID: inputDisplayID
         )
     }
 
@@ -29,7 +33,9 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
         view.displayScale = displayScale
         view.synchronizesPresentation = synchronizesPresentation
         view.sourceRect = sourceRect
-        view.inputOrigin = inputOrigin
+        view.inputMapping = inputMapping
+        view.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
+        view.inputDisplayID = inputDisplayID
     }
 }
 
@@ -51,7 +57,9 @@ final class RemoteVideoCanvasNSView: NSView {
             needsLayout = true
         }
     }
-    var inputOrigin: CGPoint
+    var inputMapping: AppleDisplayInputMapping?
+    var inputCoordinatesAreDisplayLocal: Bool
+    var inputDisplayID: UInt32?
 
     private let canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
@@ -64,6 +72,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private var remoteCursor = NSCursor.arrow
     private var decodedTileHeight: CGFloat?
     private var trackingArea: NSTrackingArea?
+    private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var buttonMask: UInt8 = 0
     private var lastRemotePoint: (x: Int, y: Int)?
     private var scrollRemainder: CGFloat = 0
@@ -78,7 +87,9 @@ final class RemoteVideoCanvasNSView: NSView {
         displayScale: AppleVideoDisplayScale,
         synchronizesPresentation: Bool,
         sourceRect: CGRect?,
-        inputOrigin: CGPoint
+        inputMapping: AppleDisplayInputMapping?,
+        inputCoordinatesAreDisplayLocal: Bool,
+        inputDisplayID: UInt32?
     ) {
         self.canvas = canvas
         self.frames = frames
@@ -87,7 +98,9 @@ final class RemoteVideoCanvasNSView: NSView {
         self.displayScale = displayScale
         self.synchronizesPresentation = synchronizesPresentation
         self.sourceRect = sourceRect
-        self.inputOrigin = inputOrigin
+        self.inputMapping = inputMapping
+        self.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
+        self.inputDisplayID = inputDisplayID
         let metalContext = AppleNV24MetalContext()
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
         displayLayers = (0..<canvas.tileCount).map { _ in
@@ -127,14 +140,29 @@ final class RemoteVideoCanvasNSView: NSView {
 
     deinit {
         inputTask?.cancel()
+        if let windowDidBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
+        }
         if let observer { frames.removeObserver(observer) }
         if let cursorObserver { cursors?.removeObserver(cursorObserver) }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        let scale = window?.backingScaleFactor ?? 1
+        if let windowDidBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
+            self.windowDidBecomeKeyObserver = nil
+        }
+        guard let window else { return }
+        windowDidBecomeKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.selectInputDisplay() }
+        }
+        if window.isKeyWindow { selectInputDisplay() }
+        let scale = window.backingScaleFactor
         displayLayers.forEach { $0.contentsScale = scale }
         display(currentFrames())
     }
@@ -232,7 +260,8 @@ final class RemoteVideoCanvasNSView: NSView {
                 up: wholeTicks > 0,
                 ticks: abs(wholeTicks),
                 x: point.x,
-                y: point.y
+                y: point.y,
+                displayID: self.inputDisplayID
             )
         }
     }
@@ -290,7 +319,7 @@ final class RemoteVideoCanvasNSView: NSView {
             enqueueInput {
                 for symbol in modifiers { await input.key(isDown: false, symbol: symbol) }
                 if shouldReleasePointer, let point {
-                    await input.pointer(buttons: 0, x: point.x, y: point.y)
+                    await input.pointer(buttons: 0, x: point.x, y: point.y, displayID: self.inputDisplayID)
                 }
             }
         }
@@ -301,7 +330,9 @@ final class RemoteVideoCanvasNSView: NSView {
         guard let input, let point = remotePoint(for: event) else { return }
         lastRemotePoint = point
         let buttons = buttonMask
-        enqueueInput { await input.pointer(buttons: buttons, x: point.x, y: point.y) }
+        enqueueInput {
+            await input.pointer(buttons: buttons, x: point.x, y: point.y, displayID: self.inputDisplayID)
+        }
     }
 
     private func enqueueInput(_ operation: @escaping @MainActor @Sendable () async -> Void) {
@@ -321,7 +352,17 @@ final class RemoteVideoCanvasNSView: NSView {
             fixedScale: displayScale.fixedScale,
             sourceRect: sourceRect
         ) else { return nil }
-        return (point.x + Int(inputOrigin.x), point.y + Int(inputOrigin.y))
+        guard let inputMapping else { return point }
+        return inputMapping.point(
+            from: CGPoint(x: point.x, y: point.y),
+            isDisplayLocal: inputCoordinatesAreDisplayLocal
+        )
+    }
+
+    private func selectInputDisplay() {
+        guard let input else { return }
+        let displayID = inputDisplayID
+        enqueueInput { await input.selectDisplay(displayID) }
     }
 
     private func display(_ frames: AppleVideoFrameStore.FrameBatch) {
@@ -418,14 +459,15 @@ enum AppleVideoCanvasLayout {
             height: outputSize.height
         )
         return (0..<canvas.tileCount).map { tileIndex in
-            let pixelOrigin = CGFloat(tileIndex) * slotHeight
-            let visibleHeight = min(slotHeight, max(0, canvasBounds.height - pixelOrigin))
-            guard visibleHeight > 0 else { return Tile(container: .zero, content: .zero) }
+            let logicalStart = CGFloat(canvas.height * tileIndex / canvas.tileCount)
+            let logicalEnd = CGFloat(canvas.height * (tileIndex + 1) / canvas.tileCount)
+            let validHeight = logicalEnd - logicalStart
+            guard validHeight > 0 else { return Tile(container: .zero, content: .zero) }
             let tileRect = CGRect(
                 x: 0,
-                y: pixelOrigin,
+                y: logicalStart,
                 width: canvasBounds.width,
-                height: visibleHeight
+                height: validHeight
             )
             let visibleRect = tileRect.intersection(source)
             guard !visibleRect.isNull, !visibleRect.isEmpty else {

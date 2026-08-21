@@ -12,4 +12,14 @@ final class AppleInputControllerTests: XCTestCase {
         XCTAssertEqual(high.x, .max)
         XCTAssertEqual(high.y, 99)
     }
+
+    func testDisplaySelectionOnlyEmitsWhenTargetChanges() {
+        var selection = AppleInputDisplaySelection()
+
+        XCTAssertEqual(selection.message(for: 42), AppleRFBMessages.selectDisplay(42))
+        XCTAssertNil(selection.message(for: 42))
+        XCTAssertEqual(selection.message(for: 84), AppleRFBMessages.selectDisplay(84))
+        XCTAssertEqual(selection.message(for: nil), AppleRFBMessages.selectCombinedDisplays)
+        XCTAssertNil(selection.message(for: nil))
+    }
 }

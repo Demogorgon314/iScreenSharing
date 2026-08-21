@@ -26,6 +26,32 @@ struct AppleDisplayRect: Equatable, Sendable {
     let y: Int
     let width: Int
     let height: Int
+    let logicalX: Int
+    let logicalY: Int
+    let logicalWidth: Int
+    let logicalHeight: Int
+
+    init(
+        displayID: UInt32,
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        logicalX: Int? = nil,
+        logicalY: Int? = nil,
+        logicalWidth: Int? = nil,
+        logicalHeight: Int? = nil
+    ) {
+        self.displayID = displayID
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.logicalX = logicalX ?? x
+        self.logicalY = logicalY ?? y
+        self.logicalWidth = logicalWidth ?? width
+        self.logicalHeight = logicalHeight ?? height
+    }
 }
 
 struct AppleDisplayLayout: Equatable, Sendable {
@@ -173,6 +199,10 @@ enum AppleDisplayConfiguration {
         for index in 0..<Int(count) {
             let offset = 20 + index * 56
             guard let displayID = try? payload.uint32BE(at: offset + 16),
+                  let logicalY0 = try? payload.uint16BE(at: offset + 20),
+                  let logicalX0 = try? payload.uint16BE(at: offset + 22),
+                  let logicalY1 = try? payload.uint16BE(at: offset + 24),
+                  let logicalX1 = try? payload.uint16BE(at: offset + 26),
                   let y0 = try? payload.uint16BE(at: offset + 28),
                   let x0 = try? payload.uint16BE(at: offset + 30),
                   let y1 = try? payload.uint16BE(at: offset + 32),
@@ -183,7 +213,11 @@ enum AppleDisplayConfiguration {
                 x: Int(x0),
                 y: Int(y0),
                 width: Int(x1 - x0),
-                height: Int(y1 - y0)
+                height: Int(y1 - y0),
+                logicalX: logicalX1 > logicalX0 ? Int(logicalX0) : Int(x0),
+                logicalY: logicalY1 > logicalY0 ? Int(logicalY0) : Int(y0),
+                logicalWidth: logicalX1 > logicalX0 ? Int(logicalX1 - logicalX0) : Int(x1 - x0),
+                logicalHeight: logicalY1 > logicalY0 ? Int(logicalY1 - logicalY0) : Int(y1 - y0)
             ))
         }
         guard !displays.isEmpty else { return nil }

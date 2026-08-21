@@ -1,5 +1,15 @@
 import Foundation
 
+struct AppleInputDisplaySelection {
+    private var selectedDisplayID: UInt32?
+
+    mutating func message(for displayID: UInt32?) -> Data? {
+        guard displayID != selectedDisplayID else { return nil }
+        selectedDisplayID = displayID
+        return displayID.map(AppleRFBMessages.selectDisplay) ?? AppleRFBMessages.selectCombinedDisplays
+    }
+}
+
 actor AppleInputController {
     static let leftButton: UInt8 = 1 << 0
     static let rightButton: UInt8 = 1 << 1
@@ -9,6 +19,7 @@ actor AppleInputController {
 
     private weak var session: RFBAuthenticatedSession?
     private var canvas: AppleCanvas
+    private var displaySelection = AppleInputDisplaySelection()
     private var isClosed = false
     private(set) var sentEventCount = 0
 
@@ -17,10 +28,13 @@ actor AppleInputController {
         self.canvas = canvas
     }
 
-    func pointer(buttons: UInt8, x: Int, y: Int) async {
+    func pointer(buttons: UInt8, x: Int, y: Int, displayID: UInt32? = nil) async {
         guard let session, let recordLayer = session.recordLayer, !isClosed else { return }
         let point = Self.clampedPoint(x: x, y: y, canvas: canvas)
         do {
+            if let selectionMessage = displaySelection.message(for: displayID) {
+                try await session.sendEncrypted(selectionMessage)
+            }
             let message = try AppleRFBMessages.encryptedPointerEvent(
                 buttons: buttons,
                 x: point.x,
@@ -30,16 +44,29 @@ actor AppleInputController {
             try await session.sendEncrypted(message)
             sentEventCount += 1
         } catch {
+            displaySelection = AppleInputDisplaySelection()
             // Input is best effort. Session-level failures surface through the active connection.
         }
     }
 
-    func scroll(up: Bool, ticks: Int, x: Int, y: Int) async {
+    func scroll(up: Bool, ticks: Int, x: Int, y: Int, displayID: UInt32? = nil) async {
         let count = min(max(ticks, 0), 50)
         guard count > 0 else { return }
         for _ in 0..<count {
-            await pointer(buttons: up ? Self.scrollUp : Self.scrollDown, x: x, y: y)
-            await pointer(buttons: 0, x: x, y: y)
+            await pointer(buttons: up ? Self.scrollUp : Self.scrollDown, x: x, y: y, displayID: displayID)
+            await pointer(buttons: 0, x: x, y: y, displayID: displayID)
+        }
+    }
+
+    func selectDisplay(_ displayID: UInt32?) async {
+        guard let session, !isClosed,
+              let message = displaySelection.message(for: displayID) else { return }
+        do {
+            try await session.sendEncrypted(message)
+            sentEventCount += 1
+        } catch {
+            displaySelection = AppleInputDisplaySelection()
+            // Focus selection is retried with the next pointer event.
         }
     }
 

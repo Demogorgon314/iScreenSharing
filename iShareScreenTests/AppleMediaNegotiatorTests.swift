@@ -24,14 +24,14 @@ final class AppleMediaNegotiatorTests: XCTestCase {
         )
     }
 
-    func testDualMediaStreamsMapToOppositeVirtualDisplayOrder() {
+    func testDualMediaStreamsKeepVirtualDisplayOrder() {
         XCTAssertEqual(
             AppleMediaStreamDisplayMapping.displayIndex(forMediaStreamIndex: 0, displayCount: 2),
-            1
+            0
         )
         XCTAssertEqual(
             AppleMediaStreamDisplayMapping.displayIndex(forMediaStreamIndex: 1, displayCount: 2),
-            0
+            1
         )
         XCTAssertEqual(
             AppleMediaStreamDisplayMapping.displayIndex(forMediaStreamIndex: 0, displayCount: 1),

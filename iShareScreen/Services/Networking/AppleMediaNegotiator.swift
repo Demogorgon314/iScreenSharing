@@ -2,10 +2,7 @@ import Foundation
 
 enum AppleMediaStreamDisplayMapping {
     static func displayIndex(forMediaStreamIndex mediaStreamIndex: Int, displayCount: Int) -> Int {
-        guard displayCount == 2, (0...1).contains(mediaStreamIndex) else {
-            return mediaStreamIndex
-        }
-        return 1 - mediaStreamIndex
+        mediaStreamIndex
     }
 
     static func canvas(

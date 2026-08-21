@@ -130,8 +130,10 @@ final class AuthenticationCoordinator: ObservableObject {
                         receiveDisplayLayout: { layout in
                             await displayLayoutModel.receive(layout)
                             if layout.displays.count > 1 {
-                                let width = layout.displays.map { $0.x + $0.width }.max() ?? negotiation.canvas.width
-                                let height = layout.displays.map { $0.y + $0.height }.max() ?? negotiation.canvas.height
+                                let width = layout.displays.map { $0.logicalX + $0.logicalWidth }.max()
+                                    ?? negotiation.canvas.width
+                                let height = layout.displays.map { $0.logicalY + $0.logicalHeight }.max()
+                                    ?? negotiation.canvas.height
                                 await input.update(canvas: AppleCanvas(
                                     width: width,
                                     height: height,

@@ -29,6 +29,12 @@ enum AppleRFBMessages {
         0x0d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ])
 
+    static func selectDisplay(_ displayID: UInt32) -> Data {
+        var message = Data([0x0d, 0x00, 0x00, 0x00])
+        message.appendUInt32BE(displayID)
+        return message
+    }
+
     static func viewerInfo(
         applicationVersion: (UInt32, UInt32, UInt32) = (6, 1, 0),
         operatingSystemVersion: (UInt32, UInt32, UInt32) = (15, 3, 0)

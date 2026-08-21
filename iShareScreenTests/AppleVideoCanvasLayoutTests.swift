@@ -2,7 +2,7 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleVideoCanvasLayoutTests: XCTestCase {
-    func testStacksPaddedTilesAndCropsFinalTileToCanvas() throws {
+    func testCropsPaddingFromEveryTileBeforeStacking() throws {
         let layouts = AppleVideoCanvasLayout.tiles(
             canvas: AppleCanvas(width: 1920, height: 1200, tileCount: 4),
             bounds: CGRect(x: 0, y: 0, width: 960, height: 600),
@@ -11,10 +11,11 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
         )
 
         XCTAssertEqual(layouts.count, 4)
-        XCTAssertEqual(layouts[0].container, CGRect(x: 0, y: 448, width: 960, height: 152))
-        XCTAssertEqual(layouts[2].container, CGRect(x: 0, y: 144, width: 960, height: 152))
-        XCTAssertEqual(layouts[3].container, CGRect(x: 0, y: 0, width: 960, height: 144))
-        XCTAssertEqual(layouts[3].content, CGRect(x: 0, y: -8, width: 960, height: 152))
+        XCTAssertEqual(layouts[0].container, CGRect(x: 0, y: 450, width: 960, height: 150))
+        XCTAssertEqual(layouts[0].content, CGRect(x: 0, y: -2, width: 960, height: 152))
+        XCTAssertEqual(layouts[2].container, CGRect(x: 0, y: 150, width: 960, height: 150))
+        XCTAssertEqual(layouts[3].container, CGRect(x: 0, y: 0, width: 960, height: 150))
+        XCTAssertEqual(layouts[3].content, CGRect(x: 0, y: -2, width: 960, height: 152))
     }
 
     func testCentersCanvasWhenShowingActualSize() {
