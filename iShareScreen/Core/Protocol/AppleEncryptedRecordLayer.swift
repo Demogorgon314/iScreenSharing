@@ -21,9 +21,19 @@ final class AppleEncryptedRecordLayer: @unchecked Sendable {
     }
 
     func encrypt(_ message: Data) throws -> Data {
+        try encrypt([message])
+    }
+
+    func encrypt(_ messages: [Data]) throws -> Data {
         lock.lock()
         defer { lock.unlock() }
 
+        return try messages.reduce(into: Data()) { records, message in
+            records.append(try encryptRecord(message))
+        }
+    }
+
+    private func encryptRecord(_ message: Data) throws -> Data {
         let paddingLength = (
             Self.blockSize
                 - ((2 + message.count + Self.authenticationCodeLength) % Self.blockSize)
@@ -154,4 +164,3 @@ enum AppleEncryptedRecordError: LocalizedError, Equatable {
         }
     }
 }
-

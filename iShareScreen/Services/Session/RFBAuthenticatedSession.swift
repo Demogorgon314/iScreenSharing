@@ -64,8 +64,12 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
 
     func sendEncrypted(_ message: Data) async throws {
+        try await sendEncrypted([message])
+    }
+
+    func sendEncrypted(_ messages: [Data]) async throws {
         guard let recordLayer else { throw RFBSessionError.encryptionNotEnabled }
-        try await send(try recordLayer.encrypt(message))
+        try await send(try recordLayer.encrypt(messages))
     }
 
     func receiveEncrypted() async throws -> Data {

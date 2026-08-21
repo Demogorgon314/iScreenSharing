@@ -23,6 +23,16 @@ final class AppleEncryptedRecordLayerTests: XCTestCase {
         XCTAssertEqual(try receiver.decrypt(Data(second.dropFirst(2))), Data([0x1c, 0xaa, 0xbb, 0xcc]))
     }
 
+    func testEncryptsSelectedDisplayAndPointerAsOneOrderedBatch() throws {
+        let sender = try makeLayer()
+        let receiver = try makeLayer()
+        let messages = [Data([0x0d, 0x01]), Data([0x10, 0x02])]
+        var records = try sender.encrypt(messages)
+
+        XCTAssertEqual(try receiver.decryptAvailableRecords(in: &records), messages)
+        XCTAssertTrue(records.isEmpty)
+    }
+
     func testStreamingDecoderKeepsIncompleteTail() throws {
         let sender = try makeLayer()
         let receiver = try makeLayer()
@@ -75,4 +85,3 @@ private extension Data {
         }
     }
 }
-

@@ -63,8 +63,9 @@ actor AppleInputController {
             canvas: displayID == nil ? canvas : nil
         )
         do {
+            var messages = [Data]()
             if let selectionMessage = displaySelection.message(for: displayID) {
-                try await session.sendEncrypted(selectionMessage)
+                messages.append(selectionMessage)
             }
             let message = try AppleRFBMessages.encryptedPointerEvent(
                 buttons: buttons,
@@ -74,7 +75,8 @@ actor AppleInputController {
                 timestampDelta: inputTimestamp.next(at: microseconds()),
                 contentKey: recordLayer.contentKey
             )
-            try await session.sendEncrypted(message)
+            messages.append(message)
+            try await session.sendEncrypted(messages)
             sentEventCount += 1
         } catch {
             displaySelection = AppleInputDisplaySelection()
