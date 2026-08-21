@@ -40,7 +40,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
 
         coordinator.signIn(username: "user", password: "password", rememberPassword: true)
-        try await waitUntil { coordinator.state == .authenticated }
+        try await waitUntil { coordinator.state == .authenticated && credentials.saved != nil }
 
         XCTAssertTrue(sessions.session(for: endpoint) === session)
         XCTAssertEqual(connections.connections.first?.endpoint, endpoint)
@@ -78,6 +78,27 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(connections.connections.isEmpty)
         XCTAssertNil(sessions.session(for: endpoint))
+    }
+
+    func testCredentialPersistenceFailureDoesNotFailConnectedSession() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = makeSession(endpoint: endpoint)
+        let sessions = SessionManager()
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(result: .success(session)),
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: FailingCredentialStore(),
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionManager: sessions
+        )
+
+        coordinator.signIn(username: "user", password: "password", rememberPassword: true)
+        try await waitUntil { coordinator.state == .authenticated }
+
+        XCTAssertTrue(sessions.session(for: endpoint) === session)
     }
 
     func testPrefillsUsernameAndRejectsUnsupportedStandardMode() async throws {
@@ -161,18 +182,41 @@ private final class MockAuthenticator: RFBAuthenticating, @unchecked Sendable {
 }
 
 private final class MockCredentialStore: CredentialStoring, @unchecked Sendable {
-    private(set) var saved: ScreenSharingCredentials?
+    private let lock = NSLock()
+    private var stored: ScreenSharingCredentials?
+
+    var saved: ScreenSharingCredentials? {
+        lock.withLock { stored }
+    }
 
     func load(for endpoint: ConnectionEndpoint) throws -> ScreenSharingCredentials? {
-        saved
+        lock.withLock { stored }
     }
 
     func save(_ credentials: ScreenSharingCredentials, for endpoint: ConnectionEndpoint) throws {
-        saved = credentials
+        lock.withLock { stored = credentials }
     }
 
     func delete(for endpoint: ConnectionEndpoint) throws {
-        saved = nil
+        lock.withLock { stored = nil }
+    }
+}
+
+private struct FailingCredentialStore: CredentialStoring {
+    private struct PersistenceError: Error { }
+
+    func load(for endpoint: ConnectionEndpoint) throws -> ScreenSharingCredentials? { nil }
+    func save(_ credentials: ScreenSharingCredentials, for endpoint: ConnectionEndpoint) throws {
+        throw PersistenceError()
+    }
+    func delete(for endpoint: ConnectionEndpoint) throws { throw PersistenceError() }
+}
+
+private extension NSLock {
+    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
     }
 }
 

@@ -86,7 +86,11 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         }
     }
 
-    func primarySources(tileCount: Int, excluding excludedSources: Set<UInt32> = []) -> [UInt32] {
+    func primarySources(
+        tileCount: Int,
+        excluding excludedSources: Set<UInt32> = [],
+        packetCountBaseline: [UInt32: Int] = [:]
+    ) -> [UInt32] {
         lock.withStreamLock {
             guard tileCount > 0 else { return [] }
             let sources = sourcePacketCounts.keys.filter { !excludedSources.contains($0) }.sorted()
@@ -101,21 +105,36 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
                 }
             }
             return groups.max { lhs, rhs in
-                let lhsCount = lhs.reduce(0) { total, source in
+                let lhsRecentCount = lhs.reduce(0) { total, source in
+                    total + max(0, sourcePacketCounts[source, default: 0] - packetCountBaseline[source, default: 0])
+                }
+                let rhsRecentCount = rhs.reduce(0) { total, source in
+                    total + max(0, sourcePacketCounts[source, default: 0] - packetCountBaseline[source, default: 0])
+                }
+                if lhsRecentCount != rhsRecentCount { return lhsRecentCount < rhsRecentCount }
+                let lhsTotalCount = lhs.reduce(0) { total, source in
                     total + sourcePacketCounts[source, default: 0]
                 }
-                let rhsCount = rhs.reduce(0) { total, source in
+                let rhsTotalCount = rhs.reduce(0) { total, source in
                     total + sourcePacketCounts[source, default: 0]
                 }
-                return lhsCount < rhsCount
+                return lhsTotalCount < rhsTotalCount
             } ?? []
         }
+    }
+
+    var packetCounts: [UInt32: Int] {
+        lock.withStreamLock { sourcePacketCounts }
     }
 
     func packetCount(for sources: some Sequence<UInt32>) -> Int {
         lock.withStreamLock {
             sources.reduce(0) { $0 + sourcePacketCounts[$1, default: 0] }
         }
+    }
+
+    var totalPacketCount: Int {
+        lock.withStreamLock { sourcePacketCounts.values.reduce(0, +) }
     }
 
     private func harvest(_ units: [Data]) {

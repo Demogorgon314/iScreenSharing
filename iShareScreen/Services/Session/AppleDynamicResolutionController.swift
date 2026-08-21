@@ -9,6 +9,7 @@ actor AppleDynamicResolutionController {
     private let sendMessage: SendMessage
     private let applyCanvas: ApplyCanvas
     private var mediaReofferPending = false
+    private var hasReceivedInitialLayout = false
 
     init(
         initialCanvas: AppleCanvas,
@@ -35,6 +36,10 @@ actor AppleDynamicResolutionController {
 
     func receive(_ layout: AppleDisplayLayout) async throws {
         try await sendMessage(AppleRFBMessages.framebufferUpdateRequest())
+        guard hasReceivedInitialLayout else {
+            hasReceivedInitialLayout = true
+            return
+        }
         let updatedCanvas = layout.canvas(tileCount: canvas.tileCount)
         if updatedCanvas != canvas {
             canvas = updatedCanvas

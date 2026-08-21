@@ -63,5 +63,28 @@ final class AppleMediaConfigurationTests: XCTestCase {
             AppleMediaConfiguration.canvas(from: fixture),
             AppleCanvas(width: 1920, height: 1080, tileCount: 4)
         )
+        XCTAssertEqual(
+            AppleMediaConfiguration.answerStatus(from: fixture),
+            .canvas(AppleCanvas(width: 1920, height: 1080, tileCount: 4))
+        )
+    }
+
+    func testDistinguishesUnrelatedControlMessagesFromDegenerateMediaAnswers() throws {
+        XCTAssertEqual(
+            AppleMediaConfiguration.answerStatus(from: Data([0, 1, 2, 3])),
+            .unrelated
+        )
+
+        let propertyList = try PropertyListSerialization.data(
+            fromPropertyList: [
+                "avcMediaStreamNegotiatorMediaBlob": try ZlibCodec.compress(Data([0x08, 0x01])),
+            ],
+            format: .binary,
+            options: 0
+        )
+        XCTAssertEqual(
+            AppleMediaConfiguration.answerStatus(from: Data([0]) + propertyList),
+            .degenerate
+        )
     }
 }

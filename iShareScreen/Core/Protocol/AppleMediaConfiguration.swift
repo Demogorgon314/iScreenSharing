@@ -32,6 +32,12 @@ struct AppleCanvas: Equatable, Hashable, Sendable {
     var isUsable: Bool { width > 0 && height > 0 }
 }
 
+enum AppleMediaAnswer: Equatable, Sendable {
+    case unrelated
+    case degenerate
+    case canvas(AppleCanvas)
+}
+
 enum AppleMediaConfiguration {
     static func message(
         audioOffer: Data,
@@ -69,23 +75,30 @@ enum AppleMediaConfiguration {
     }
 
     static func canvas(from answer: Data) -> AppleCanvas? {
-        guard answer.first == 0 else { return nil }
+        guard case let .canvas(canvas) = answerStatus(from: answer) else { return nil }
+        return canvas
+    }
+
+    static func answerStatus(from answer: Data) -> AppleMediaAnswer {
+        guard answer.first == 0 else { return .unrelated }
         let signature = Data("bplist".utf8)
         var searchStart = answer.startIndex
+        var foundMediaAnswer = false
         while searchStart < answer.endIndex,
               let range = answer.range(of: signature, in: searchStart..<answer.endIndex) {
             for end in stride(from: answer.endIndex, through: range.upperBound, by: -1) {
                 let plistData = answer.subdata(in: range.lowerBound..<end)
                 guard let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil),
                       let dictionary = plist as? [String: Any],
-                      let compressed = dictionary["avcMediaStreamNegotiatorMediaBlob"] as? Data,
-                      let blob = try? AppleMediaOffer.decompressMediaBlob(compressed),
+                      let compressed = dictionary["avcMediaStreamNegotiatorMediaBlob"] as? Data else { continue }
+                foundMediaAnswer = true
+                guard let blob = try? AppleMediaOffer.decompressMediaBlob(compressed),
                       let canvas = canvas(fromProtobuf: blob), canvas.isUsable else { continue }
-                return canvas
+                return .canvas(canvas)
             }
             searchStart = range.upperBound
         }
-        return nil
+        return foundMediaAnswer ? .degenerate : .unrelated
     }
 
     private static func canvas(fromProtobuf data: Data) -> AppleCanvas? {

@@ -62,6 +62,7 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         processor.reset()
 
         XCTAssertEqual(processor.currentParameterSets(), AppleHEVCParameterSets())
+        XCTAssertEqual(processor.totalPacketCount, 0)
         XCTAssertTrue(processor.primarySources(tileCount: 1).isEmpty)
         XCTAssertTrue(processor.drainMissingSequences().isEmpty)
     }
@@ -87,8 +88,19 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         }
 
         XCTAssertEqual(processor.primarySources(tileCount: 4), [100, 101, 102, 103])
+        XCTAssertEqual(processor.totalPacketCount, 44)
+        XCTAssertEqual(processor.packetCount(for: [100, 101, 102, 103]), 32)
         XCTAssertEqual(
             processor.primarySources(tileCount: 4, excluding: [100, 101, 102, 103]),
+            [200, 201, 202, 203]
+        )
+
+        let baseline = processor.packetCounts
+        for source in [UInt32(200), 201, 202, 203] {
+            _ = processor.process(packet(sequence: 10, marker: true, payload: Data([0x42, 1, 0, 1, 1]), source: source))
+        }
+        XCTAssertEqual(
+            processor.primarySources(tileCount: 4, packetCountBaseline: baseline),
             [200, 201, 202, 203]
         )
     }

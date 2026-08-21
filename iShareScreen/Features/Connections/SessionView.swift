@@ -177,13 +177,16 @@ private struct ActiveVideoSessionView: View {
             )
             .id(stream.canvas)
             if stream.state != .streaming {
-                VStack(spacing: 10) {
-                    if stream.state == .preparing { ProgressView().controlSize(.small) }
-                    Text(statusMessage)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(20)
+                Color.black
+                    .overlay {
+                        VStack(spacing: 10) {
+                            if stream.state == .preparing { ProgressView().controlSize(.small) }
+                            Text(statusMessage)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(20)
+                    }
             }
         }
         .background {

@@ -20,22 +20,24 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         let controller = makeController(recorder: recorder, applied: applied)
         let layout = makeLayout(width: 2880, height: 1800)
 
+        try await controller.receive(makeLayout(width: 1920, height: 1080))
         try await controller.receive(layout)
 
         let messages = await recorder.messages
         let canvases = await applied.canvases
         XCTAssertEqual(messages, [
+            AppleRFBMessages.framebufferUpdateRequest(),
             AppleRFBMessages.framebufferUpdateRequest(), Data([0x1c, 0xaa]),
         ])
         XCTAssertEqual(canvases, [AppleCanvas(width: 2880, height: 1800, tileCount: 4)])
     }
 
-    func testUnchangedLayoutOnlyRearmsFramebufferUpdates() async throws {
+    func testInitialLayoutOnlyRearmsFramebufferUpdatesEvenWhenItDiffers() async throws {
         let recorder = MessageRecorder()
         let applied = CanvasRecorder()
         let controller = makeController(recorder: recorder, applied: applied)
 
-        try await controller.receive(makeLayout(width: 1920, height: 1080))
+        try await controller.receive(makeLayout(width: 2880, height: 1800))
 
         let messages = await recorder.messages
         let canvases = await applied.canvases
@@ -66,6 +68,7 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         )
         let layout = makeLayout(width: 2880, height: 1800)
 
+        try await controller.receive(makeLayout(width: 1920, height: 1080))
         do {
             try await controller.receive(layout)
             XCTFail("Expected the first media reoffer to fail")

@@ -21,7 +21,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     let frames = AppleVideoFrameStore()
 
     private static let maximumCachedUnitsPerSource = 128
-    private static let initialSelectionDelay: TimeInterval = 0.3
+    private static let initialBurstSettleTime: TimeInterval = 0.3
     private static let initialSelectionDeadline: TimeInterval = 2
     private static let minimumInitialPacketCount = 100
     private static let sourceAdoptionStall: TimeInterval = 2
@@ -42,8 +42,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var cachedUnits = [UInt32: [CachedUnit]]()
     private var isClosed = false
     private var frameCount = 0
+    private var decodedTiles = Set<Int>()
     private var lastReceiverReportTime: TimeInterval = 0
     private var firstPacketTime: TimeInterval?
+    private var initialBurstReadyTime: TimeInterval?
+    private var initialPacketCountBaseline = [UInt32: Int]()
     private var lastDecodedFrameTime: TimeInterval = 0
 
     init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
@@ -77,8 +80,13 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 cachedUnits.removeAll(keepingCapacity: false)
                 processor.reset()
                 frames.removeAllFrames()
-                countLock.withVideoStreamLock { self.frameCount = 0 }
+                countLock.withVideoStreamLock {
+                    self.frameCount = 0
+                    self.decodedTiles.removeAll(keepingCapacity: true)
+                }
                 firstPacketTime = nil
+                initialBurstReadyTime = nil
+                initialPacketCountBaseline.removeAll(keepingCapacity: false)
                 countLock.withVideoStreamLock { self.lastDecodedFrameTime = 0 }
                 DispatchQueue.main.async { [weak self] in
                     self?.canvas = canvas
@@ -125,13 +133,23 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         sendReceiverReportIfNeeded()
         let datagrams = receiver.drainVideoPackets()
         guard !datagrams.isEmpty else {
-            if decoder == nil { prepareDecoderIfPossible() }
+            if decoder == nil {
+                prepareDecoderIfPossible()
+            } else {
+                adoptFreshSourcesIfNeeded()
+            }
             return
         }
-        if firstPacketTime == nil { firstPacketTime = ProcessInfo.processInfo.systemUptime }
+        if firstPacketTime == nil {
+            firstPacketTime = ProcessInfo.processInfo.systemUptime
+        }
         let accessUnits = processor.process(datagrams)
         sendPendingNACKs()
-        guard !accessUnits.isEmpty else { return }
+        if decoder == nil { prepareDecoderIfPossible() }
+        guard !accessUnits.isEmpty else {
+            if decoder != nil { adoptFreshSourcesIfNeeded() }
+            return
+        }
 
         if decoder == nil || sourceToTile.count != canvas.tileCount {
             cache(accessUnits)
@@ -158,14 +176,20 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func prepareDecoderIfPossible() {
         guard let firstPacketTime else { return }
-        let selectionAge = ProcessInfo.processInfo.systemUptime - firstPacketTime
-        guard selectionAge >= Self.initialSelectionDelay else {
-            return
+        let now = ProcessInfo.processInfo.systemUptime
+        if initialBurstReadyTime == nil,
+           (processor.totalPacketCount >= Self.minimumInitialPacketCount
+            || now - firstPacketTime >= Self.initialSelectionDeadline) {
+            initialBurstReadyTime = now
+            initialPacketCountBaseline = processor.packetCounts
         }
-        let sources = processor.primarySources(tileCount: canvas.tileCount)
+        guard let initialBurstReadyTime,
+              now - initialBurstReadyTime >= Self.initialBurstSettleTime else { return }
+        let sources = processor.primarySources(
+            tileCount: canvas.tileCount,
+            packetCountBaseline: initialPacketCountBaseline
+        )
         guard sources.count == canvas.tileCount else { return }
-        guard processor.packetCount(for: sources) >= Self.minimumInitialPacketCount
-                || selectionAge >= Self.initialSelectionDeadline else { return }
         sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
         prepareDecoder(for: sources)
     }
@@ -296,11 +320,15 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 Self.logger.debug("LTR acknowledgement failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        let count = countLock.withVideoStreamLock {
+        let becameReady = countLock.withVideoStreamLock {
             frameCount += 1
-            return frameCount
+            let wasReady = decodedTiles.count == canvas.tileCount
+            decodedTiles.insert(tileIndex)
+            return !wasReady && decodedTiles.count == canvas.tileCount
         }
-        if count == 1 { publishState(.streaming) }
+        if becameReady {
+            publishState(.streaming)
+        }
     }
 
     private func fail(_ error: Error) {

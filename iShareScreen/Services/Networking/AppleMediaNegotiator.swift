@@ -43,9 +43,11 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         try await session.sendEncrypted(AppleRFBMessages.framebufferUpdateRequest())
 
         var pendingMessages = [Data]()
-        for attempt in 0...Self.retryLimit {
+        var retryCount = 0
+        negotiationLoop: while retryCount <= Self.retryLimit {
             let response = try await session.receiveEncrypted()
-            if let canvas = AppleMediaConfiguration.canvas(from: response) {
+            switch AppleMediaConfiguration.answerStatus(from: response) {
+            case .canvas(let canvas):
                 let result = AppleMediaNegotiationResult(
                     keys: keys,
                     canvas: canvas,
@@ -56,9 +58,12 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                 session.install(mediaNegotiation: result)
                 receiver.stopPunching()
                 return result
-            }
-            pendingMessages.append(response)
-            if attempt < Self.retryLimit {
+            case .unrelated:
+                pendingMessages.append(response)
+                continue
+            case .degenerate:
+                guard retryCount < Self.retryLimit else { break negotiationLoop }
+                retryCount += 1
                 try await Task.sleep(for: .milliseconds(200))
                 try await session.sendEncrypted(configuration)
             }

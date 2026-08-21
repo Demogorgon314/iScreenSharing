@@ -126,11 +126,11 @@ final class AuthenticationCoordinator: ObservableObject {
                         audio.start()
                     }
                     try Task.checkCancellation()
-                    try await persistCredentials(credentials, remember: rememberPassword)
                     sessionManager.install(session)
                     connectionStore.record(endpoint, preferredUsername: credentials.username)
                     onAuthenticated(endpoint)
                     state = .authenticated
+                    persistCredentialsInBackground(credentials, remember: rememberPassword)
                 } catch is CancellationError {
                     state = .idle
                 } catch {
@@ -148,19 +148,19 @@ final class AuthenticationCoordinator: ObservableObject {
         state = .idle
     }
 
-    private func persistCredentials(
+    private func persistCredentialsInBackground(
         _ credentials: ScreenSharingCredentials,
         remember: Bool
-    ) async throws {
+    ) {
         let credentialStore = credentialStore
         let endpoint = endpoint
-        try await Task.detached {
+        Task.detached {
             if remember {
-                try credentialStore.save(credentials, for: endpoint)
+                try? credentialStore.save(credentials, for: endpoint)
             } else {
-                try credentialStore.delete(for: endpoint)
+                try? credentialStore.delete(for: endpoint)
             }
-        }.value
+        }
     }
 }
 
