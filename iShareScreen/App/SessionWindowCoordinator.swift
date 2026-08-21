@@ -26,11 +26,11 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         window.contentViewController = NSHostingController(rootView: content)
         window.contentMinSize = NSSize(width: 800, height: 500)
         window.setContentSize(NSSize(width: 1100, height: 700))
-        window.delegate = self
-        let autosaveName = "SessionWindow.\(endpoint.url.absoluteString)"
+        let autosaveName = frameAutosaveName(for: endpoint)
         let restoredFrame = window.setFrameUsingName(autosaveName)
         window.setFrameAutosaveName(autosaveName)
         if !restoredFrame { window.center() }
+        window.delegate = self
 
         let controller = NSWindowController(window: window)
         windowControllers[endpoint] = controller
@@ -41,9 +41,30 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow,
-              let endpoint = windowControllers.first(where: { $0.value.window === window })?.key else {
-            return
-        }
+              let endpoint = endpoint(for: window) else { return }
+        window.saveFrame(usingName: frameAutosaveName(for: endpoint))
         windowControllers.removeValue(forKey: endpoint)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        saveFrame(from: notification)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        saveFrame(from: notification)
+    }
+
+    private func saveFrame(from notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let endpoint = endpoint(for: window) else { return }
+        window.saveFrame(usingName: frameAutosaveName(for: endpoint))
+    }
+
+    private func endpoint(for window: NSWindow) -> ConnectionEndpoint? {
+        windowControllers.first(where: { $0.value.window === window })?.key
+    }
+
+    private func frameAutosaveName(for endpoint: ConnectionEndpoint) -> String {
+        "SessionWindow.\(endpoint.url.absoluteString)"
     }
 }
