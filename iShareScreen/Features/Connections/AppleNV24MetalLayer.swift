@@ -78,15 +78,19 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoRenderer")
     private let context: AppleNV24MetalContext
     private var latestFrame: CVPixelBuffer?
+    var synchronizesPresentation: Bool {
+        didSet { configurePresentation() }
+    }
 
-    init(context: AppleNV24MetalContext) {
+    init(context: AppleNV24MetalContext, synchronizesPresentation: Bool = true) {
         self.context = context
+        self.synchronizesPresentation = synchronizesPresentation
         super.init()
         device = context.device
         pixelFormat = .bgra8Unorm
         framebufferOnly = true
-        presentsWithTransaction = false
         backgroundColor = CGColor.black
+        configurePresentation()
     }
 
     override init(layer: Any) {
@@ -95,7 +99,9 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         }
         context = source.context
         latestFrame = source.latestFrame
+        synchronizesPresentation = source.synchronizesPresentation
         super.init(layer: layer)
+        configurePresentation()
     }
 
     @available(*, unavailable)
@@ -106,6 +112,11 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     func present(_ pixelBuffer: CVPixelBuffer) {
         latestFrame = pixelBuffer
         display()
+    }
+
+    private func configurePresentation() {
+        displaySyncEnabled = synchronizesPresentation
+        presentsWithTransaction = false
     }
 
     override func display() {

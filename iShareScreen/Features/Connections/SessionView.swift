@@ -9,6 +9,7 @@ struct SessionView: View {
     @State private var modeError: String?
     @State private var viewportSize = CGSize.zero
     @StateObject private var dynamicResolution = AppleDynamicResolutionModel()
+    @AppStorage("synchronizesVideoPresentation") private var synchronizesVideoPresentation = true
 
     var body: some View {
         Group {
@@ -18,6 +19,7 @@ struct SessionView: View {
                     input: isObserving ? nil : session.inputController,
                     cursors: session.cursorStore,
                     displayScale: displayScale,
+                    synchronizesPresentation: synchronizesVideoPresentation,
                     onViewportChange: viewportChanged
                 )
             } else {
@@ -31,6 +33,7 @@ struct SessionView: View {
         .navigationTitle(endpoint.displayName)
         .focusedSceneValue(\.sessionEndpoint, endpoint)
         .focusedSceneValue(\.sessionDisplayScale, $displayScale)
+        .focusedSceneValue(\.synchronizesVideoPresentation, $synchronizesVideoPresentation)
         .focusedSceneValue(
             \.dynamicResolutionActions,
             DynamicResolutionActions(
@@ -163,6 +166,7 @@ private struct ActiveVideoSessionView: View {
     let input: AppleInputController?
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
+    let synchronizesPresentation: Bool
     let onViewportChange: (CGSize) -> Void
 
     var body: some View {
@@ -173,7 +177,8 @@ private struct ActiveVideoSessionView: View {
                 frames: stream.frames,
                 input: input,
                 cursors: cursors,
-                displayScale: displayScale
+                displayScale: displayScale,
+                synchronizesPresentation: synchronizesPresentation
             )
             .id(stream.canvas)
             if stream.state != .streaming {

@@ -6,6 +6,7 @@ struct ScreenSharingCommands: Commands {
     @Environment(\.openWindow) private var openWindow
     @FocusedBinding(\.connectionLibraryLayout) private var connectionLibraryLayout
     @FocusedBinding(\.sessionDisplayScale) private var displayScale
+    @FocusedBinding(\.synchronizesVideoPresentation) private var synchronizesVideoPresentation
     @FocusedValue(\.dynamicResolutionActions) private var dynamicResolutionActions
     @FocusedValue(\.sessionModeActions) private var sessionModeActions
     @FocusedValue(\.sessionEndpoint) private var sessionEndpoint
@@ -90,6 +91,11 @@ struct ScreenSharingCommands: Commands {
             .disabled(displayScale == nil)
             Button("Dynamic Resolution") { dynamicResolutionActions?.toggle() }
                 .disabled(dynamicResolutionActions?.canToggle != true)
+            Toggle(
+                "Synchronize Video",
+                isOn: videoSyncBinding
+            )
+            .disabled(synchronizesVideoPresentation == nil)
             Button("High Dynamic Range") { }
                 .disabled(true)
             Divider()
@@ -123,6 +129,13 @@ struct ScreenSharingCommands: Commands {
                 .disabled(true)
         }
     }
+
+    private var videoSyncBinding: Binding<Bool> {
+        Binding(
+            get: { synchronizesVideoPresentation ?? false },
+            set: { synchronizesVideoPresentation = $0 }
+        )
+    }
 }
 
 struct SessionModeActions {
@@ -152,6 +165,11 @@ extension FocusedValues {
         set { self[SessionDisplayScaleFocusedKey.self] = newValue }
     }
 
+    var synchronizesVideoPresentation: Binding<Bool>? {
+        get { self[SynchronizedVideoPresentationFocusedKey.self] }
+        set { self[SynchronizedVideoPresentationFocusedKey.self] = newValue }
+    }
+
     var dynamicResolutionActions: DynamicResolutionActions? {
         get { self[DynamicResolutionActionsFocusedKey.self] }
         set { self[DynamicResolutionActionsFocusedKey.self] = newValue }
@@ -175,6 +193,10 @@ extension FocusedValues {
 
 private struct SessionDisplayScaleFocusedKey: FocusedValueKey {
     typealias Value = Binding<AppleVideoDisplayScale>
+}
+
+private struct SynchronizedVideoPresentationFocusedKey: FocusedValueKey {
+    typealias Value = Binding<Bool>
 }
 
 private struct DynamicResolutionActionsFocusedKey: FocusedValueKey {

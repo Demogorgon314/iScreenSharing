@@ -2,7 +2,8 @@ import CoreVideo
 import Foundation
 
 final class AppleVideoFrameStore: @unchecked Sendable {
-    typealias Observer = @MainActor @Sendable (Int, CVPixelBuffer) -> Void
+    typealias FrameBatch = [Int: CVPixelBuffer]
+    typealias Observer = @MainActor @Sendable (FrameBatch) -> Void
 
     private let lock = NSLock()
     private var frames = [Int: CVPixelBuffer]()
@@ -56,13 +57,11 @@ final class AppleVideoFrameStore: @unchecked Sendable {
     @MainActor
     private func deliverPendingFrames() {
         let delivery = lock.withFrameStoreLock {
-            let frames = pendingFrames.sorted { $0.key < $1.key }
+            let frames = pendingFrames
             pendingFrames.removeAll(keepingCapacity: true)
             return (frames, Array(observers.values))
         }
-        for (tileIndex, frame) in delivery.0 {
-            delivery.1.forEach { $0(tileIndex, frame) }
-        }
+        if !delivery.0.isEmpty { delivery.1.forEach { $0(delivery.0) } }
         let hasMoreFrames = lock.withFrameStoreLock {
             guard !pendingFrames.isEmpty else {
                 deliveryScheduled = false
