@@ -21,15 +21,24 @@ final class AppleRFBMessagesTests: XCTestCase {
         )
     }
 
-    func testViewerInfoMatchesReferenceShapeAndCommandMask() throws {
-        let message = AppleRFBMessages.viewerInfo()
-
-        XCTAssertEqual(message.count, 66)
-        XCTAssertEqual(message[0], 0x21)
-        XCTAssertEqual(try message.uint16BE(at: 2), 0x003e)
-        XCTAssertEqual(try message.uint16BE(at: 4), 1)
-        XCTAssertEqual(try message.uint32BE(at: 6), 2)
-        XCTAssertEqual(message.suffix(32), AppleRFBMessages.viewerCommandMask)
+    func testViewerInfoMatchesNativeViewerCapture() {
+        XCTAssertEqual(
+            AppleRFBMessages.viewerInfo(),
+            Data([
+                0x21, 0x00, 0x00, 0x3e, 0x00, 0x01,
+                0x00, 0x00, 0x00, 0x02,
+                0x00, 0x00, 0x00, 0x05,
+                0x00, 0x00, 0x00, 0x03,
+                0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x0f,
+                0x00, 0x00, 0x00, 0x07,
+                0x00, 0x00, 0x00, 0x07,
+                0xb0, 0x00, 0x08, 0x03, 0x90, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            ])
+        )
     }
 
     func testSetEncryptionMessagesMatchCapturedBytes() {
