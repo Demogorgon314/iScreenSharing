@@ -109,9 +109,29 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         fatalError("init(coder:) is not supported")
     }
 
-    func present(_ pixelBuffer: CVPixelBuffer) {
+    func update(_ pixelBuffer: CVPixelBuffer) {
         latestFrame = pixelBuffer
-        display()
+    }
+
+    static func present(_ layers: [AppleNV24MetalLayer]) {
+        guard let first = layers.first,
+              layers.allSatisfy({ $0.latestFrame != nil }),
+              layers.dropFirst().allSatisfy({ $0.context === first.context }),
+              let commandBuffer = first.context.commandQueue.makeCommandBuffer() else { return }
+        var drawables = [CAMetalDrawable]()
+        for layer in layers {
+            guard let drawable = layer.encode(into: commandBuffer) else { return }
+            drawables.append(drawable)
+        }
+        drawables.forEach { commandBuffer.present($0) }
+        let logger = Self.logger
+        commandBuffer.addCompletedHandler { commandBuffer in
+            guard commandBuffer.status == .error else { return }
+            logger.error(
+                "Metal frame batch failed: \(commandBuffer.error?.localizedDescription ?? "Unknown error", privacy: .public)"
+            )
+        }
+        commandBuffer.commit()
     }
 
     private func configurePresentation() {
@@ -120,8 +140,12 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     override func display() {
+        Self.present([self])
+    }
+
+    private func encode(into commandBuffer: MTLCommandBuffer) -> CAMetalDrawable? {
         guard let frame = latestFrame,
-              CVPixelBufferGetPlaneCount(frame) >= 2 else { return }
+              CVPixelBufferGetPlaneCount(frame) >= 2 else { return nil }
         let scale = max(contentsScale, 1)
         drawableSize = CGSize(
             width: max(1, bounds.width * scale),
@@ -137,29 +161,20 @@ final class AppleNV24MetalLayer: CAMetalLayer {
                   from: frame,
                   plane: 1,
                   format: .rg8Unorm
-              ),
-              let commandBuffer = context.commandQueue.makeCommandBuffer() else { return }
+              ) else { return nil }
 
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
         encoder.setRenderPipelineState(context.pipeline)
         encoder.setFragmentTexture(luma, index: 0)
         encoder.setFragmentTexture(chroma, index: 1)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
-        commandBuffer.present(drawable)
-        let logger = Self.logger
-        commandBuffer.addCompletedHandler { commandBuffer in
-            guard commandBuffer.status == .error else { return }
-            logger.error(
-                "Metal frame failed: \(commandBuffer.error?.localizedDescription ?? "Unknown error", privacy: .public)"
-            )
-        }
-        commandBuffer.commit()
+        return drawable
     }
 
     private func texture(

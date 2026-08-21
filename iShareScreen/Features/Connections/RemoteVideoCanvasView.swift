@@ -189,8 +189,8 @@ final class RemoteVideoCanvasNSView: NSView {
                 options: [.alignMinXOutward, .alignMaxXOutward, .alignMinYOutward, .alignMaxYOutward]
             )
             tileContainers[index].isHidden = layout.container.isEmpty
-            displayLayers[index].display()
         }
+        presentMetalLayers()
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -376,6 +376,7 @@ final class RemoteVideoCanvasNSView: NSView {
         for (tileIndex, pixelBuffer) in frames.sorted(by: { $0.key < $1.key }) {
             display(pixelBuffer, at: tileIndex)
         }
+        presentMetalLayers()
     }
 
     private func display(_ pixelBuffer: CVPixelBuffer, at tileIndex: Int) {
@@ -386,7 +387,11 @@ final class RemoteVideoCanvasNSView: NSView {
             needsLayout = true
         }
 
-        (displayLayers[tileIndex] as? AppleNV24MetalLayer)?.present(pixelBuffer)
+        (displayLayers[tileIndex] as? AppleNV24MetalLayer)?.update(pixelBuffer)
+    }
+
+    private func presentMetalLayers() {
+        AppleNV24MetalLayer.present(displayLayers.compactMap { $0 as? AppleNV24MetalLayer })
     }
 
     private func currentFrames() -> AppleVideoFrameStore.FrameBatch {

@@ -2,27 +2,15 @@ import Combine
 import CoreGraphics
 
 struct AppleDisplayInputMapping: Equatable {
-    let backingFrame: CGRect
-    let logicalFrame: CGRect
-    let localBackingSize: CGSize?
-
-    init(backingFrame: CGRect, logicalFrame: CGRect, localBackingSize: CGSize? = nil) {
-        self.backingFrame = backingFrame
-        self.logicalFrame = logicalFrame
-        self.localBackingSize = localBackingSize
-    }
+    let scaledFrame: CGRect
 
     func point(from backingPoint: CGPoint, isDisplayLocal: Bool) -> (x: Int, y: Int)? {
-        let sourceSize = isDisplayLocal ? (localBackingSize ?? backingFrame.size) : backingFrame.size
-        guard sourceSize.width > 0, sourceSize.height > 0,
-              logicalFrame.width > 0, logicalFrame.height > 0 else { return nil }
-        let localX = backingPoint.x - (isDisplayLocal ? 0 : backingFrame.minX)
-        let localY = backingPoint.y - (isDisplayLocal ? 0 : backingFrame.minY)
-        let x = logicalFrame.minX + localX * logicalFrame.width / sourceSize.width
-        let y = logicalFrame.minY + localY * logicalFrame.height / sourceSize.height
+        guard scaledFrame.width > 0, scaledFrame.height > 0 else { return nil }
+        let x = backingPoint.x + (isDisplayLocal ? scaledFrame.minX : 0)
+        let y = backingPoint.y + (isDisplayLocal ? scaledFrame.minY : 0)
         return (
-            Int(min(logicalFrame.maxX - 1, max(logicalFrame.minX, x))),
-            Int(min(logicalFrame.maxY - 1, max(logicalFrame.minY, y)))
+            Int(min(scaledFrame.maxX - 1, max(scaledFrame.minX, x))),
+            Int(min(scaledFrame.maxY - 1, max(scaledFrame.minY, y)))
         )
     }
 }
@@ -88,19 +76,15 @@ final class AppleDisplayLayoutModel: ObservableObject {
         return displays[displayIndex].displayID
     }
 
-    func inputMapping(for displayIndex: Int, localCanvas: AppleCanvas? = nil) -> AppleDisplayInputMapping? {
+    func inputMapping(for displayIndex: Int) -> AppleDisplayInputMapping? {
         guard let displays = layout?.displays,
               displays.indices.contains(displayIndex) else { return nil }
         let display = displays[displayIndex]
-        return AppleDisplayInputMapping(
-            backingFrame: CGRect(x: display.x, y: display.y, width: display.width, height: display.height),
-            logicalFrame: CGRect(
-                x: display.logicalX,
-                y: display.logicalY,
-                width: display.logicalWidth,
-                height: display.logicalHeight
-            ),
-            localBackingSize: localCanvas.map { CGSize(width: $0.width, height: $0.height) }
-        )
+        return AppleDisplayInputMapping(scaledFrame: CGRect(
+            x: display.x,
+            y: display.y,
+            width: display.width,
+            height: display.height
+        ))
     }
 }

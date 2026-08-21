@@ -58,53 +58,44 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         XCTAssertTrue(model.supportsDynamicResolution)
     }
 
-    func testMapsBackingPixelsIntoGlobalLogicalInputCoordinates() {
+    func testMapsCombinedBackingPixelsWithoutAdditionalHiDPIScaling() {
         let mapping = AppleDisplayInputMapping(
-            backingFrame: CGRect(x: 3840, y: 0, width: 2880, height: 1800),
-            logicalFrame: CGRect(x: 1920, y: 0, width: 1440, height: 900)
+            scaledFrame: CGRect(x: 3840, y: 0, width: 2880, height: 1800)
         )
 
         XCTAssertEqual(
-            mapping.point(from: CGPoint(x: 1440, y: 900), isDisplayLocal: true)?.x,
-            2640
-        )
-        XCTAssertEqual(
             mapping.point(from: CGPoint(x: 5280, y: 900), isDisplayLocal: false)?.x,
-            2640
+            5280
         )
         XCTAssertEqual(
-            mapping.point(from: CGPoint(x: 1440, y: 900), isDisplayLocal: true)?.y,
-            450
+            mapping.point(from: CGPoint(x: 5280, y: 900), isDisplayLocal: false)?.y,
+            900
         )
     }
 
-    func testMapsIndependentStreamsUsingTheirNegotiatedCanvasSizes() {
+    func testMapsIndependentStreamsByAddingTheirScaledFrameOrigins() {
         let displayOne = AppleDisplayInputMapping(
-            backingFrame: CGRect(x: 2880, y: 0, width: 3840, height: 2160),
-            logicalFrame: CGRect(x: 1440, y: 0, width: 1920, height: 1080),
-            localBackingSize: CGSize(width: 2560, height: 1440)
+            scaledFrame: CGRect(x: 2880, y: 0, width: 3840, height: 2160)
         )
         let displayTwo = AppleDisplayInputMapping(
-            backingFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
-            logicalFrame: CGRect(x: 0, y: 0, width: 960, height: 540),
-            localBackingSize: CGSize(width: 2560, height: 1440)
+            scaledFrame: CGRect(x: 0, y: 0, width: 1920, height: 1080)
         )
 
         XCTAssertEqual(
-            displayOne.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.x,
-            2400
+            displayOne.point(from: CGPoint(x: 1920, y: 1080), isDisplayLocal: true)?.x,
+            4800
         )
         XCTAssertEqual(
-            displayOne.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.y,
+            displayOne.point(from: CGPoint(x: 1920, y: 1080), isDisplayLocal: true)?.y,
+            1080
+        )
+        XCTAssertEqual(
+            displayTwo.point(from: CGPoint(x: 960, y: 540), isDisplayLocal: true)?.x,
+            960
+        )
+        XCTAssertEqual(
+            displayTwo.point(from: CGPoint(x: 960, y: 540), isDisplayLocal: true)?.y,
             540
-        )
-        XCTAssertEqual(
-            displayTwo.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.x,
-            480
-        )
-        XCTAssertEqual(
-            displayTwo.point(from: CGPoint(x: 1280, y: 720), isDisplayLocal: true)?.y,
-            270
         )
     }
 

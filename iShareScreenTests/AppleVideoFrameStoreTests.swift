@@ -48,6 +48,29 @@ final class AppleVideoFrameStoreTests: XCTestCase {
         XCTAssertTrue(receivedBatches.first?[1] === secondTileFrame)
     }
 
+    @MainActor
+    func testDeliversCompleteTileSnapshotWhenOneTileChanges() async throws {
+        let store = AppleVideoFrameStore()
+        let firstTile = try makePixelBuffer(width: 8, height: 8)
+        let secondTile = try makePixelBuffer(width: 8, height: 8)
+        let updatedSecondTile = try makePixelBuffer(width: 16, height: 8)
+        store.publish(firstTile, at: 0)
+        store.publish(secondTile, at: 1)
+        await Task.yield()
+
+        let published = expectation(description: "Complete frame snapshot")
+        var received: AppleVideoFrameStore.FrameBatch?
+        _ = store.addObserver { frames in
+            received = frames
+            published.fulfill()
+        }
+        store.publish(updatedSecondTile, at: 1)
+
+        await fulfillment(of: [published], timeout: 1)
+        XCTAssertTrue(received?[0] === firstTile)
+        XCTAssertTrue(received?[1] === updatedSecondTile)
+    }
+
     private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
         var pixelBuffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(

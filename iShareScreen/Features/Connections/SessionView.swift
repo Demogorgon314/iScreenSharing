@@ -27,10 +27,7 @@ struct SessionView: View {
                     displayScale: displayScale,
                     synchronizesPresentation: synchronizesVideoPresentation,
                     sourceRect: usesIndependentVideoStreams ? nil : displayLayout.sourceRect(for: displayIndex),
-                    inputMapping: displayLayout.inputMapping(
-                        for: displayIndex,
-                        localCanvas: usesIndependentVideoStreams ? stream.canvas : nil
-                    ),
+                    inputMapping: displayLayout.inputMapping(for: displayIndex),
                     inputCoordinatesAreDisplayLocal: usesIndependentVideoStreams,
                     inputDisplayID: displayLayout.displayCount > 1
                         ? displayLayout.displayID(for: displayIndex)

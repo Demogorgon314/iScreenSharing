@@ -57,9 +57,9 @@ final class AppleVideoFrameStore: @unchecked Sendable {
     @MainActor
     private func deliverPendingFrames() {
         let delivery = lock.withFrameStoreLock {
-            let frames = pendingFrames
+            let snapshot = frames
             pendingFrames.removeAll(keepingCapacity: true)
-            return (frames, Array(observers.values))
+            return (snapshot, Array(observers.values))
         }
         if !delivery.0.isEmpty { delivery.1.forEach { $0(delivery.0) } }
         let hasMoreFrames = lock.withFrameStoreLock {
