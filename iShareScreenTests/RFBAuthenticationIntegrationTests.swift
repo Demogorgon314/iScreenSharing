@@ -38,7 +38,10 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertEqual(session.recordLayer?.contentKey, recordLayer.contentKey)
         XCTAssertGreaterThanOrEqual(session.rekeyGeneration ?? 0, 1)
 
-        let media = try await AppleMediaNegotiator().negotiate(session)
+        let media = try await AppleMediaNegotiator().negotiate(
+            session,
+            displayCount: virtualDisplayCount.rawValue
+        )
         XCTAssertTrue(media.canvas.isUsable)
         XCTAssertGreaterThan(media.canvas.width, 0)
         XCTAssertGreaterThan(media.canvas.height, 0)

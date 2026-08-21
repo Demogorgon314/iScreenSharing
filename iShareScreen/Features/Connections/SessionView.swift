@@ -17,14 +17,16 @@ struct SessionView: View {
 
     var body: some View {
         Group {
-            if let session = sessions.session(for: endpoint), let stream = session.videoStream {
+            if let session = sessions.session(for: endpoint),
+               let stream = session.videoStream(for: displayIndex) {
                 ActiveVideoSessionView(
                     stream: stream,
                     input: isObserving ? nil : session.inputController,
                     cursors: session.cursorStore,
                     displayScale: displayScale,
                     synchronizesPresentation: synchronizesVideoPresentation,
-                    sourceRect: displayLayout.sourceRect(for: displayIndex),
+                    sourceRect: session.videoStreams.count > 1 ? nil : displayLayout.sourceRect(for: displayIndex),
+                    inputOrigin: displayLayout.inputOrigin(for: displayIndex),
                     onViewportChange: viewportChanged
                 )
                 .onChange(of: stream.state) { _, state in
@@ -154,12 +156,12 @@ struct SessionView: View {
     private func scheduleDynamicResolution() {
         guard canUseDynamicResolution,
               let session = sessions.session(for: endpoint),
-              session.videoStream?.state == .streaming,
+              session.videoStream(for: displayIndex)?.state == .streaming,
               let controller = session.dynamicResolutionController else { return }
         dynamicResolution.schedule(
             displayIndex: displayIndex,
             viewport: viewportSize,
-            canvas: session.videoStream?.canvas,
+            canvas: session.videoStream(for: displayIndex)?.canvas,
             layout: displayLayout.layout,
             controller: controller
         )
@@ -209,6 +211,7 @@ private struct ActiveVideoSessionView: View {
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
     let sourceRect: CGRect?
+    let inputOrigin: CGPoint
     let onViewportChange: (CGSize) -> Void
 
     var body: some View {
@@ -221,7 +224,8 @@ private struct ActiveVideoSessionView: View {
                 cursors: cursors,
                 displayScale: displayScale,
                 synchronizesPresentation: synchronizesPresentation,
-                sourceRect: sourceRect
+                sourceRect: sourceRect,
+                inputOrigin: inputOrigin
             )
             .id(stream.canvas)
             if stream.state != .streaming {

@@ -86,7 +86,10 @@ final class AuthenticationCoordinator: ObservableObject {
                         for: session,
                         displaySizes: initialDisplaySizes
                     )
-                    let negotiation = try await mediaNegotiator.negotiate(session)
+                    let negotiation = try await mediaNegotiator.negotiate(
+                        session,
+                        displayCount: virtualDisplayCount.rawValue
+                    )
                     let input = AppleInputController(session: session, canvas: negotiation.canvas)
                     session.install(inputController: input)
                     let clipboard = AppleClipboardService()
@@ -126,6 +129,15 @@ final class AuthenticationCoordinator: ObservableObject {
                         pendingMessages: negotiation.pendingMessages,
                         receiveDisplayLayout: { layout in
                             await displayLayoutModel.receive(layout)
+                            if layout.displays.count > 1 {
+                                let width = layout.displays.map { $0.x + $0.width }.max() ?? negotiation.canvas.width
+                                let height = layout.displays.map { $0.y + $0.height }.max() ?? negotiation.canvas.height
+                                await input.update(canvas: AppleCanvas(
+                                    width: width,
+                                    height: height,
+                                    tileCount: negotiation.canvas.tileCount
+                                ))
+                            }
                             try? await dynamicResolutionController?.receive(layout)
                         },
                         receiveMediaCanvas: { canvas in

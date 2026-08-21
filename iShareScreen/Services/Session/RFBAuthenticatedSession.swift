@@ -10,7 +10,8 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var rekeyGeneration: UInt32?
     private(set) var mediaNegotiation: AppleMediaNegotiationResult?
     private(set) var mediaReceiver: AppleMediaReceiver?
-    private(set) var videoStream: AppleVideoStream?
+    private(set) var videoStreams = [AppleVideoStream]()
+    var videoStream: AppleVideoStream? { videoStreams.first }
     private(set) var inputController: AppleInputController?
     private(set) var controlMessageService: AppleControlMessageService?
     private(set) var clipboardService: AppleClipboardService?
@@ -42,7 +43,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         controlMessageService?.close()
         audioStream?.close()
         if let inputController { Task { await inputController.close() } }
-        videoStream?.close()
+        videoStreams.forEach { $0.close() }
         mediaReceiver?.close()
         transport.cancel()
     }
@@ -85,8 +86,17 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
 
     func install(videoStream: AppleVideoStream) {
-        self.videoStream?.close()
-        self.videoStream = videoStream
+        install(videoStreams: [videoStream])
+    }
+
+    func install(videoStreams: [AppleVideoStream]) {
+        self.videoStreams.forEach { $0.close() }
+        self.videoStreams = videoStreams
+    }
+
+    func videoStream(for displayIndex: Int) -> AppleVideoStream? {
+        guard videoStreams.indices.contains(displayIndex) else { return videoStream }
+        return videoStreams[displayIndex]
     }
 
     func install(inputController: AppleInputController) {
@@ -130,7 +140,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         controlMessageService?.close()
         audioStream?.close()
         if let inputController { Task { await inputController.close() } }
-        videoStream?.close()
+        videoStreams.forEach { $0.close() }
         mediaReceiver?.close()
         transport.cancel()
     }

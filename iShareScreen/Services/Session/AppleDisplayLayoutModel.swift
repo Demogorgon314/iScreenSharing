@@ -12,7 +12,7 @@ final class AppleDisplayLayoutModel: ObservableObject {
 
     var displayCount: Int { layout?.displays.count ?? expectedDisplayCount }
     var supportsDynamicResolution: Bool {
-        (1...2).contains(displayCount)
+        expectedDisplayCount == 1 && displayCount == 1
     }
 
     func receive(_ layout: AppleDisplayLayout) {
@@ -30,5 +30,11 @@ final class AppleDisplayLayoutModel: ObservableObject {
             width: display.width,
             height: display.height
         )
+    }
+
+    func inputOrigin(for displayIndex: Int) -> CGPoint {
+        guard let displays = layout?.displays,
+              displays.indices.contains(displayIndex) else { return .zero }
+        return CGPoint(x: displays[displayIndex].x, y: displays[displayIndex].y)
     }
 }

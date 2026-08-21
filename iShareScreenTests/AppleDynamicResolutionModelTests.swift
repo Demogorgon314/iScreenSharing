@@ -7,6 +7,11 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         XCTAssertTrue(AppleDynamicResolutionModel().isEnabled)
     }
 
+    @MainActor
+    func testIsDisabledForMultipleDisplays() {
+        XCTAssertFalse(AppleDynamicResolutionModel(displayCount: 2).isEnabled)
+    }
+
     func testNormalizesViewportToEvenProtocolBounds() {
         XCTAssertEqual(
             AppleDynamicResolutionSize.normalized(viewport: CGSize(width: 100.9, height: 200.1)),
@@ -78,7 +83,7 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
     }
 
     @MainActor
-    func testWaitsForBothDisplayViewportsAndRequestsThemTogether() async throws {
+    func testDoesNotRequestUnsupportedMultiDisplayResolution() async throws {
         let recorder = DynamicResolutionMessageRecorder()
         let controller = AppleDynamicResolutionController(
             initialCanvas: AppleCanvas(width: 3840, height: 1080, tileCount: 4),
@@ -88,32 +93,13 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         )
         let model = AppleDynamicResolutionModel(displayCount: 2)
 
-        model.schedule(
-            displayIndex: 0,
-            viewport: CGSize(width: 1000, height: 700),
-            controller: controller
-        )
-        try await Task.sleep(for: .milliseconds(600))
-        let incompleteRequestCount = await recorder.count()
-        XCTAssertEqual(incompleteRequestCount, 0)
-
-        model.schedule(
-            displayIndex: 1,
-            viewport: CGSize(width: 1200, height: 800),
-            controller: controller
-        )
-        model.schedule(
-            displayIndex: 1,
-            viewport: CGSize(width: 1200, height: 800),
-            controller: controller
-        )
+        model.isEnabled = true
+        model.schedule(displayIndex: 0, viewport: CGSize(width: 1000, height: 700), controller: controller)
+        model.schedule(displayIndex: 1, viewport: CGSize(width: 1200, height: 800), controller: controller)
         try await Task.sleep(for: .milliseconds(600))
 
         let messages = await recorder.allMessages()
-        XCTAssertEqual(messages.count, 2)
-        XCTAssertEqual(try messages[0].uint16BE(at: 6), 2)
-        XCTAssertEqual(try messages[0].uint32BE(at: 12 + 0x9c + 8), 1000)
-        XCTAssertEqual(try messages[0].uint32BE(at: 308 + 0x9c + 8), 1200)
+        XCTAssertTrue(messages.isEmpty)
     }
 }
 

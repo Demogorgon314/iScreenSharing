@@ -7,18 +7,41 @@ struct AppleMediaKeys: Equatable, Sendable {
     let audioServer: Data
     let videoViewer: Data
     let videoServer: Data
+    let secondaryVideoViewer: Data?
+    let secondaryVideoServer: Data?
 
-    static func random() throws -> AppleMediaKeys {
+    init(
+        audioViewer: Data,
+        audioServer: Data,
+        videoViewer: Data,
+        videoServer: Data,
+        secondaryVideoViewer: Data? = nil,
+        secondaryVideoServer: Data? = nil
+    ) {
+        self.audioViewer = audioViewer
+        self.audioServer = audioServer
+        self.videoViewer = videoViewer
+        self.videoServer = videoServer
+        self.secondaryVideoViewer = secondaryVideoViewer
+        self.secondaryVideoServer = secondaryVideoServer
+    }
+
+    static func random(includeSecondaryVideo: Bool = false) throws -> AppleMediaKeys {
         try AppleMediaKeys(
             audioViewer: Cryptography.randomBytes(count: blobLength),
             audioServer: Cryptography.randomBytes(count: blobLength),
             videoViewer: Cryptography.randomBytes(count: blobLength),
-            videoServer: Cryptography.randomBytes(count: blobLength)
+            videoServer: Cryptography.randomBytes(count: blobLength),
+            secondaryVideoViewer: includeSecondaryVideo ? Cryptography.randomBytes(count: blobLength) : nil,
+            secondaryVideoServer: includeSecondaryVideo ? Cryptography.randomBytes(count: blobLength) : nil
         )
     }
 
     func validate() throws {
-        guard [audioViewer, audioServer, videoViewer, videoServer].allSatisfy({ $0.count == Self.blobLength }) else {
+        let secondaryKeys = [secondaryVideoViewer, secondaryVideoServer].compactMap { $0 }
+        guard [audioViewer, audioServer, videoViewer, videoServer].allSatisfy({ $0.count == Self.blobLength }),
+              secondaryKeys.count != 1,
+              secondaryKeys.allSatisfy({ $0.count == Self.blobLength }) else {
             throw AppleMediaConfigurationError.invalidKeyLength
         }
     }
@@ -42,13 +65,21 @@ enum AppleMediaConfiguration {
     static func message(
         audioOffer: Data,
         videoOffer: Data,
+        secondaryVideoOffer: Data? = nil,
         keys: AppleMediaKeys,
         callID: UUID = UUID()
     ) throws -> Data {
         try keys.validate()
-        let messageSize = audioOffer.count + videoOffer.count + 0xd8
+        let secondaryVideoOffer = secondaryVideoOffer ?? Data()
+        let hasSecondaryKeys = keys.secondaryVideoViewer != nil && keys.secondaryVideoServer != nil
+        guard secondaryVideoOffer.isEmpty != hasSecondaryKeys else {
+            throw AppleMediaConfigurationError.invalidSecondaryVideo
+        }
+        let messageSize = audioOffer.count + videoOffer.count + secondaryVideoOffer.count
+            + 0xd8 + (secondaryVideoOffer.isEmpty ? 0 : 2 * AppleMediaKeys.blobLength)
         guard audioOffer.count <= Int(UInt16.max),
               videoOffer.count <= Int(UInt16.max),
+              secondaryVideoOffer.count <= Int(UInt16.max),
               messageSize <= Int(UInt16.max) else {
             throw AppleMediaConfigurationError.offerTooLarge
         }
@@ -57,9 +88,10 @@ enum AppleMediaConfiguration {
         message[0] = 0x1c
         message.writeUInt16BE(UInt16(messageSize), at: 2)
         message.writeUInt16BE(3, at: 4)
-        message.writeUInt32BE(7, at: 6)
+        message[6] = secondaryVideoOffer.isEmpty ? 0x05 : 0x07
         message.writeUInt16BE(UInt16(audioOffer.count), at: 10)
         message.writeUInt16BE(UInt16(videoOffer.count), at: 12)
+        message.writeUInt16BE(UInt16(secondaryVideoOffer.count), at: 14)
         withUnsafeBytes(of: callID.uuid) { message.replaceSubrange(0x14..<0x24, with: $0) }
         message.replaceSubrange(0x24..<0x52, with: keys.audioViewer)
         message.replaceSubrange(0x52..<0x80, with: keys.audioServer)
@@ -71,6 +103,17 @@ enum AppleMediaConfiguration {
             (videoOffset + 0x5c)..<(videoOffset + 0x5c + videoOffer.count),
             with: videoOffer
         )
+        if let secondaryVideoViewer = keys.secondaryVideoViewer,
+           let secondaryVideoServer = keys.secondaryVideoServer,
+           !secondaryVideoOffer.isEmpty {
+            let offset = videoOffset + 0x5c + videoOffer.count
+            message.replaceSubrange(offset..<(offset + 0x2e), with: secondaryVideoViewer)
+            message.replaceSubrange((offset + 0x2e)..<(offset + 0x5c), with: secondaryVideoServer)
+            message.replaceSubrange(
+                (offset + 0x5c)..<(offset + 0x5c + secondaryVideoOffer.count),
+                with: secondaryVideoOffer
+            )
+        }
         return message
     }
 
@@ -81,9 +124,15 @@ enum AppleMediaConfiguration {
 
     static func answerStatus(from answer: Data) -> AppleMediaAnswer {
         guard answer.first == 0 else { return .unrelated }
+        if let canvas = canvases(from: answer).first { return .canvas(canvas) }
+        return containsMediaAnswer(in: answer) ? .degenerate : .unrelated
+    }
+
+    static func canvases(from answer: Data) -> [AppleCanvas] {
+        guard answer.first == 0 else { return [] }
         let signature = Data("bplist".utf8)
         var searchStart = answer.startIndex
-        var foundMediaAnswer = false
+        var result = [AppleCanvas]()
         while searchStart < answer.endIndex,
               let range = answer.range(of: signature, in: searchStart..<answer.endIndex) {
             for end in stride(from: answer.endIndex, through: range.upperBound, by: -1) {
@@ -91,14 +140,18 @@ enum AppleMediaConfiguration {
                 guard let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil),
                       let dictionary = plist as? [String: Any],
                       let compressed = dictionary["avcMediaStreamNegotiatorMediaBlob"] as? Data else { continue }
-                foundMediaAnswer = true
                 guard let blob = try? AppleMediaOffer.decompressMediaBlob(compressed),
                       let canvas = canvas(fromProtobuf: blob), canvas.isUsable else { continue }
-                return .canvas(canvas)
+                result.append(canvas)
+                break
             }
             searchStart = range.upperBound
         }
-        return foundMediaAnswer ? .degenerate : .unrelated
+        return result
+    }
+
+    private static func containsMediaAnswer(in answer: Data) -> Bool {
+        answer.range(of: Data("avcMediaStreamNegotiatorMediaBlob".utf8)) != nil
     }
 
     private static func canvas(fromProtobuf data: Data) -> AppleCanvas? {
@@ -174,11 +227,13 @@ private struct ProtobufReader {
 
 enum AppleMediaConfigurationError: LocalizedError, Equatable {
     case invalidKeyLength
+    case invalidSecondaryVideo
     case offerTooLarge
 
     var errorDescription: String? {
         switch self {
         case .invalidKeyLength: "The media encryption key has an invalid length."
+        case .invalidSecondaryVideo: "The second display media offer is incomplete."
         case .offerTooLarge: "The media negotiation offer is too large."
         }
     }

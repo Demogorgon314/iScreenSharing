@@ -2,22 +2,29 @@ import Darwin
 import Foundation
 
 final class AppleMediaReceiver: @unchecked Sendable {
+    private enum PacketTarget { case control, primaryVideo, secondaryVideo }
     private static let maximumQueuedPackets = 16_384
     private static let maximumDatagramLength = 65_535
 
     private let lock = NSLock()
-    private let queue = DispatchQueue(label: "com.isharescreen.media-receiver")
+    private let queue: DispatchQueue
     private let controlSocket: Int32
     private let videoSocket: Int32
+    private let secondaryVideoSocket: Int32?
     private let controlSource: DispatchSourceRead
     private let videoSource: DispatchSourceRead
+    private let secondaryVideoSource: DispatchSourceRead?
     private let punchTimer: DispatchSourceTimer
     private var controlPackets = [Data]()
     private var videoPackets = [Data]()
+    private var secondaryVideoPackets = [Data]()
     private var isClosed = false
 
-    init(endpoint: ConnectionEndpoint) throws {
-        guard endpoint.port < UInt16.max else { throw AppleMediaReceiverError.invalidPort }
+    init(endpoint: ConnectionEndpoint, displayCount: Int = 1) throws {
+        let maximumPortOffset: UInt16 = displayCount > 1 ? 2 : 1
+        guard endpoint.port <= UInt16.max - maximumPortOffset else {
+            throw AppleMediaReceiverError.invalidPort
+        }
         let remoteAddress = try Self.resolveIPv4(endpoint.host)
         controlSocket = try Self.makeSocket(localPort: endpoint.port, remoteAddress: remoteAddress, remotePort: endpoint.port)
         do {
@@ -30,19 +37,53 @@ final class AppleMediaReceiver: @unchecked Sendable {
             Darwin.close(controlSocket)
             throw error
         }
+        let preparedSecondaryVideoSocket: Int32?
+        if displayCount > 1 {
+            do {
+                preparedSecondaryVideoSocket = try Self.makeSocket(
+                    localPort: endpoint.port + 2,
+                    remoteAddress: remoteAddress,
+                    remotePort: endpoint.port + 2
+                )
+            } catch {
+                Darwin.close(videoSocket)
+                Darwin.close(controlSocket)
+                throw error
+            }
+        } else {
+            preparedSecondaryVideoSocket = nil
+        }
+        secondaryVideoSocket = preparedSecondaryVideoSocket
 
-        controlSource = DispatchSource.makeReadSource(fileDescriptor: controlSocket, queue: queue)
-        videoSource = DispatchSource.makeReadSource(fileDescriptor: videoSocket, queue: queue)
-        punchTimer = DispatchSource.makeTimerSource(queue: queue)
+        let receiverQueue = DispatchQueue(label: "com.isharescreen.media-receiver")
+        queue = receiverQueue
+        controlSource = DispatchSource.makeReadSource(fileDescriptor: controlSocket, queue: receiverQueue)
+        videoSource = DispatchSource.makeReadSource(fileDescriptor: videoSocket, queue: receiverQueue)
+        if let preparedSecondaryVideoSocket {
+            secondaryVideoSource = DispatchSource.makeReadSource(
+                fileDescriptor: preparedSecondaryVideoSocket,
+                queue: receiverQueue
+            )
+        } else {
+            secondaryVideoSource = nil
+        }
+        punchTimer = DispatchSource.makeTimerSource(queue: receiverQueue)
 
-        controlSource.setEventHandler { [weak self] in self?.drain(self?.controlSocket, isVideo: false) }
-        videoSource.setEventHandler { [weak self] in self?.drain(self?.videoSocket, isVideo: true) }
+        controlSource.setEventHandler { [weak self] in self?.drain(self?.controlSocket, target: .control) }
+        videoSource.setEventHandler { [weak self] in self?.drain(self?.videoSocket, target: .primaryVideo) }
+        secondaryVideoSource?.setEventHandler {
+            [weak self] in self?.drain(self?.secondaryVideoSocket, target: .secondaryVideo)
+        }
         controlSource.setCancelHandler { [controlSocket] in Darwin.close(controlSocket) }
         videoSource.setCancelHandler { [videoSocket] in Darwin.close(videoSocket) }
+        secondaryVideoSource?.setCancelHandler { [secondaryVideoSocket] in
+            if let secondaryVideoSocket { Darwin.close(secondaryVideoSocket) }
+        }
         punchTimer.setEventHandler { [weak self] in self?.punch() }
         punchTimer.schedule(deadline: .now(), repeating: .milliseconds(100))
         controlSource.activate()
         videoSource.activate()
+        secondaryVideoSource?.activate()
         punchTimer.activate()
     }
 
@@ -50,8 +91,12 @@ final class AppleMediaReceiver: @unchecked Sendable {
         lock.withLock { videoPackets.count }
     }
 
-    func drainVideoPackets() -> [Data] {
+    func drainVideoPackets(displayIndex: Int = 0) -> [Data] {
         lock.withLock {
+            if displayIndex == 1 {
+                defer { secondaryVideoPackets.removeAll(keepingCapacity: true) }
+                return secondaryVideoPackets
+            }
             defer { videoPackets.removeAll(keepingCapacity: true) }
             return videoPackets
         }
@@ -65,10 +110,25 @@ final class AppleMediaReceiver: @unchecked Sendable {
     }
 
     func sendControl(_ datagram: Data) throws {
+        try send(datagram, through: controlSocket)
+    }
+
+    func sendVideoControl(_ datagram: Data, displayIndex: Int) throws {
+        if displayIndex == 1 {
+            guard let secondaryVideoSocket else {
+                throw AppleMediaReceiverError.secondaryVideoUnavailable
+            }
+            try send(datagram, through: secondaryVideoSocket)
+        } else {
+            try send(datagram, through: videoSocket)
+        }
+    }
+
+    private func send(_ datagram: Data, through socket: Int32) throws {
         let isOpen = lock.withLock { !isClosed }
         guard isOpen else { throw AppleMediaReceiverError.closed }
         let sent = datagram.withUnsafeBytes { bytes in
-            Darwin.send(controlSocket, bytes.baseAddress, bytes.count, 0)
+            Darwin.send(socket, bytes.baseAddress, bytes.count, 0)
         }
         guard sent == datagram.count else { throw AppleMediaReceiverError.sendFailed(errno) }
     }
@@ -87,6 +147,7 @@ final class AppleMediaReceiver: @unchecked Sendable {
         punchTimer.cancel()
         controlSource.cancel()
         videoSource.cancel()
+        secondaryVideoSource?.cancel()
     }
 
     deinit {
@@ -97,9 +158,12 @@ final class AppleMediaReceiver: @unchecked Sendable {
         var byte: UInt8 = 0
         _ = Darwin.send(controlSocket, &byte, 1, 0)
         _ = Darwin.send(videoSocket, &byte, 1, 0)
+        if let secondaryVideoSocket {
+            _ = Darwin.send(secondaryVideoSocket, &byte, 1, 0)
+        }
     }
 
-    private func drain(_ socket: Int32?, isVideo: Bool) {
+    private func drain(_ socket: Int32?, target: PacketTarget) {
         guard let socket else { return }
         var buffer = [UInt8](repeating: 0, count: Self.maximumDatagramLength)
         while true {
@@ -107,19 +171,20 @@ final class AppleMediaReceiver: @unchecked Sendable {
             guard count > 0 else { break }
             let packet = Data(buffer.prefix(count))
             lock.withLock {
-                if isVideo {
-                    if videoPackets.count == Self.maximumQueuedPackets {
-                        videoPackets.removeFirst(Self.maximumQueuedPackets / 4)
-                    }
-                    videoPackets.append(packet)
-                } else {
-                    if controlPackets.count == Self.maximumQueuedPackets {
-                        controlPackets.removeFirst(Self.maximumQueuedPackets / 4)
-                    }
-                    controlPackets.append(packet)
+                switch target {
+                case .control: Self.enqueue(packet, in: &controlPackets)
+                case .primaryVideo: Self.enqueue(packet, in: &videoPackets)
+                case .secondaryVideo: Self.enqueue(packet, in: &secondaryVideoPackets)
                 }
             }
         }
+    }
+
+    private static func enqueue(_ packet: Data, in packets: inout [Data]) {
+        if packets.count == maximumQueuedPackets {
+            packets.removeFirst(maximumQueuedPackets / 4)
+        }
+        packets.append(packet)
     }
 
     private static func makeSocket(
@@ -205,6 +270,7 @@ enum AppleMediaReceiverError: LocalizedError {
     case connectionFailed(Int32)
     case ipv4ResolutionFailed
     case invalidPort
+    case secondaryVideoUnavailable
     case closed
     case sendFailed(Int32)
 
@@ -218,6 +284,8 @@ enum AppleMediaReceiverError: LocalizedError {
             "The remote Mac does not have a usable IPv4 address for media streaming."
         case .invalidPort:
             "The Screen Sharing port is too high to allocate its media port."
+        case .secondaryVideoUnavailable:
+            "The secondary Screen Sharing video connection is unavailable."
         case .closed:
             "The Screen Sharing media connection is closed."
         case .sendFailed:

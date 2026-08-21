@@ -3,7 +3,7 @@ import Foundation
 
 @MainActor
 final class AppleDynamicResolutionModel: ObservableObject {
-    @Published var isEnabled = true {
+    @Published var isEnabled: Bool {
         didSet {
             if !isEnabled { cancel() }
         }
@@ -22,6 +22,7 @@ final class AppleDynamicResolutionModel: ObservableObject {
 
     init(displayCount: Int = 1) {
         self.displayCount = min(2, max(1, displayCount))
+        isEnabled = self.displayCount == 1
     }
 
     func schedule(
@@ -31,7 +32,8 @@ final class AppleDynamicResolutionModel: ObservableObject {
         layout: AppleDisplayLayout? = nil,
         controller: AppleDynamicResolutionController
     ) {
-        guard isEnabled,
+        guard displayCount == 1,
+              isEnabled,
               (0..<displayCount).contains(displayIndex),
               let size = AppleDynamicResolutionSize.normalized(viewport: viewport) else { return }
         viewportSizes[displayIndex] = size

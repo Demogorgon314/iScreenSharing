@@ -24,9 +24,10 @@ final class AppleMediaConfigurationTests: XCTestCase {
         XCTAssertEqual(message[0], 0x1c)
         XCTAssertEqual(try message.uint16BE(at: 2), UInt16(message.count - 4))
         XCTAssertEqual(try message.uint16BE(at: 4), 3)
-        XCTAssertEqual(try message.uint32BE(at: 6), 7)
+        XCTAssertEqual(message[6..<10], Data([0x05, 0, 0, 0]))
         XCTAssertEqual(try message.uint16BE(at: 10), 3)
         XCTAssertEqual(try message.uint16BE(at: 12), 2)
+        XCTAssertEqual(try message.uint16BE(at: 14), 0)
         XCTAssertEqual(
             message.subdata(in: 0x14..<0x24),
             Data([0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -38,6 +39,26 @@ final class AppleMediaConfigurationTests: XCTestCase {
         XCTAssertEqual(message.subdata(in: 0x83..<0xb1), keys.videoViewer)
         XCTAssertEqual(message.subdata(in: 0xb1..<0xdf), keys.videoServer)
         XCTAssertEqual(message.suffix(video.count), video)
+    }
+
+    func testBuildsSecondVideoStreamWithIndependentKeys() throws {
+        let keys = AppleMediaKeys(
+            audioViewer: Data(repeating: 0x11, count: 46),
+            audioServer: Data(repeating: 0x22, count: 46),
+            videoViewer: Data(repeating: 0x33, count: 46),
+            videoServer: Data(repeating: 0x44, count: 46),
+            secondaryVideoViewer: Data(repeating: 0x55, count: 46),
+            secondaryVideoServer: Data(repeating: 0x66, count: 46)
+        )
+        let message = try AppleMediaConfiguration.message(
+            audioOffer: Data([0xa1]),
+            videoOffer: Data([0xb1, 0xb2]),
+            secondaryVideoOffer: Data([0xc1, 0xc2, 0xc3]),
+            keys: keys
+        )
+        XCTAssertEqual(message[6..<10], Data([0x07, 0, 0, 0]))
+        XCTAssertEqual(try message.uint16BE(at: 14), 3)
+        XCTAssertEqual(message.suffix(3), Data([0xc1, 0xc2, 0xc3]))
     }
 
     func testRejectsInvalidKeyLength() {

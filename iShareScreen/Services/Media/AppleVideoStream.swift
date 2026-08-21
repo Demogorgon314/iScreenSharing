@@ -32,6 +32,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
     private let receiver: AppleMediaReceiver
+    private let displayIndex: Int
     private let processor: AppleHEVCStreamProcessor
     private let feedback: AppleVideoFeedbackController
     private let queue = DispatchQueue(label: "com.isharescreen.video-stream", qos: .userInteractive)
@@ -55,14 +56,19 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var lastStallKeyFrameRequestTime: TimeInterval = 0
     private var lastDecoderRestartTime: TimeInterval = 0
 
-    init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
+    convenience init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
+        try self.init(receiver: receiver, video: negotiation.videos[0])
+    }
+
+    init(receiver: AppleMediaReceiver, video: AppleVideoNegotiation) throws {
         self.receiver = receiver
-        canvas = negotiation.canvas
-        processor = try AppleHEVCStreamProcessor(keyBlob: negotiation.keys.videoServer)
+        displayIndex = video.displayIndex
+        canvas = video.canvas
+        processor = try AppleHEVCStreamProcessor(keyBlob: video.serverKey)
         feedback = try AppleVideoFeedbackController(
-            sender: receiver,
-            keyBlob: negotiation.keys.videoViewer,
-            synchronizationSource: negotiation.videoSynchronizationSource
+            sender: AppleVideoFeedbackSender(receiver: receiver, displayIndex: video.displayIndex),
+            keyBlob: video.viewerKey,
+            synchronizationSource: video.synchronizationSource
         )
     }
 
@@ -141,7 +147,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func processAvailablePackets() {
         sendReceiverReportIfNeeded()
-        let datagrams = receiver.drainVideoPackets()
+        let datagrams = receiver.drainVideoPackets(displayIndex: displayIndex)
         guard !datagrams.isEmpty else {
             if decoder == nil {
                 prepareDecoderIfPossible()
@@ -408,6 +414,20 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     }
 }
 
+private final class AppleVideoFeedbackSender: AppleMediaControlSending, @unchecked Sendable {
+    private let receiver: AppleMediaReceiver
+    private let displayIndex: Int
+
+    init(receiver: AppleMediaReceiver, displayIndex: Int) {
+        self.receiver = receiver
+        self.displayIndex = displayIndex
+    }
+
+    func sendControl(_ datagram: Data) throws {
+        try receiver.sendVideoControl(datagram, displayIndex: displayIndex)
+    }
+}
+
 struct AppleVideoInitialRecoveryPolicy {
     let keyFrameRequestDelay: TimeInterval
     let keyFrameRequestInterval: TimeInterval
@@ -505,9 +525,9 @@ struct AppleVideoStreamStarter: AppleVideoStreamStarting {
         guard let receiver = session.mediaReceiver else {
             throw AppleVideoStreamError.missingMediaReceiver
         }
-        let stream = try AppleVideoStream(receiver: receiver, negotiation: negotiation)
-        session.install(videoStream: stream)
-        stream.start()
+        let streams = try negotiation.videos.map { try AppleVideoStream(receiver: receiver, video: $0) }
+        session.install(videoStreams: streams)
+        streams.forEach { $0.start() }
     }
 }
 

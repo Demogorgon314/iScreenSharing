@@ -299,7 +299,10 @@ private actor DisplaySizeRecorder {
 }
 
 private struct MockMediaNegotiator: AppleMediaNegotiating {
-    func negotiate(_ session: RFBAuthenticatedSession) async throws -> AppleMediaNegotiationResult {
+    func negotiate(
+        _ session: RFBAuthenticatedSession,
+        displayCount: Int
+    ) async throws -> AppleMediaNegotiationResult {
         let keys = AppleMediaKeys(
             audioViewer: Data(repeating: 1, count: 46),
             audioServer: Data(repeating: 2, count: 46),

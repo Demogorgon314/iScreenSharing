@@ -10,6 +10,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
     let sourceRect: CGRect?
+    let inputOrigin: CGPoint
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
@@ -19,7 +20,8 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             cursors: cursors,
             displayScale: displayScale,
             synchronizesPresentation: synchronizesPresentation,
-            sourceRect: sourceRect
+            sourceRect: sourceRect,
+            inputOrigin: inputOrigin
         )
     }
 
@@ -27,6 +29,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
         view.displayScale = displayScale
         view.synchronizesPresentation = synchronizesPresentation
         view.sourceRect = sourceRect
+        view.inputOrigin = inputOrigin
     }
 }
 
@@ -48,6 +51,7 @@ final class RemoteVideoCanvasNSView: NSView {
             needsLayout = true
         }
     }
+    var inputOrigin: CGPoint
 
     private let canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
@@ -73,7 +77,8 @@ final class RemoteVideoCanvasNSView: NSView {
         cursors: AppleCursorStore?,
         displayScale: AppleVideoDisplayScale,
         synchronizesPresentation: Bool,
-        sourceRect: CGRect?
+        sourceRect: CGRect?,
+        inputOrigin: CGPoint
     ) {
         self.canvas = canvas
         self.frames = frames
@@ -82,6 +87,7 @@ final class RemoteVideoCanvasNSView: NSView {
         self.displayScale = displayScale
         self.synchronizesPresentation = synchronizesPresentation
         self.sourceRect = sourceRect
+        self.inputOrigin = inputOrigin
         let metalContext = AppleNV24MetalContext()
         tileContainers = (0..<canvas.tileCount).map { _ in CALayer() }
         displayLayers = (0..<canvas.tileCount).map { _ in
@@ -308,13 +314,14 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func remotePoint(for event: NSEvent) -> (x: Int, y: Int)? {
-        AppleVideoCanvasLayout.remotePoint(
+        guard let point = AppleVideoCanvasLayout.remotePoint(
             location: convert(event.locationInWindow, from: nil),
             canvas: canvas,
             bounds: bounds,
             fixedScale: displayScale.fixedScale,
             sourceRect: sourceRect
-        )
+        ) else { return nil }
+        return (point.x + Int(inputOrigin.x), point.y + Int(inputOrigin.y))
     }
 
     private func display(_ frames: AppleVideoFrameStore.FrameBatch) {

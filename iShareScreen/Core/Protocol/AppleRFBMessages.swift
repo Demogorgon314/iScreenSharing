@@ -72,6 +72,21 @@ enum AppleRFBMessages {
         return message
     }
 
+    static func autoFramebufferUpdate(
+        width: UInt16 = .max,
+        height: UInt16 = .max,
+        selectedScreen: UInt32 = .max
+    ) -> Data {
+        var message = Data([0x09, 0x00])
+        message.appendUInt16BE(1)
+        message.appendUInt32BE(selectedScreen)
+        message.appendUInt16BE(0)
+        message.appendUInt16BE(0)
+        message.appendUInt16BE(width)
+        message.appendUInt16BE(height)
+        return message
+    }
+
     static func keyEvent(isDown: Bool, keySymbol: UInt32) -> Data {
         var message = Data([0x04, isDown ? 0x01 : 0x00, 0x00, 0x00])
         message.appendUInt32BE(keySymbol)
