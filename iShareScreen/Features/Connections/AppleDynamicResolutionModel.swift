@@ -17,7 +17,7 @@ struct AppleDynamicResolutionSize: Equatable, Sendable {
 
 @MainActor
 final class AppleDynamicResolutionModel: ObservableObject {
-    @Published var isEnabled = false {
+    @Published var isEnabled = true {
         didSet {
             if !isEnabled { task?.cancel() }
         }

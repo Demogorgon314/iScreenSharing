@@ -27,7 +27,10 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         window.contentMinSize = NSSize(width: 800, height: 500)
         window.setContentSize(NSSize(width: 1100, height: 700))
         window.delegate = self
-        window.center()
+        let autosaveName = "SessionWindow.\(endpoint.url.absoluteString)"
+        let restoredFrame = window.setFrameUsingName(autosaveName)
+        window.setFrameAutosaveName(autosaveName)
+        if !restoredFrame { window.center() }
 
         let controller = NSWindowController(window: window)
         windowControllers[endpoint] = controller

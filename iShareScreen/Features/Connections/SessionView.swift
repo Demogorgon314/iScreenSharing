@@ -22,6 +22,9 @@ struct SessionView: View {
                     synchronizesPresentation: synchronizesVideoPresentation,
                     onViewportChange: viewportChanged
                 )
+                .onChange(of: stream.state) { _, state in
+                    if state == .streaming { scheduleDynamicResolution() }
+                }
             } else {
                 unavailableContent
             }
@@ -64,6 +67,12 @@ struct SessionView: View {
                 }
                 .help(isObserving ? "Switch to Control Mode" : "Switch to Observe Mode")
                 .disabled(isChangingMode || sessions.session(for: endpoint) == nil)
+                Toggle(isOn: $dynamicResolution.isEnabled) {
+                    Image(systemName: "display")
+                }
+                .toggleStyle(.button)
+                .help("Dynamic Resolution")
+                .accessibilityLabel("Dynamic Resolution")
                 Toggle(isOn: $synchronizesVideoPresentation) {
                     Image(systemName: "arrow.triangle.2.circlepath")
                 }
@@ -131,7 +140,9 @@ struct SessionView: View {
     }
 
     private func scheduleDynamicResolution() {
-        guard let controller = sessions.session(for: endpoint)?.dynamicResolutionController else { return }
+        guard let session = sessions.session(for: endpoint),
+              session.videoStream?.state == .streaming,
+              let controller = session.dynamicResolutionController else { return }
         dynamicResolution.schedule(viewport: viewportSize, controller: controller)
     }
 

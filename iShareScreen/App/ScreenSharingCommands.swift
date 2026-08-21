@@ -89,7 +89,7 @@ struct ScreenSharingCommands: Commands {
                 displayScale?.toggleScaling()
             }
             .disabled(displayScale == nil)
-            Button("Dynamic Resolution") { dynamicResolutionActions?.toggle() }
+            Toggle("Dynamic Resolution", isOn: dynamicResolutionBinding)
                 .disabled(dynamicResolutionActions?.canToggle != true)
             Toggle(
                 "Synchronize Video",
@@ -134,6 +134,16 @@ struct ScreenSharingCommands: Commands {
         Binding(
             get: { synchronizesVideoPresentation ?? false },
             set: { synchronizesVideoPresentation = $0 }
+        )
+    }
+
+    private var dynamicResolutionBinding: Binding<Bool> {
+        Binding(
+            get: { dynamicResolutionActions?.isEnabled ?? false },
+            set: { newValue in
+                guard newValue != dynamicResolutionActions?.isEnabled else { return }
+                dynamicResolutionActions?.toggle()
+            }
         )
     }
 }

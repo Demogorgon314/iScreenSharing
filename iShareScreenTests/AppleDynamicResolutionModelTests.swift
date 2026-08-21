@@ -2,6 +2,11 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleDynamicResolutionModelTests: XCTestCase {
+    @MainActor
+    func testIsEnabledByDefault() {
+        XCTAssertTrue(AppleDynamicResolutionModel().isEnabled)
+    }
+
     func testNormalizesViewportToEvenProtocolBounds() {
         XCTAssertEqual(
             AppleDynamicResolutionSize.normalized(viewport: CGSize(width: 100.9, height: 200.1)),
