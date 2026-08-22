@@ -4,6 +4,7 @@ DerivedDataRelease/
 ReleaseDerivedData/
 RuntimeDerivedData/
 build/
+dist/
 xcuserdata/
 *.xcuserstate
 *.profraw
