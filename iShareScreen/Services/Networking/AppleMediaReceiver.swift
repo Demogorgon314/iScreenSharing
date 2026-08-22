@@ -21,12 +21,16 @@ final class AppleMediaReceiver: @unchecked Sendable {
     private var secondaryVideoPackets = [Data]()
     private var isClosed = false
 
-    init(endpoint: ConnectionEndpoint, displayCount: Int = 1) throws {
+    init(
+        endpoint: ConnectionEndpoint,
+        mediaHost: String? = nil,
+        displayCount: Int = 1
+    ) throws {
         let maximumPortOffset: UInt16 = displayCount > 1 ? 2 : 1
         guard endpoint.port <= UInt16.max - maximumPortOffset else {
             throw AppleMediaReceiverError.invalidPort
         }
-        let remoteAddress = try Self.resolveIPv4(endpoint.host)
+        let remoteAddress = try Self.resolveIPv4(mediaHost ?? endpoint.host)
         self.remoteAddress = remoteAddress
         controlSocket = try Self.makeSocket(localPort: endpoint.port, remoteAddress: remoteAddress, remotePort: endpoint.port)
         do {

@@ -69,7 +69,11 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         _ session: RFBAuthenticatedSession,
         displayCount: Int = 1
     ) async throws -> AppleMediaNegotiationResult {
-        let receiver = try AppleMediaReceiver(endpoint: session.endpoint, displayCount: displayCount)
+        let receiver = try AppleMediaReceiver(
+            endpoint: session.endpoint,
+            mediaHost: session.mediaHost,
+            displayCount: displayCount
+        )
         session.install(mediaReceiver: receiver)
         do {
             return try await negotiate(session, receiver: receiver, displayCount: displayCount)

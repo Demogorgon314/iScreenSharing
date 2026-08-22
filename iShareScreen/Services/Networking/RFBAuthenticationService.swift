@@ -15,9 +15,9 @@ struct RFBAuthenticationService: RFBAuthenticating {
         to endpoint: ConnectionEndpoint,
         credentials: ScreenSharingCredentials
     ) async throws -> RFBAuthenticatedSession {
-        let transport = NWConnectionTransport(endpoint: endpoint)
+        let transport = NWConnectionTransport(endpoint: endpoint, requiresIPv4: true)
         do {
-            try await transport.start()
+            let remoteIPv4Host = try await transport.start()
             let probe = try await performVersionHandshake(on: transport)
             guard probe.securityTypes.contains(.appleRSA) else {
                 throw AppleRSA1Error.unsupportedServer
@@ -30,6 +30,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
             let serverInfo = try await initializeSession(on: transport)
             return RFBAuthenticatedSession(
                 endpoint: endpoint,
+                remoteIPv4Host: remoteIPv4Host,
                 serverVersion: probe.serverVersion,
                 securityTypes: probe.securityTypes,
                 masterKey: masterKey,

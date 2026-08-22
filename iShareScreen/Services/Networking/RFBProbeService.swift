@@ -14,7 +14,7 @@ struct RFBProbeService: RFBProbing {
         let transport = NWConnectionTransport(endpoint: endpoint)
         defer { transport.cancel() }
 
-        try await transport.start()
+        _ = try await transport.start()
         let banner = try await transport.receiveExactly(RFBProtocol.bannerLength)
         let version = try RFBProtocol.parseVersion(banner)
         try await transport.send(RFBProtocol.appleVersion)

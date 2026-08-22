@@ -2,6 +2,7 @@ import Foundation
 
 final class RFBAuthenticatedSession: @unchecked Sendable {
     let endpoint: ConnectionEndpoint
+    let remoteIPv4Host: String?
     let serverVersion: RFBVersion
     let securityTypes: [RFBSecurityType]
     let masterKey: Data
@@ -25,8 +26,13 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     private let transport: NWConnectionTransport
 
+    var mediaHost: String {
+        remoteIPv4Host ?? endpoint.host
+    }
+
     init(
         endpoint: ConnectionEndpoint,
+        remoteIPv4Host: String? = nil,
         serverVersion: RFBVersion,
         securityTypes: [RFBSecurityType],
         masterKey: Data,
@@ -34,6 +40,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         transport: NWConnectionTransport
     ) {
         self.endpoint = endpoint
+        self.remoteIPv4Host = remoteIPv4Host
         self.serverVersion = serverVersion
         self.securityTypes = securityTypes
         self.masterKey = masterKey
