@@ -3,6 +3,25 @@ import Metal
 import OSLog
 import QuartzCore
 
+private final class AppleMetalInFlightGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isInFlight = false
+
+    func begin() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isInFlight else { return false }
+        isInFlight = true
+        return true
+    }
+
+    func end() {
+        lock.lock()
+        isInFlight = false
+        lock.unlock()
+    }
+}
+
 @MainActor
 final class AppleNV24MetalContext {
     let device: MTLDevice
@@ -82,21 +101,31 @@ final class AppleNV24MetalLayer: CAMetalLayer {
 
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoRenderer")
     private let context: AppleNV24MetalContext
-    private var latestFrames = [Int: CVPixelBuffer]()
+    private let performance: AppleVideoPerformanceMonitor?
+    private var latestFrames = AppleVideoFrameStore.FrameBatch()
+    private var lastPresentedSequences = [Int: UInt64]()
     private var tileLayouts = [AppleVideoCanvasLayout.Tile]()
     private var renderingBounds = CGRect.zero
+    private let inFlightGate = AppleMetalInFlightGate()
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
     }
 
-    init(context: AppleNV24MetalContext, synchronizesPresentation: Bool = true) {
+    init(
+        context: AppleNV24MetalContext,
+        synchronizesPresentation: Bool = true,
+        performance: AppleVideoPerformanceMonitor? = nil
+    ) {
         self.context = context
         self.synchronizesPresentation = synchronizesPresentation
+        self.performance = performance
         super.init()
         device = context.device
         pixelFormat = .bgra8Unorm
         framebufferOnly = true
         backgroundColor = CGColor.black
+        maximumDrawableCount = 2
+        allowsNextDrawableTimeout = true
         configurePresentation()
     }
 
@@ -105,7 +134,9 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             fatalError("AppleNV24MetalLayer can only copy its own presentation layer")
         }
         context = source.context
+        performance = source.performance
         latestFrames = source.latestFrames
+        lastPresentedSequences = source.lastPresentedSequences
         tileLayouts = source.tileLayouts
         renderingBounds = source.renderingBounds
         synchronizesPresentation = source.synchronizesPresentation
@@ -118,26 +149,69 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         fatalError("init(coder:) is not supported")
     }
 
-    func update(_ pixelBuffer: CVPixelBuffer, at tileIndex: Int) {
-        latestFrames[tileIndex] = pixelBuffer
+    func update(_ frame: AppleVideoFrameStore.Frame, at tileIndex: Int) {
+        latestFrames[tileIndex] = frame
     }
 
     func update(layouts: [AppleVideoCanvasLayout.Tile], bounds: CGRect) {
         tileLayouts = layouts
         renderingBounds = bounds
+        updateDrawableSize()
     }
 
-    func present() {
+    @discardableResult
+    func present() -> Bool {
+        guard inFlightGate.begin() else {
+            performance?.recordRendererBusy()
+            return false
+        }
         guard !latestFrames.isEmpty,
               let commandBuffer = context.commandQueue.makeCommandBuffer(),
-              let drawable = encode(into: commandBuffer) else { return }
+              let drawable = nextDrawable(),
+              encode(into: commandBuffer, drawable: drawable) else {
+            inFlightGate.end()
+            return false
+        }
+        commit(commandBuffer, presenting: drawable, submittedAt: ProcessInfo.processInfo.systemUptime)
+        return true
+    }
+
+    @discardableResult
+    func present(drawable: CAMetalDrawable) -> Bool {
+        guard inFlightGate.begin() else {
+            performance?.recordRendererBusy()
+            return false
+        }
+        guard !latestFrames.isEmpty,
+              let commandBuffer = context.commandQueue.makeCommandBuffer(),
+              encode(into: commandBuffer, drawable: drawable) else {
+            inFlightGate.end()
+            return false
+        }
+        commit(commandBuffer, presenting: drawable, submittedAt: ProcessInfo.processInfo.systemUptime)
+        return true
+    }
+
+    private func commit(
+        _ commandBuffer: MTLCommandBuffer,
+        presenting drawable: CAMetalDrawable,
+        submittedAt: TimeInterval
+    ) {
+        recordPresentation(submittedAt: submittedAt)
         commandBuffer.present(drawable)
         let logger = Self.logger
+        let inFlightGate = inFlightGate
+        let performance = performance
         commandBuffer.addCompletedHandler { commandBuffer in
-            guard commandBuffer.status == .error else { return }
-            logger.error(
-                "Metal frame batch failed: \(commandBuffer.error?.localizedDescription ?? "Unknown error", privacy: .public)"
+            defer { inFlightGate.end() }
+            performance?.recordGPU(
+                duration: ProcessInfo.processInfo.systemUptime - submittedAt
             )
+            if commandBuffer.status == .error {
+                logger.error(
+                    "Metal frame batch failed: \(commandBuffer.error?.localizedDescription ?? "Unknown error", privacy: .public)"
+                )
+            }
         }
         commandBuffer.commit()
     }
@@ -147,32 +221,22 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         presentsWithTransaction = false
     }
 
-    override func display() {
-        present()
-    }
-
-    private func encode(into commandBuffer: MTLCommandBuffer) -> CAMetalDrawable? {
-        guard renderingBounds.width > 0, renderingBounds.height > 0 else { return nil }
-        let scale = max(contentsScale, 1)
-        drawableSize = CGSize(
-            width: max(1, bounds.width * scale),
-            height: max(1, bounds.height * scale)
-        )
-        guard let drawable = nextDrawable() else { return nil }
-
+    private func encode(into commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) -> Bool {
+        guard renderingBounds.width > 0, renderingBounds.height > 0 else { return false }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encoder.setRenderPipelineState(context.pipeline)
         for (tileIndex, frame) in latestFrames.sorted(by: { $0.key < $1.key }) {
+            let pixelBuffer = frame.pixelBuffer
             guard tileLayouts.indices.contains(tileIndex),
-                  CVPixelBufferGetPlaneCount(frame) >= 2,
+                  CVPixelBufferGetPlaneCount(pixelBuffer) >= 2,
                   let vertices = vertices(for: tileLayouts[tileIndex]),
-                  let luma = texture(from: frame, plane: 0, format: .r8Unorm),
-                  let chroma = texture(from: frame, plane: 1, format: .rg8Unorm) else { continue }
+                  let luma = texture(from: pixelBuffer, plane: 0, format: .r8Unorm),
+                  let chroma = texture(from: pixelBuffer, plane: 1, format: .rg8Unorm) else { continue }
             encoder.setVertexBytes(
                 vertices,
                 length: MemoryLayout<Vertex>.stride * vertices.count,
@@ -183,7 +247,44 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
         encoder.endEncoding()
-        return drawable
+        return true
+    }
+
+    private func recordPresentation(submittedAt: TimeInterval) {
+        let changedFrames = latestFrames.filter {
+            lastPresentedSequences[$0.key] != $0.value.sequence
+        }.map(\.value)
+        guard !changedFrames.isEmpty else { return }
+
+        let averageDecodedAt = changedFrames.map(\.decodedAt).reduce(0, +) / Double(changedFrames.count)
+        let decodedTimes = changedFrames.map(\.decodedAt)
+        let tileSkew = (decodedTimes.max() ?? submittedAt) - (decodedTimes.min() ?? submittedAt)
+        let decodingOrders = changedFrames.compactMap(\.decodingOrderNumber)
+        var decodingOrderSpan = 0
+        for lhs in decodingOrders {
+            for rhs in decodingOrders {
+                decodingOrderSpan = max(
+                    decodingOrderSpan,
+                    Int(min(lhs &- rhs, rhs &- lhs))
+                )
+            }
+        }
+        performance?.recordPresentation(
+            latency: submittedAt - averageDecodedAt,
+            tileSkew: tileSkew,
+            decodingOrderSpan: decodingOrderSpan
+        )
+        for (tileIndex, frame) in latestFrames {
+            lastPresentedSequences[tileIndex] = frame.sequence
+        }
+    }
+
+    private func updateDrawableSize() {
+        let scale = max(contentsScale, 1)
+        drawableSize = CGSize(
+            width: max(1, bounds.width * scale),
+            height: max(1, bounds.height * scale)
+        )
     }
 
     private func vertices(for layout: AppleVideoCanvasLayout.Tile) -> [Vertex]? {

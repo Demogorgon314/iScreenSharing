@@ -142,4 +142,36 @@ final class AppleRFBMessagesTests: XCTestCase {
             Data([0xff, 1, 0, 0, 0xff, 0x51, 1, 2, 3, 4, 0, 0, 0, 40, 0, 123])
         )
     }
+
+    func testBuildsNativeHighPrecisionScrollWheelEvent() {
+        let event = AppleScrollWheelEvent(
+            deltaX: -1,
+            deltaY: 2,
+            deltaZ: -3,
+            fixedDeltaX: 0x0102_0304,
+            fixedDeltaY: -2,
+            fixedDeltaZ: 0,
+            pointDeltaX: 0x1122_3344,
+            pointDeltaY: -1,
+            pointDeltaZ: 4,
+            scrollPhase: 1,
+            momentumPhase: 2,
+            scrollCount: 3,
+            flags: 0x1234_5678
+        )
+
+        XCTAssertEqual(
+            AppleRFBMessages.scrollWheelEvent(event, x: 0x9abc, y: 0xdef0),
+            Data([
+                0x17, 0x00, 0x00, 0x36, 0x00, 0x01, 0x00, 0x0b,
+                0xff, 0xff, 0x00, 0x02, 0xff, 0xfd,
+                0x01, 0x02, 0x03, 0x04, 0xff, 0xff, 0xff, 0xfe,
+                0x00, 0x00, 0x00, 0x00, 0x11, 0x22, 0x33, 0x44,
+                0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x04,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02,
+                0x00, 0x00, 0x00, 0x03, 0x12, 0x34, 0x56, 0x78,
+                0x9a, 0xbc, 0xde, 0xf0,
+            ])
+        )
+    }
 }

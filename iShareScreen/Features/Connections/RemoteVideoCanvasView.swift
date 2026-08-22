@@ -5,6 +5,7 @@ import SwiftUI
 struct RemoteVideoCanvasView: NSViewRepresentable {
     let canvas: AppleCanvas
     let frames: AppleVideoFrameStore
+    let performance: AppleVideoPerformanceMonitor
     let input: AppleInputController?
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
@@ -25,7 +26,8 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             sourceRect: sourceRect,
             inputMapping: inputMapping,
             inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
-            inputDisplayID: inputDisplayID
+            inputDisplayID: inputDisplayID,
+            performance: performance
         )
     }
 
@@ -52,6 +54,7 @@ final class RemoteVideoCanvasNSView: NSView {
         didSet {
             guard synchronizesPresentation != oldValue else { return }
             (displayLayer as? AppleNV24MetalLayer)?.synchronizesPresentation = synchronizesPresentation
+            schedulePresentation()
         }
     }
     var sourceRect: CGRect? {
@@ -66,6 +69,7 @@ final class RemoteVideoCanvasNSView: NSView {
 
     private let canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
+    private let performance: AppleVideoPerformanceMonitor?
     private let input: AppleInputController?
     private let cursors: AppleCursorStore?
     private let displayLayer: CALayer
@@ -77,8 +81,6 @@ final class RemoteVideoCanvasNSView: NSView {
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var buttonMask: UInt8 = 0
     private var lastRemotePoint: (x: Int, y: Int)?
-    private var horizontalScrollRemainder: CGFloat = 0
-    private var verticalScrollRemainder: CGFloat = 0
     private var activeModifiers = [UInt16: ActiveModifier]()
     private var inputTask: Task<Void, Never>?
 
@@ -92,10 +94,12 @@ final class RemoteVideoCanvasNSView: NSView {
         sourceRect: CGRect?,
         inputMapping: AppleDisplayInputMapping?,
         inputCoordinatesAreDisplayLocal: Bool,
-        inputDisplayID: UInt32?
+        inputDisplayID: UInt32?,
+        performance: AppleVideoPerformanceMonitor? = nil
     ) {
         self.canvas = canvas
         self.frames = frames
+        self.performance = performance
         self.input = input
         self.cursors = cursors
         self.displayScale = displayScale
@@ -109,7 +113,8 @@ final class RemoteVideoCanvasNSView: NSView {
         if let metalContext {
             displayLayer = AppleNV24MetalLayer(
                 context: metalContext,
-                synchronizesPresentation: synchronizesPresentation
+                synchronizesPresentation: synchronizesPresentation,
+                performance: performance
             )
         } else {
             let fallback = CALayer()
@@ -178,7 +183,7 @@ final class RemoteVideoCanvasNSView: NSView {
         )
         displayLayer.frame = bounds
         (displayLayer as? AppleNV24MetalLayer)?.update(layouts: layouts, bounds: bounds)
-        presentMetalLayer()
+        schedulePresentation()
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -241,21 +246,25 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let input, let point = remotePoint(for: event) ?? lastRemotePoint else { return }
-        horizontalScrollRemainder += event.scrollingDeltaX
-        verticalScrollRemainder += event.scrollingDeltaY
-        let horizontalTicks = Int(horizontalScrollRemainder)
-        let verticalTicks = Int(verticalScrollRemainder)
-        guard horizontalTicks != 0 || verticalTicks != 0 else { return }
-        horizontalScrollRemainder -= CGFloat(horizontalTicks)
-        verticalScrollRemainder -= CGFloat(verticalTicks)
-        enqueueInput {
-            await input.scroll(
-                verticalTicks: verticalTicks,
-                horizontalTicks: horizontalTicks,
-                x: point.x,
-                y: point.y,
-                displayID: self.inputDisplayID
-            )
+        if let scrollEvent = Self.scrollWheelEvent(from: event) {
+            enqueueInput {
+                await input.scroll(
+                    event: scrollEvent,
+                    x: point.x,
+                    y: point.y,
+                    displayID: self.inputDisplayID
+                )
+            }
+        } else {
+            enqueueInput {
+                await input.scroll(
+                    verticalTicks: Self.direction(of: event.deltaY),
+                    horizontalTicks: Self.direction(of: event.deltaX),
+                    x: point.x,
+                    y: point.y,
+                    displayID: self.inputDisplayID
+                )
+            }
         }
     }
 
@@ -447,30 +456,31 @@ final class RemoteVideoCanvasNSView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        for (tileIndex, pixelBuffer) in frames.sorted(by: { $0.key < $1.key }) {
-            display(pixelBuffer, at: tileIndex)
+        for (tileIndex, frame) in frames.sorted(by: { $0.key < $1.key }) {
+            display(frame, at: tileIndex)
         }
-        presentMetalLayer()
+        schedulePresentation()
     }
 
-    private func display(_ pixelBuffer: CVPixelBuffer, at tileIndex: Int) {
+    private func display(_ frame: AppleVideoFrameStore.Frame, at tileIndex: Int) {
         guard decodedTileHeights.indices.contains(tileIndex) else { return }
+        let pixelBuffer = frame.pixelBuffer
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
         if decodedTileHeights[tileIndex] != height {
             decodedTileHeights[tileIndex] = height
             needsLayout = true
         }
 
-        (displayLayer as? AppleNV24MetalLayer)?.update(pixelBuffer, at: tileIndex)
+        (displayLayer as? AppleNV24MetalLayer)?.update(frame, at: tileIndex)
     }
 
-    private func presentMetalLayer() {
-        (displayLayer as? AppleNV24MetalLayer)?.present()
+    private func schedulePresentation() {
+        _ = (displayLayer as? AppleNV24MetalLayer)?.present()
     }
 
     private func currentFrames() -> AppleVideoFrameStore.FrameBatch {
         (0..<canvas.tileCount).reduce(into: [:]) { result, tileIndex in
-            result[tileIndex] = frames.frame(at: tileIndex)
+            result[tileIndex] = frames.storedFrame(at: tileIndex)
         }
     }
 
@@ -511,6 +521,29 @@ final class RemoteVideoCanvasNSView: NSView {
             return 0
         }
         return UInt16(clamping: value)
+    }
+
+    private static func scrollWheelEvent(from event: NSEvent) -> AppleScrollWheelEvent? {
+        guard let cgEvent = event.cgEvent else { return nil }
+        return AppleScrollWheelEvent(
+            deltaX: Int16(clamping: cgEvent.getIntegerValueField(.scrollWheelEventDeltaAxis2)),
+            deltaY: Int16(clamping: cgEvent.getIntegerValueField(.scrollWheelEventDeltaAxis1)),
+            deltaZ: Int16(clamping: cgEvent.getIntegerValueField(.scrollWheelEventDeltaAxis3)),
+            fixedDeltaX: Int32(clamping: cgEvent.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis2)),
+            fixedDeltaY: Int32(clamping: cgEvent.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis1)),
+            fixedDeltaZ: Int32(clamping: cgEvent.getIntegerValueField(.scrollWheelEventFixedPtDeltaAxis3)),
+            pointDeltaX: Int32(clamping: cgEvent.getIntegerValueField(.scrollWheelEventPointDeltaAxis2)),
+            pointDeltaY: Int32(clamping: cgEvent.getIntegerValueField(.scrollWheelEventPointDeltaAxis1)),
+            pointDeltaZ: Int32(clamping: cgEvent.getIntegerValueField(.scrollWheelEventPointDeltaAxis3)),
+            scrollPhase: UInt32(truncatingIfNeeded: cgEvent.getIntegerValueField(.scrollWheelEventScrollPhase)),
+            momentumPhase: UInt32(truncatingIfNeeded: cgEvent.getIntegerValueField(.scrollWheelEventMomentumPhase)),
+            scrollCount: UInt32(truncatingIfNeeded: cgEvent.getIntegerValueField(.scrollWheelEventScrollCount)),
+            flags: UInt32(truncatingIfNeeded: cgEvent.flags.rawValue)
+        )
+    }
+
+    private static func direction(of delta: CGFloat) -> Int {
+        delta == 0 ? 0 : delta > 0 ? 1 : -1
     }
 
 }

@@ -1,5 +1,21 @@
 import Foundation
 
+struct AppleScrollWheelEvent: Equatable, Sendable {
+    let deltaX: Int16
+    let deltaY: Int16
+    let deltaZ: Int16
+    let fixedDeltaX: Int32
+    let fixedDeltaY: Int32
+    let fixedDeltaZ: Int32
+    let pointDeltaX: Int32
+    let pointDeltaY: Int32
+    let pointDeltaZ: Int32
+    let scrollPhase: UInt32
+    let momentumPhase: UInt32
+    let scrollCount: UInt32
+    let flags: UInt32
+}
+
 enum AppleRFBMessages {
     static let highPerformanceEncodings: [Int32] = [
         1010, 1011, 1002, 1104, 1100,
@@ -102,6 +118,33 @@ enum AppleRFBMessages {
     static func controlMode(observing: Bool) -> Data {
         var message = Data([0x0a, 0x00])
         message.appendUInt16BE(observing ? 0 : 1)
+        return message
+    }
+
+    static func scrollWheelEvent(
+        _ event: AppleScrollWheelEvent,
+        x: UInt16,
+        y: UInt16
+    ) -> Data {
+        var message = Data([0x17, 0x00])
+        message.appendUInt16BE(54)
+        message.appendUInt16BE(1)
+        message.appendUInt16BE(11)
+        message.appendUInt16BE(UInt16(bitPattern: event.deltaX))
+        message.appendUInt16BE(UInt16(bitPattern: event.deltaY))
+        message.appendUInt16BE(UInt16(bitPattern: event.deltaZ))
+        message.appendInt32BE(event.fixedDeltaX)
+        message.appendInt32BE(event.fixedDeltaY)
+        message.appendInt32BE(event.fixedDeltaZ)
+        message.appendInt32BE(event.pointDeltaX)
+        message.appendInt32BE(event.pointDeltaY)
+        message.appendInt32BE(event.pointDeltaZ)
+        message.appendUInt32BE(event.scrollPhase)
+        message.appendUInt32BE(event.momentumPhase)
+        message.appendUInt32BE(event.scrollCount)
+        message.appendUInt32BE(event.flags)
+        message.appendUInt16BE(x)
+        message.appendUInt16BE(y)
         return message
     }
 

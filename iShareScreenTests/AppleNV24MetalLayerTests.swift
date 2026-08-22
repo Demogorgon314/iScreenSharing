@@ -13,6 +13,8 @@ final class AppleNV24MetalLayerTests: XCTestCase {
 
         XCTAssertTrue(layer.displaySyncEnabled)
         XCTAssertFalse(layer.presentsWithTransaction)
+        XCTAssertEqual(layer.maximumDrawableCount, 2)
+        XCTAssertTrue(layer.allowsNextDrawableTimeout)
 
         layer.synchronizesPresentation = false
         XCTAssertFalse(layer.displaySyncEnabled)
@@ -37,5 +39,28 @@ final class AppleNV24MetalLayerTests: XCTestCase {
             view.layer?.sublayers?.filter { $0 is AppleNV24MetalLayer }.count,
             1
         )
+    }
+
+    func testVideoCanvasUsesMetalLayerSynchronization() throws {
+        let view = RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            frames: AppleVideoFrameStore(),
+            input: nil,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+        let metalLayer = try XCTUnwrap(
+            view.layer?.sublayers?.compactMap { $0 as? AppleNV24MetalLayer }.first
+        )
+
+        XCTAssertTrue(metalLayer.displaySyncEnabled)
+
+        view.synchronizesPresentation = false
+        XCTAssertFalse(metalLayer.displaySyncEnabled)
     }
 }

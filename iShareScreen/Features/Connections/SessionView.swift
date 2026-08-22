@@ -13,6 +13,7 @@ struct SessionView: View {
     @State private var modeError: String?
     @State private var viewportSize = CGSize.zero
     @AppStorage("synchronizesVideoPresentation") private var synchronizesVideoPresentation = true
+    @AppStorage("showsVideoPerformanceOverlay") private var showsVideoPerformanceOverlay = false
     private let viewportStore = SessionViewportStore()
 
     var body: some View {
@@ -26,6 +27,7 @@ struct SessionView: View {
                     cursors: session.cursorStore,
                     displayScale: displayScale,
                     synchronizesPresentation: synchronizesVideoPresentation,
+                    showsPerformanceOverlay: showsVideoPerformanceOverlay,
                     sourceRect: usesIndependentVideoStreams ? nil : displayLayout.sourceRect(for: displayIndex),
                     inputMapping: displayLayout.inputMapping(
                         for: displayIndex,
@@ -97,6 +99,12 @@ struct SessionView: View {
                 .toggleStyle(.button)
                 .help("Synchronize Video")
                 .accessibilityLabel("Synchronize Video")
+                Toggle(isOn: $showsVideoPerformanceOverlay) {
+                    Image(systemName: "chart.xyaxis.line")
+                }
+                .toggleStyle(.button)
+                .help("Video Performance")
+                .accessibilityLabel("Video Performance")
                 if let audio = sessions.session(for: endpoint)?.audioStream {
                     AudioMuteButton(audio: audio)
                 }
@@ -218,6 +226,7 @@ private struct ActiveVideoSessionView: View {
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
+    let showsPerformanceOverlay: Bool
     let sourceRect: CGRect?
     let inputMapping: AppleDisplayInputMapping?
     let inputCoordinatesAreDisplayLocal: Bool
@@ -230,6 +239,7 @@ private struct ActiveVideoSessionView: View {
             RemoteVideoCanvasView(
                 canvas: stream.canvas,
                 frames: stream.frames,
+                performance: stream.performance,
                 input: input,
                 cursors: cursors,
                 displayScale: displayScale,
@@ -240,6 +250,12 @@ private struct ActiveVideoSessionView: View {
                 inputDisplayID: inputDisplayID
             )
             .id(stream.canvas)
+            if showsPerformanceOverlay {
+                AppleVideoPerformanceOverlay(performance: stream.performance)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(12)
+                    .allowsHitTesting(false)
+            }
             if stream.state != .streaming {
                 Color.black
                     .overlay {
@@ -269,5 +285,58 @@ private struct ActiveVideoSessionView: View {
         case .failed(let message): message
         case .stopped: "The connection is no longer active."
         }
+    }
+}
+
+private struct AppleVideoPerformanceOverlay: View {
+    @ObservedObject var performance: AppleVideoPerformanceMonitor
+
+    var body: some View {
+        let stats = performance.snapshot
+        VStack(alignment: .leading, spacing: 3) {
+            Text(String(
+                format: "Network  %.1f Mb/s  %.0f pkt/s",
+                stats.networkMegabitsPerSecond,
+                stats.networkPacketsPerSecond
+            ))
+            Text(String(
+                format: "Stream   %.1f AU/s",
+                stats.accessUnitsPerSecond
+            ))
+            Text(String(
+                format: "Decode   %.1f fps  %.2f ms",
+                stats.decodedFramesPerSecond,
+                stats.averageDecodeMilliseconds
+            ))
+            Text(String(
+                format: "Present  %.1f fps  %.2f ms",
+                stats.presentedFramesPerSecond,
+                stats.averagePresentationMilliseconds
+            ))
+            Text(String(
+                format: "GPU      %.2f ms  Tile %.2f ms  DON %d",
+                stats.averageGPUMilliseconds,
+                stats.maximumTileSkewMilliseconds,
+                stats.maximumDecodingOrderSpan
+            ))
+            Text(String(
+                format: "Recovery NACK %d  FIR %d  Busy %d",
+                stats.nackCount,
+                stats.keyFrameRequestCount,
+                stats.rendererBusyCount
+            ))
+        }
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.74), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 0.5)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Video performance statistics")
     }
 }

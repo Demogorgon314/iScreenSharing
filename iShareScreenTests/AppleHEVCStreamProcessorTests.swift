@@ -49,6 +49,40 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertNil(processor.process(packet(sequence: 12, marker: true, payload: payload)))
     }
 
+    func testCompletesAccessUnitWhenMissingPacketArrivesAfterMarker() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+        XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: payload)))
+        XCTAssertNil(processor.process(packet(sequence: 12, marker: true, payload: payload)))
+
+        let unit = try XCTUnwrap(
+            processor.process(packet(sequence: 11, marker: false, payload: payload))
+        )
+
+        XCTAssertEqual(unit.nalUnits.count, 3)
+        XCTAssertEqual(unit.decodingOrderNumber, 1)
+    }
+
+    func testSeparatesInterleavedAccessUnitsWhenRTPTimestampDoesNotChange() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let firstPayload = Data([0x42, 0x01, 0, 1, 0xaa])
+        let secondPayload = Data([0x42, 0x01, 0, 2, 0xbb])
+
+        XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: firstPayload)))
+        XCTAssertNil(processor.process(packet(sequence: 20, marker: false, payload: secondPayload)))
+        let first = try XCTUnwrap(
+            processor.process(packet(sequence: 11, marker: true, payload: firstPayload))
+        )
+        let second = try XCTUnwrap(
+            processor.process(packet(sequence: 21, marker: true, payload: secondPayload))
+        )
+
+        XCTAssertEqual(first.decodingOrderNumber, 1)
+        XCTAssertEqual(first.nalUnits.count, 2)
+        XCTAssertEqual(second.decodingOrderNumber, 2)
+        XCTAssertEqual(second.nalUnits.count, 2)
+    }
+
     func testTracksSequenceGapsAndCancelsNACKForLatePacket() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: Data([1]))))

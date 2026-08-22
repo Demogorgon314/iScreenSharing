@@ -40,7 +40,6 @@ final class AppleInputControllerTests: XCTestCase {
             AppleInputController.scrollButtons(verticalTicks: 2, horizontalTicks: -1),
             [
                 AppleInputController.scrollUp, 0,
-                AppleInputController.scrollUp, 0,
                 AppleInputController.scrollRight, 0,
             ]
         )
@@ -49,6 +48,13 @@ final class AppleInputControllerTests: XCTestCase {
             [
                 AppleInputController.scrollDown, 0,
                 AppleInputController.scrollLeft, 0,
+            ]
+        )
+        XCTAssertEqual(
+            AppleInputController.scrollButtons(verticalTicks: 50, horizontalTicks: -50),
+            [
+                AppleInputController.scrollUp, 0,
+                AppleInputController.scrollRight, 0,
             ]
         )
     }

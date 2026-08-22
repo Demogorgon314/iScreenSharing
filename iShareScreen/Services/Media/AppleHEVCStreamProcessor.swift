@@ -19,6 +19,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
     private struct GroupKey: Hashable {
         let source: UInt32
         let timestamp: UInt32
+        let decodingOrderNumber: UInt16?
     }
 
     private let lock = NSLock()
@@ -44,7 +45,11 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
 
     private func processUnlocked(_ packet: AppleRTPPacket) -> AppleHEVCAccessUnit? {
         sequenceTracker.observe(packet)
-        let key = GroupKey(source: packet.synchronizationSource, timestamp: packet.timestamp)
+        let key = GroupKey(
+            source: packet.synchronizationSource,
+            timestamp: packet.timestamp,
+            decodingOrderNumber: AppleHEVCNALUnit.firstDecodingOrderNumber(in: [packet.payload])
+        )
         sourcePacketCounts[key.source, default: 0] += 1
         var packets = groups[key, default: []]
         if !packets.contains(where: { $0.sequenceNumber == packet.sequenceNumber }) {
@@ -54,19 +59,17 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         guard packets.contains(where: \.marker) else { return nil }
         let ordered = Self.sequenceOrdered(packets)
         guard ordered.last?.marker == true else { return nil }
-        groups.removeValue(forKey: key)
         let units = AppleHEVCNALUnit.reassemble(ordered.map(\.payload))
-        harvest(units)
         let isComplete = ordered.indices.dropLast().allSatisfy { index in
             ordered[index].sequenceNumber &+ 1 == ordered[index + 1].sequenceNumber
         }
         guard isComplete, !units.isEmpty else { return nil }
+        groups.removeValue(forKey: key)
+        harvest(units)
         return AppleHEVCAccessUnit(
             synchronizationSource: key.source,
             timestamp: key.timestamp,
-            decodingOrderNumber: AppleHEVCNALUnit.firstDecodingOrderNumber(
-                in: ordered.map(\.payload)
-            ),
+            decodingOrderNumber: key.decodingOrderNumber,
             nalUnits: units
         )
     }

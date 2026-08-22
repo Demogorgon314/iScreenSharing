@@ -109,16 +109,41 @@ actor AppleInputController {
         }
     }
 
+    func scroll(
+        event: AppleScrollWheelEvent,
+        x: Int,
+        y: Int,
+        displayID: UInt32? = nil
+    ) async {
+        guard let session, !isClosed else { return }
+        let point = Self.clampedPoint(
+            x: x,
+            y: y,
+            canvas: displayID == nil ? canvas : nil
+        )
+        var messages = [Data]()
+        if let selectionMessage = displaySelection.message(for: displayID) {
+            messages.append(selectionMessage)
+        }
+        messages.append(AppleRFBMessages.scrollWheelEvent(event, x: point.x, y: point.y))
+        do {
+            try await session.sendEncrypted(messages)
+            sentEventCount += 1
+        } catch {
+            displaySelection = AppleInputDisplaySelection()
+            // Input is best effort. Session-level failures surface through the active connection.
+        }
+    }
+
     static func scrollButtons(verticalTicks: Int, horizontalTicks: Int) -> [UInt8] {
         let axes: [(ticks: Int, positive: UInt8, negative: UInt8)] = [
             (verticalTicks, scrollUp, scrollDown),
             (horizontalTicks, scrollLeft, scrollRight),
         ]
         return axes.flatMap { ticks, positiveButton, negativeButton -> [UInt8] in
-            let count = min(abs(ticks), 50)
-            guard count > 0 else { return [] }
+            guard ticks != 0 else { return [] }
             let button = ticks > 0 ? positiveButton : negativeButton
-            return Array(repeating: [button, 0], count: count).flatMap { $0 }
+            return [button, 0]
         }
     }
 
