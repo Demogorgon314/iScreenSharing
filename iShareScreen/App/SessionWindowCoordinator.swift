@@ -11,9 +11,15 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         let displayIndex: Int
     }
 
+    private struct FullScreenChromeState {
+        let toolbarWasVisible: Bool?
+        let titlebarSeparatorStyle: NSTitlebarSeparatorStyle
+    }
+
     private var windowControllers: [WindowKey: NSWindowController] = [:]
     private var layoutSubscriptions: [ConnectionEndpoint: AnyCancellable] = [:]
     private var videoRenderers: [WindowKey: AppleVideoRenderer] = [:]
+    private var fullScreenChromeStates: [ObjectIdentifier: FullScreenChromeState] = [:]
 
     func show(endpoint: ConnectionEndpoint, sessions: SessionManager) {
         let primaryKey = WindowKey(endpoint: endpoint, displayIndex: 0)
@@ -43,8 +49,9 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow,
-              let key = key(for: window) else { return }
+        guard let window = notification.object as? NSWindow else { return }
+        fullScreenChromeStates.removeValue(forKey: ObjectIdentifier(window))
+        guard let key = key(for: window) else { return }
         window.saveFrame(usingName: frameAutosaveName(for: key))
         windowControllers.removeValue(forKey: key)
 
@@ -62,6 +69,33 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
     func windowDidResize(_ notification: Notification) {
         saveFrame(from: notification)
+    }
+
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let identifier = ObjectIdentifier(window)
+        guard fullScreenChromeStates[identifier] == nil else { return }
+        fullScreenChromeStates[identifier] = FullScreenChromeState(
+            toolbarWasVisible: window.toolbar?.isVisible,
+            titlebarSeparatorStyle: window.titlebarSeparatorStyle
+        )
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        window.toolbar?.isVisible = false
+        window.titlebarSeparatorStyle = .none
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let state = fullScreenChromeStates.removeValue(
+                  forKey: ObjectIdentifier(window)
+              ) else { return }
+        if let toolbarWasVisible = state.toolbarWasVisible {
+            window.toolbar?.isVisible = toolbarWasVisible
+        }
+        window.titlebarSeparatorStyle = state.titlebarSeparatorStyle
     }
 
     private func observeDisplayLayout(
