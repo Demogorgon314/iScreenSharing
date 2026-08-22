@@ -5,22 +5,12 @@ final class NWConnectionTransport: @unchecked Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "com.isharescreen.rfb-transport")
 
-    init(endpoint: ConnectionEndpoint, requiresIPv4: Bool = false) {
-        connection = NWConnection(
-            to: Self.networkEndpoint(for: endpoint),
-            using: Self.parameters(requiresIPv4: requiresIPv4)
-        )
+    init(endpoint: ConnectionEndpoint) {
+        connection = NWConnection(to: Self.networkEndpoint(for: endpoint), using: .tcp)
     }
 
-    static func parameters(requiresIPv4: Bool) -> NWParameters {
-        let parameters = NWParameters.tcp
-        guard requiresIPv4 else { return parameters }
-        guard let options = parameters.defaultProtocolStack.internetProtocol
-            as? NWProtocolIP.Options else {
-            preconditionFailure("NWParameters.tcp must include IP protocol options")
-        }
-        options.version = .v4
-        return parameters
+    init(remoteAddress: ResolvedRemoteAddress) {
+        connection = NWConnection(to: Self.networkEndpoint(for: remoteAddress), using: .tcp)
     }
 
     static func networkEndpoint(for endpoint: ConnectionEndpoint) -> NWEndpoint {
@@ -38,8 +28,15 @@ final class NWConnectionTransport: @unchecked Sendable {
         )
     }
 
-    func start(timeout: Duration = .seconds(15)) async throws -> String? {
-        try await withThrowingTaskGroup(of: String?.self) { group in
+    static func networkEndpoint(for address: ResolvedRemoteAddress) -> NWEndpoint {
+        .hostPort(
+            host: NWEndpoint.Host(address.numericHost),
+            port: NWEndpoint.Port(rawValue: address.port)!
+        )
+    }
+
+    func start(timeout: Duration = .seconds(15)) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 try await self.waitUntilReady()
             }
@@ -55,20 +52,14 @@ final class NWConnectionTransport: @unchecked Sendable {
         }
     }
 
-    private func waitUntilReady() async throws -> String? {
+    private func waitUntilReady() async throws {
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String?, Error>) in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let gate = ContinuationGate()
                 connection.stateUpdateHandler = { state in
                     switch state {
                     case .ready:
-                        gate.performOnce {
-                            continuation.resume(
-                                returning: Self.ipv4Host(
-                                    from: self.connection.currentPath?.remoteEndpoint
-                                )
-                            )
-                        }
+                        gate.performOnce { continuation.resume() }
                     case .failed(let error):
                         gate.performOnce {
                             continuation.resume(throwing: RFBNetworkError.connectionFailed(error.localizedDescription))
@@ -86,14 +77,6 @@ final class NWConnectionTransport: @unchecked Sendable {
         } onCancel: {
             connection.cancel()
         }
-    }
-
-    static func ipv4Host(from endpoint: NWEndpoint?) -> String? {
-        guard case let .hostPort(host, _) = endpoint,
-              case let .ipv4(address) = host else {
-            return nil
-        }
-        return address.debugDescription
     }
 
     func send(_ data: Data) async throws {

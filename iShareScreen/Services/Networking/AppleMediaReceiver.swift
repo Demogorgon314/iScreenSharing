@@ -8,7 +8,7 @@ final class AppleMediaReceiver: @unchecked Sendable {
 
     private let lock = NSLock()
     private let queue: DispatchQueue
-    private let remoteAddress: in_addr
+    private let remoteAddress: ResolvedRemoteAddress
     private let controlSocket: Int32
     private let videoSocket: Int32
     private let secondaryVideoSocket: Int32?
@@ -22,22 +22,24 @@ final class AppleMediaReceiver: @unchecked Sendable {
     private var isClosed = false
 
     init(
-        endpoint: ConnectionEndpoint,
-        mediaHost: String? = nil,
+        remoteAddress: ResolvedRemoteAddress,
         displayCount: Int = 1
     ) throws {
         let maximumPortOffset: UInt16 = displayCount > 1 ? 2 : 1
-        guard endpoint.port <= UInt16.max - maximumPortOffset else {
+        guard remoteAddress.port <= UInt16.max - maximumPortOffset else {
             throw AppleMediaReceiverError.invalidPort
         }
-        let remoteAddress = try Self.resolveIPv4(mediaHost ?? endpoint.host)
         self.remoteAddress = remoteAddress
-        controlSocket = try Self.makeSocket(localPort: endpoint.port, remoteAddress: remoteAddress, remotePort: endpoint.port)
+        controlSocket = try Self.makeSocket(
+            localPort: remoteAddress.port,
+            remoteAddress: remoteAddress,
+            remotePort: remoteAddress.port
+        )
         do {
             videoSocket = try Self.makeSocket(
-                localPort: endpoint.port + 1,
+                localPort: remoteAddress.port + 1,
                 remoteAddress: remoteAddress,
-                remotePort: endpoint.port + 1
+                remotePort: remoteAddress.port + 1
             )
         } catch {
             Darwin.close(controlSocket)
@@ -47,9 +49,9 @@ final class AppleMediaReceiver: @unchecked Sendable {
         if displayCount > 1 {
             do {
                 preparedSecondaryVideoSocket = try Self.makeSocket(
-                    localPort: endpoint.port + 2,
+                    localPort: remoteAddress.port + 2,
                     remoteAddress: remoteAddress,
-                    remotePort: endpoint.port + 2
+                    remotePort: remoteAddress.port + 2
                 )
             } catch {
                 Darwin.close(videoSocket)
@@ -213,10 +215,10 @@ final class AppleMediaReceiver: @unchecked Sendable {
 
     private static func makeSocket(
         localPort: UInt16,
-        remoteAddress: in_addr,
+        remoteAddress: ResolvedRemoteAddress,
         remotePort: UInt16
     ) throws -> Int32 {
-        let descriptor = Darwin.socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        let descriptor = Darwin.socket(Int32(remoteAddress.family), SOCK_DGRAM, IPPROTO_UDP)
         guard descriptor >= 0 else { throw AppleMediaReceiverError.socketCreationFailed(errno) }
         do {
             var enabled: Int32 = 1
@@ -231,19 +233,7 @@ final class AppleMediaReceiver: @unchecked Sendable {
                 &receiveBuffer,
                 socklen_t(MemoryLayout.size(ofValue: receiveBuffer))
             )
-            var local = sockaddr_in(
-                sin_len: UInt8(MemoryLayout<sockaddr_in>.size),
-                sin_family: sa_family_t(AF_INET),
-                sin_port: localPort.bigEndian,
-                sin_addr: in_addr(s_addr: INADDR_ANY),
-                sin_zero: (0, 0, 0, 0, 0, 0, 0, 0)
-            )
-            let bindResult = withUnsafePointer(to: &local) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                }
-            }
-            guard bindResult == 0 else { throw AppleMediaReceiverError.bindFailed(localPort, errno) }
+            try bind(descriptor, family: remoteAddress.family, localPort: localPort)
 
             try connect(descriptor, remoteAddress: remoteAddress, remotePort: remotePort)
             return descriptor
@@ -255,42 +245,64 @@ final class AppleMediaReceiver: @unchecked Sendable {
 
     private static func connect(
         _ descriptor: Int32,
-        remoteAddress: in_addr,
+        remoteAddress: ResolvedRemoteAddress,
         remotePort: UInt16
     ) throws {
-        var remote = sockaddr_in(
-            sin_len: UInt8(MemoryLayout<sockaddr_in>.size),
-            sin_family: sa_family_t(AF_INET),
-            sin_port: remotePort.bigEndian,
-            sin_addr: remoteAddress,
-            sin_zero: (0, 0, 0, 0, 0, 0, 0, 0)
-        )
-        let result = withUnsafePointer(to: &remote) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
+        let result = remoteAddress.withSockAddr(port: remotePort) { pointer, length in
+            Darwin.connect(descriptor, pointer, length)
         }
         guard result == 0 else { throw AppleMediaReceiverError.connectionFailed(errno) }
     }
 
-    private static func resolveIPv4(_ host: String) throws -> in_addr {
-        var hints = addrinfo(
-            ai_flags: AI_ADDRCONFIG,
-            ai_family: AF_INET,
-            ai_socktype: SOCK_DGRAM,
-            ai_protocol: IPPROTO_UDP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
-        var result: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, nil, &hints, &result) == 0, let result else {
-            throw AppleMediaReceiverError.ipv4ResolutionFailed
+    private static func bind(
+        _ descriptor: Int32,
+        family: sa_family_t,
+        localPort: UInt16
+    ) throws {
+        let result: Int32
+        switch Int32(family) {
+        case AF_INET:
+            var local = sockaddr_in(
+                sin_len: UInt8(MemoryLayout<sockaddr_in>.size),
+                sin_family: sa_family_t(AF_INET),
+                sin_port: localPort.bigEndian,
+                sin_addr: in_addr(s_addr: INADDR_ANY),
+                sin_zero: (0, 0, 0, 0, 0, 0, 0, 0)
+            )
+            result = withUnsafePointer(to: &local) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                }
+            }
+        case AF_INET6:
+            var enabled: Int32 = 1
+            guard setsockopt(
+                descriptor,
+                IPPROTO_IPV6,
+                IPV6_V6ONLY,
+                &enabled,
+                socklen_t(MemoryLayout.size(ofValue: enabled))
+            ) == 0 else {
+                throw AppleMediaReceiverError.socketConfigurationFailed(errno)
+            }
+            var local = sockaddr_in6(
+                sin6_len: UInt8(MemoryLayout<sockaddr_in6>.size),
+                sin6_family: sa_family_t(AF_INET6),
+                sin6_port: localPort.bigEndian,
+                sin6_flowinfo: 0,
+                sin6_addr: in6addr_any,
+                sin6_scope_id: 0
+            )
+            result = withUnsafePointer(to: &local) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in6>.size))
+                }
+            }
+        default:
+            throw AppleMediaReceiverError.unsupportedAddressFamily
         }
-        defer { freeaddrinfo(result) }
-        return result.pointee.ai_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
-            $0.pointee.sin_addr
+        guard result == 0 else {
+            throw AppleMediaReceiverError.bindFailed(localPort, errno)
         }
     }
 }
@@ -300,7 +312,7 @@ enum AppleMediaReceiverError: LocalizedError {
     case socketConfigurationFailed(Int32)
     case bindFailed(UInt16, Int32)
     case connectionFailed(Int32)
-    case ipv4ResolutionFailed
+    case unsupportedAddressFamily
     case invalidPort
     case secondaryVideoUnavailable
     case closed
@@ -312,8 +324,8 @@ enum AppleMediaReceiverError: LocalizedError {
             "The UDP media connection could not be prepared."
         case .bindFailed(let port, _):
             "UDP port \(port) is unavailable for Screen Sharing media."
-        case .ipv4ResolutionFailed:
-            "The remote Mac does not have a usable IPv4 address for media streaming."
+        case .unsupportedAddressFamily:
+            "The remote Mac uses an unsupported media address family."
         case .invalidPort:
             "The Screen Sharing port is too high to allocate its media port."
         case .secondaryVideoUnavailable:

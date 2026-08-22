@@ -32,37 +32,27 @@ final class NWConnectionTransportTests: XCTestCase {
         )
     }
 
-    func testExtractsIPv4HostFromResolvedPathEndpoint() throws {
-        let address = try XCTUnwrap(IPv4Address("192.168.50.239"))
-        let endpoint = NWEndpoint.hostPort(host: .ipv4(address), port: 5900)
+    func testCreatesEndpointFromSelectedIPv4Address() throws {
+        let address = try ResolvedRemoteAddress(
+            numericHost: "192.168.50.239",
+            port: 5901
+        )
 
         XCTAssertEqual(
-            NWConnectionTransport.ipv4Host(from: endpoint),
-            "192.168.50.239"
+            NWConnectionTransport.networkEndpoint(for: address),
+            .hostPort(host: "192.168.50.239", port: 5901)
         )
     }
 
-    func testDoesNotTreatUnresolvedOrIPv6EndpointAsIPv4() throws {
-        let address = try XCTUnwrap(IPv6Address("fe80::1"))
-
-        XCTAssertNil(
-            NWConnectionTransport.ipv4Host(
-                from: .hostPort(host: .name("example.local", nil), port: 5900)
-            )
-        )
-        XCTAssertNil(
-            NWConnectionTransport.ipv4Host(
-                from: .hostPort(host: .ipv6(address), port: 5900)
-            )
-        )
-    }
-
-    func testIPv4ParametersRequireIPv4ForHighPerformanceSessions() throws {
-        let parameters = NWConnectionTransport.parameters(requiresIPv4: true)
-        let options = try XCTUnwrap(
-            parameters.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options
+    func testCreatesEndpointFromSelectedIPv6Address() throws {
+        let address = try ResolvedRemoteAddress(
+            numericHost: "2001:db8::1",
+            port: 5900
         )
 
-        XCTAssertEqual(options.version, .v4)
+        XCTAssertEqual(
+            NWConnectionTransport.networkEndpoint(for: address),
+            .hostPort(host: "2001:db8::1", port: 5900)
+        )
     }
 }

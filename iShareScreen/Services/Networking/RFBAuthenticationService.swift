@@ -10,14 +10,18 @@ protocol RFBAuthenticating: Sendable {
 struct RFBAuthenticationService: RFBAuthenticating {
     private static let maximumPublicKeyPacketLength = 64 * 1024
     private static let maximumServerNameLength = 1024 * 1024
+    private let addressResolver: RemoteAddressResolver
+
+    init(addressResolver: RemoteAddressResolver = RemoteAddressResolver()) {
+        self.addressResolver = addressResolver
+    }
 
     func connect(
         to endpoint: ConnectionEndpoint,
         credentials: ScreenSharingCredentials
     ) async throws -> RFBAuthenticatedSession {
-        let transport = NWConnectionTransport(endpoint: endpoint, requiresIPv4: true)
+        let (transport, remoteAddress) = try await connectTransport(to: endpoint)
         do {
-            let remoteIPv4Host = try await transport.start()
             let probe = try await performVersionHandshake(on: transport)
             guard probe.securityTypes.contains(.appleRSA) else {
                 throw AppleRSA1Error.unsupportedServer
@@ -30,7 +34,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
             let serverInfo = try await initializeSession(on: transport)
             return RFBAuthenticatedSession(
                 endpoint: endpoint,
-                remoteIPv4Host: remoteIPv4Host,
+                remoteAddress: remoteAddress,
                 serverVersion: probe.serverVersion,
                 securityTypes: probe.securityTypes,
                 masterKey: masterKey,
@@ -41,6 +45,27 @@ struct RFBAuthenticationService: RFBAuthenticating {
             transport.cancel()
             throw error
         }
+    }
+
+    private func connectTransport(
+        to endpoint: ConnectionEndpoint
+    ) async throws -> (NWConnectionTransport, ResolvedRemoteAddress) {
+        let addresses = try await addressResolver.resolve(endpoint)
+        var lastError: Error?
+        for address in addresses {
+            let transport = NWConnectionTransport(remoteAddress: address)
+            do {
+                try await transport.start()
+                return (transport, address)
+            } catch is CancellationError {
+                transport.cancel()
+                throw CancellationError()
+            } catch {
+                transport.cancel()
+                lastError = error
+            }
+        }
+        throw lastError ?? RemoteAddressResolverError.noUsableAddress
     }
 
     private func performVersionHandshake(

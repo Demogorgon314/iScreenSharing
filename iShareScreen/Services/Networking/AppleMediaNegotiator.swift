@@ -70,8 +70,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         displayCount: Int = 1
     ) async throws -> AppleMediaNegotiationResult {
         let receiver = try AppleMediaReceiver(
-            endpoint: session.endpoint,
-            mediaHost: session.mediaHost,
+            remoteAddress: session.remoteAddress,
             displayCount: displayCount
         )
         session.install(mediaReceiver: receiver)

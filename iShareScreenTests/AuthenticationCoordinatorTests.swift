@@ -21,7 +21,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
     func testSuccessfulSignInInstallsSessionRecordsConnectionAndSavesCredentials() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
-        let session = makeSession(endpoint: endpoint)
+        let session = try makeSession(endpoint: endpoint)
         let authenticator = MockAuthenticator(result: .success(session))
         let credentials = MockCredentialStore()
         let connections = ConnectionStore(defaults: defaults)
@@ -60,7 +60,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
     func testRestoresEachVirtualDisplaySizeDuringAuthentication() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
-        let session = makeSession(endpoint: endpoint)
+        let session = try makeSession(endpoint: endpoint)
         let connections = ConnectionStore(defaults: defaults)
         connections.record(endpoint)
         let saved = try XCTUnwrap(connections.connection(for: endpoint))
@@ -101,7 +101,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
     func testSeedsDualDisplayLayoutBeforePublishingSession() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
-        let session = makeSession(endpoint: endpoint)
+        let session = try makeSession(endpoint: endpoint)
         let connections = ConnectionStore(defaults: defaults)
         connections.record(endpoint)
         let saved = try XCTUnwrap(connections.connection(for: endpoint))
@@ -165,7 +165,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
     func testCredentialPersistenceFailureDoesNotFailConnectedSession() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
-        let session = makeSession(endpoint: endpoint)
+        let session = try makeSession(endpoint: endpoint)
         let sessions = SessionManager()
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
@@ -199,7 +199,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(makeSession(endpoint: endpoint))),
+            authenticator: MockAuthenticator(result: .success(try makeSession(endpoint: endpoint))),
             controlChannelNegotiator: MockControlChannelNegotiator(),
             mediaNegotiator: MockMediaNegotiator(),
             videoStreamStarter: MockVideoStreamStarter(),
@@ -217,9 +217,14 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
     }
 
-    private func makeSession(endpoint: ConnectionEndpoint) -> RFBAuthenticatedSession {
-        RFBAuthenticatedSession(
+    private func makeSession(endpoint: ConnectionEndpoint) throws -> RFBAuthenticatedSession {
+        let remoteAddress = try ResolvedRemoteAddress(
+            numericHost: "127.0.0.1",
+            port: endpoint.port
+        )
+        return RFBAuthenticatedSession(
             endpoint: endpoint,
+            remoteAddress: remoteAddress,
             serverVersion: RFBVersion(major: 3, minor: 889),
             securityTypes: [.appleRSA],
             masterKey: Data(repeating: 0, count: 16),
@@ -229,7 +234,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
                 pixelFormat: Data(repeating: 0, count: 16),
                 name: "Test Mac"
             ),
-            transport: NWConnectionTransport(endpoint: endpoint)
+            transport: NWConnectionTransport(remoteAddress: remoteAddress)
         )
     }
 
