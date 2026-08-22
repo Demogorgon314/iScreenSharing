@@ -8,12 +8,16 @@ struct AppleMediaOffers: Equatable, Sendable {
 }
 
 enum AppleMediaOffer {
+    /// Keep the decoder's control-feature map identical to the PT 100 offer.
+    /// The server may encode tile positions with POSE rather than POS, and VCP
+    /// needs both entries to strip and interpret the private HEVC suffix.
+    static let videoDecoderNegotiationDetails =
+        "FLS;LF:-1;POS:5;EOD:1;HTS:2;RR:3;POSE:4;AR:16/9,5/8;XR:16/9,5/8;"
+
     private static let hevcParameters = Data(
         "FLS;MS:-1;LF:-1;LTR;CABAC;POS:0;EOD:1;HTS:2;RR:3;AR:16/9,5/8;XR:16/9,5/8;".utf8
     )
-    private static let avcParameters = Data(
-        "FLS;LF:-1;POS:5;EOD:1;HTS:2;RR:3;POSE:4;AR:16/9,5/8;XR:16/9,5/8;".utf8
-    )
+    private static let avcParameters = Data(videoDecoderNegotiationDetails.utf8)
     private static let audioTiers: [(UInt64, UInt64, UInt64?)] = [
         (0, 40_000_000, 12_288), (0, 6_000_000, 131_072), (4_074, 0, 16_384),
         (16, 4_100, nil), (0, 75_000_000, 524_288), (0, 20_000_000, 98_304),

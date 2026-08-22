@@ -3,6 +3,12 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleMediaOfferTests: XCTestCase {
+    func testVideoDecoderNegotiationIncludesAlternateTilePositionControl() {
+        XCTAssertTrue(AppleMediaOffer.videoDecoderNegotiationDetails.contains("POS:5"))
+        XCTAssertTrue(AppleMediaOffer.videoDecoderNegotiationDetails.contains("POSE:4"))
+        XCTAssertTrue(AppleMediaOffer.videoDecoderNegotiationDetails.contains("EOD:1"))
+    }
+
     func testCreatesBinaryVideoAndAudioOffers() throws {
         var randomValues: [UInt32] = [0x1122_3344, 0x5566_7788]
         let fixedUUID = UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!

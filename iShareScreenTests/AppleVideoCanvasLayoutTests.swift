@@ -2,6 +2,41 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleVideoCanvasLayoutTests: XCTestCase {
+    func testFullCanvasLayoutUsesOneTextureAcrossTheVisibleCanvas() {
+        let layout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: AppleCanvas(width: 1920, height: 1200, tileCount: 4),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 600),
+            fixedScale: nil
+        )
+
+        XCTAssertEqual(layout.container, CGRect(x: 0, y: 0, width: 960, height: 600))
+        XCTAssertEqual(layout.content, CGRect(x: 0, y: 0, width: 960, height: 600))
+    }
+
+    func testFullCanvasLayoutPreservesCombinedDisplayCrop() {
+        let layout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: AppleCanvas(width: 3840, height: 1080, tileCount: 4),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 540),
+            fixedScale: nil,
+            sourceRect: CGRect(x: 1920, y: 0, width: 1920, height: 1080)
+        )
+
+        XCTAssertEqual(layout.container, CGRect(x: 0, y: 0, width: 960, height: 540))
+        XCTAssertEqual(layout.content, CGRect(x: -960, y: 0, width: 1920, height: 540))
+    }
+
+    func testFullCanvasLayoutCropsDecoderPaddingWithoutScalingItIntoView() {
+        let layout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: AppleCanvas(width: 1920, height: 1200, tileCount: 4),
+            bounds: CGRect(x: 0, y: 0, width: 960, height: 600),
+            storageSize: CGSize(width: 1920, height: 1216),
+            fixedScale: nil
+        )
+
+        XCTAssertEqual(layout.container, CGRect(x: 0, y: 0, width: 960, height: 600))
+        XCTAssertEqual(layout.content, CGRect(x: 0, y: -8, width: 960, height: 608))
+    }
+
     func testIndependentDisplayInputWaitsForDisplayMapping() {
         XCTAssertNil(RemoteVideoCanvasNSView.mappedInputPoint(
             (x: 100, y: 200),

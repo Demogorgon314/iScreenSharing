@@ -1,17 +1,94 @@
 import Foundation
 
 struct AppleVideoDisplayScheduler {
-    private(set) var needsPresentation = false
+    struct DisplayUpdate {
+        let frames: AppleVideoFrameStore.FrameBatch
+        let requiresPresentation: Bool
+    }
+
+    private let queueCapacity: Int
+    private var queues = [Int: [AppleVideoFrameStore.Frame]]()
+    private var lastEnqueuedSequence = [Int: UInt64]()
+    private var lastDisplayedPresentationTime = [Int: TimeInterval]()
+    private var forcePresentation = false
+
+    init(queueCapacity: Int = 16) {
+        precondition(queueCapacity > 0)
+        self.queueCapacity = queueCapacity
+    }
+
+    var queuedFrameCount: Int {
+        queues.values.reduce(0) { $0 + $1.count }
+    }
+
+    mutating func enqueue(_ frames: AppleVideoFrameStore.FrameBatch) {
+        for (tileIndex, frame) in frames {
+            guard frame.presentationTime
+                    > lastDisplayedPresentationTime[tileIndex, default: -.infinity] else { continue }
+            guard frame.sequence > lastEnqueuedSequence[tileIndex, default: 0] else { continue }
+            lastEnqueuedSequence[tileIndex] = frame.sequence
+            guard queues[tileIndex, default: []].count < queueCapacity else { continue }
+            queues[tileIndex, default: []].append(frame)
+            queues[tileIndex]?.sort {
+                if $0.presentationTime != $1.presentationTime {
+                    return $0.presentationTime < $1.presentationTime
+                }
+                return $0.sequence < $1.sequence
+            }
+        }
+    }
 
     mutating func markNeedsPresentation() {
-        needsPresentation = true
+        forcePresentation = true
     }
 
     mutating func displayLinkDidFire(
-        present: () -> Bool
-    ) {
-        guard needsPresentation,
-              present() else { return }
-        needsPresentation = false
+        targetTimestamp: TimeInterval
+    ) -> DisplayUpdate {
+        let frames = dequeueFrames(through: targetTimestamp)
+        let requiresPresentation = forcePresentation || !frames.isEmpty
+        forcePresentation = false
+        return DisplayUpdate(
+            frames: frames,
+            requiresPresentation: requiresPresentation
+        )
+    }
+
+    mutating func presentationDidFail() {
+        forcePresentation = true
+    }
+
+    mutating func takeLatestFrames() -> AppleVideoFrameStore.FrameBatch {
+        let frames = queues.compactMapValues(\.last)
+        for (tileIndex, frame) in frames {
+            lastDisplayedPresentationTime[tileIndex] = frame.presentationTime
+        }
+        queues.removeAll(keepingCapacity: true)
+        return frames
+    }
+
+    mutating func reset() {
+        queues.removeAll(keepingCapacity: false)
+        lastEnqueuedSequence.removeAll(keepingCapacity: false)
+        lastDisplayedPresentationTime.removeAll(keepingCapacity: false)
+        forcePresentation = false
+    }
+
+    private mutating func dequeueFrames(
+        through targetTimestamp: TimeInterval
+    ) -> AppleVideoFrameStore.FrameBatch {
+        var result = AppleVideoFrameStore.FrameBatch()
+        for tileIndex in Array(queues.keys) {
+            guard let queue = queues[tileIndex], !queue.isEmpty else { continue }
+            let eligibleCount = queue.prefix {
+                $0.presentationTime <= targetTimestamp
+            }.count
+            guard eligibleCount > 0 else { continue }
+            result[tileIndex] = queue[eligibleCount - 1]
+            lastDisplayedPresentationTime[tileIndex] = queue[eligibleCount - 1].presentationTime
+            queues[tileIndex]?.removeFirst(eligibleCount)
+            if queues[tileIndex]?.isEmpty == true { queues.removeValue(forKey: tileIndex) }
+        }
+        return result
     }
 }

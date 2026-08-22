@@ -1,7 +1,9 @@
 import Combine
 import Foundation
+import OSLog
 
 struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
+    var decoderBackend: AppleHEVCDecoder.Backend? = nil
     var networkMegabitsPerSecond = 0.0
     var networkPacketsPerSecond = 0.0
     var accessUnitsPerSecond = 0.0
@@ -28,11 +30,18 @@ struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
 }
 
 final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable {
+    private static let logger = Logger(
+        subsystem: "com.wangkai.iShareScreen",
+        category: "VideoPerformance"
+    )
+
     private struct Accumulator {
         var networkPackets = 0
         var networkBytes = 0
         var accessUnits = 0
         var decodedSubframes = 0
+        var timestampedDecodedSubframes = 0
+        var decodedSourceFrames = 0
         var presentedFrames = 0
         var decodeDuration = 0.0
         var decodeSamples = 0
@@ -61,8 +70,10 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
     private let timer: DispatchSourceTimer?
     private var accumulator = Accumulator()
     private var lastSampleTime: TimeInterval
+    private var lastDecodedRTPTimestamp: UInt32?
     private var lastDisplayedTime: TimeInterval?
     private var recentDisplayFrameTimes = [TimeInterval]()
+    private var decoderBackend: AppleHEVCDecoder.Backend?
 
     private static let displayFrameHistoryLimit = 120
 
@@ -110,8 +121,16 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         }
     }
 
-    func recordDecodedFrame() {
-        lock.withPerformanceLock { accumulator.decodedSubframes += 1 }
+    func recordDecodedFrame(rtpTimestamp: UInt32? = nil) {
+        lock.withPerformanceLock {
+            accumulator.decodedSubframes += 1
+            guard let rtpTimestamp else { return }
+            accumulator.timestampedDecodedSubframes += 1
+            if lastDecodedRTPTimestamp != rtpTimestamp {
+                accumulator.decodedSourceFrames += 1
+                lastDecodedRTPTimestamp = rtpTimestamp
+            }
+        }
     }
 
     func recordPresentation(
@@ -176,6 +195,10 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         lock.withPerformanceLock { accumulator.rendererBusyCount += 1 }
     }
 
+    func setDecoderBackend(_ backend: AppleHEVCDecoder.Backend) {
+        lock.withPerformanceLock { decoderBackend = backend }
+    }
+
     func sample(at now: TimeInterval) -> AppleVideoPerformanceSnapshot {
         lock.withPerformanceLock {
             let elapsed = max(now - lastSampleTime, 0.000_001)
@@ -184,10 +207,15 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
             accumulator = Accumulator()
             lastSampleTime = now
             return AppleVideoPerformanceSnapshot(
+                decoderBackend: decoderBackend,
                 networkMegabitsPerSecond: Double(values.networkBytes) * 8 / elapsed / 1_000_000,
                 networkPacketsPerSecond: Double(values.networkPackets) / elapsed,
                 accessUnitsPerSecond: Double(values.accessUnits) / elapsed,
-                decodedFramesPerSecond: Double(values.decodedSubframes) / Double(tileCount) / elapsed,
+                decodedFramesPerSecond: Self.decodedFramesPerSecond(
+                    values: values,
+                    tileCount: tileCount,
+                    elapsed: elapsed
+                ),
                 presentedFramesPerSecond: Double(values.presentedFrames) / elapsed,
                 averageDecodeMilliseconds: Self.averageMilliseconds(
                     total: values.decodeDuration,
@@ -236,12 +264,28 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
 
     private func publishSample() {
         let next = sample(at: clock())
+#if DEBUG
+        Self.logger.notice(
+            "[DEBUG-TEAR-8A7C] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
+        )
+#endif
         DispatchQueue.main.async { [weak self] in self?.snapshot = next }
     }
 
     private static func averageMilliseconds(total: TimeInterval, count: Int) -> Double {
         guard count > 0 else { return 0 }
         return total / Double(count) * 1_000
+    }
+
+    private static func decodedFramesPerSecond(
+        values: Accumulator,
+        tileCount: Int,
+        elapsed: TimeInterval
+    ) -> Double {
+        if values.timestampedDecodedSubframes > 0 {
+            return Double(values.decodedSourceFrames) / elapsed
+        }
+        return Double(values.decodedSubframes) / Double(tileCount) / elapsed
     }
 
     private static func averageMilliseconds(values: [TimeInterval]) -> Double {

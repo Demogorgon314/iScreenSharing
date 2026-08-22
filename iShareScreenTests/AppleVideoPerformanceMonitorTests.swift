@@ -62,6 +62,22 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         XCTAssertEqual(snapshot, .zero)
     }
 
+    func testDecoderBackendPersistsAcrossSamplesAndCanChange() {
+        let monitor = AppleVideoPerformanceMonitor(
+            tileCount: 4,
+            clock: { 0 },
+            automaticallyPublishes: false
+        )
+        monitor.setDecoderBackend(.videoProcessing)
+
+        XCTAssertEqual(monitor.sample(at: 1).decoderBackend, .videoProcessing)
+        XCTAssertEqual(monitor.sample(at: 2).decoderBackend, .videoProcessing)
+
+        monitor.setDecoderBackend(.videoToolbox)
+
+        XCTAssertEqual(monitor.sample(at: 3).decoderBackend, .videoToolbox)
+    }
+
     func testMeasuresDisplayedFrameCadenceJitter() {
         let monitor = AppleVideoPerformanceMonitor(
             tileCount: 1,
@@ -81,6 +97,36 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         XCTAssertEqual(snapshot.recentDisplayFrameMilliseconds.count, 2)
         XCTAssertEqual(snapshot.recentDisplayFrameMilliseconds[0], 16, accuracy: 0.001)
         XCTAssertEqual(snapshot.recentDisplayFrameMilliseconds[1], 17, accuracy: 0.001)
+    }
+
+    func testCountsSparseTileUpdatesAsSourceFrames() {
+        let monitor = AppleVideoPerformanceMonitor(
+            tileCount: 4,
+            clock: { 0 },
+            automaticallyPublishes: false
+        )
+        monitor.recordDecodedFrame(rtpTimestamp: 90_000)
+        monitor.recordDecodedFrame(rtpTimestamp: 91_500)
+        monitor.recordDecodedFrame(rtpTimestamp: 93_000)
+
+        let snapshot = monitor.sample(at: 1)
+
+        XCTAssertEqual(snapshot.decodedFramesPerSecond, 3, accuracy: 0.001)
+    }
+
+    func testCountsSharedTimestampTilesAsOneSourceFrame() {
+        let monitor = AppleVideoPerformanceMonitor(
+            tileCount: 4,
+            clock: { 0 },
+            automaticallyPublishes: false
+        )
+        for _ in 0..<4 {
+            monitor.recordDecodedFrame(rtpTimestamp: 90_000)
+        }
+
+        let snapshot = monitor.sample(at: 1)
+
+        XCTAssertEqual(snapshot.decodedFramesPerSecond, 1, accuracy: 0.001)
     }
 
     func testKeepsOnlyTheMostRecentDisplayFrameTimes() throws {

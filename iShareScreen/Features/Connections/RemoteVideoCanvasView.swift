@@ -1,4 +1,5 @@
 import CoreVideo
+import OSLog
 import QuartzCore
 import SwiftUI
 
@@ -98,6 +99,11 @@ final class AppleVideoRenderer {
 }
 
 final class RemoteVideoCanvasNSView: NSView {
+    private static let diagnosticsLogger = Logger(
+        subsystem: "com.wangkai.iShareScreen",
+        category: "VideoPerformance"
+    )
+
     private struct ActiveModifier {
         let symbol: UInt32
         let keyboardType: UInt16
@@ -139,6 +145,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private var cursorObserver: UUID?
     private var remoteCursor = NSCursor.arrow
     private var decodedTileHeights: [CGFloat?]
+    private var decodedFullCanvasSize: CGSize?
     private var trackingArea: NSTrackingArea?
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
     private var buttonMask: UInt8 = 0
@@ -190,13 +197,13 @@ final class RemoteVideoCanvasNSView: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
         layer?.addSublayer(displayLayer)
         observer = frames.addObserver { [weak self] frames in
-            self?.display(frames)
+            self?.enqueueForPresentation(frames)
         }
         cursorObserver = cursors?.addObserver { [weak self] image in
             self?.applyCursor(image)
         }
         applyCursor(cursors?.currentImage())
-        display(currentFrames())
+        enqueueForPresentation(currentFrames())
     }
 
     @available(*, unavailable)
@@ -232,7 +239,7 @@ final class RemoteVideoCanvasNSView: NSView {
         if window.isKeyWindow { selectInputDisplay() }
         let scale = window.backingScaleFactor
         displayLayer.contentsScale = scale
-        display(currentFrames())
+        enqueueForPresentation(currentFrames())
     }
 
     override func layout() {
@@ -251,14 +258,27 @@ final class RemoteVideoCanvasNSView: NSView {
             fixedScale: displayScale.fixedScale,
             sourceRect: sourceRect
         )
+        let fullCanvasLayout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: canvas,
+            bounds: bounds,
+            storageSize: decodedFullCanvasSize,
+            fixedScale: displayScale.fixedScale,
+            sourceRect: sourceRect
+        )
         displayLayer.frame = bounds
-        (displayLayer as? AppleNV24MetalLayer)?.update(layouts: layouts, bounds: bounds)
+        (displayLayer as? AppleNV24MetalLayer)?.update(
+            layouts: layouts,
+            fullCanvasLayout: fullCanvasLayout,
+            bounds: bounds
+        )
     }
 
     func update(canvas: AppleCanvas) {
         guard canvas != self.canvas else { return }
         self.canvas = canvas
         decodedTileHeights = Array(repeating: nil, count: canvas.tileCount)
+        decodedFullCanvasSize = nil
+        displayScheduler.reset()
         needsLayout = true
         schedulePresentation()
     }
@@ -267,6 +287,7 @@ final class RemoteVideoCanvasNSView: NSView {
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
+        displayScheduler.reset()
         if let observer {
             frames.removeObserver(observer)
             self.observer = nil
@@ -543,7 +564,17 @@ final class RemoteVideoCanvasNSView: NSView {
         enqueueInput { await input.selectDisplay(displayID) }
     }
 
-    private func display(_ frames: AppleVideoFrameStore.FrameBatch) {
+    private func enqueueForPresentation(_ frames: AppleVideoFrameStore.FrameBatch) {
+        guard !frames.isEmpty else { return }
+        if synchronizesPresentation {
+            displayScheduler.enqueue(frames)
+        } else {
+            apply(frames)
+            schedulePresentation()
+        }
+    }
+
+    private func apply(_ frames: AppleVideoFrameStore.FrameBatch) {
         precondition(Thread.isMainThread)
         guard !frames.isEmpty else { return }
         CATransaction.begin()
@@ -552,10 +583,22 @@ final class RemoteVideoCanvasNSView: NSView {
         for (tileIndex, frame) in frames.sorted(by: { $0.key < $1.key }) {
             display(frame, at: tileIndex)
         }
-        schedulePresentation()
     }
 
     private func display(_ frame: AppleVideoFrameStore.Frame, at tileIndex: Int) {
+        if tileIndex == AppleVideoFrameStore.fullCanvasIndex {
+            let pixelBuffer = frame.pixelBuffer
+            let size = CGSize(
+                width: CVPixelBufferGetWidth(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
+            if decodedFullCanvasSize != size {
+                decodedFullCanvasSize = size
+                updateDisplayLayerGeometry()
+            }
+            (displayLayer as? AppleNV24MetalLayer)?.update(frame, at: tileIndex)
+            return
+        }
         guard decodedTileHeights.indices.contains(tileIndex) else { return }
         let pixelBuffer = frame.pixelBuffer
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
@@ -573,9 +616,15 @@ final class RemoteVideoCanvasNSView: NSView {
             lead: displayLink.targetTimestamp - callbackTime,
             period: displayLink.targetTimestamp - displayLink.timestamp
         )
-        displayScheduler.displayLinkDidFire { [displayLayer] in
-            (displayLayer as? AppleNV24MetalLayer)?.present() ?? true
-        }
+        let update = displayScheduler.displayLinkDidFire(
+            targetTimestamp: displayLink.targetTimestamp
+        )
+        if !update.frames.isEmpty { apply(update.frames) }
+        guard update.requiresPresentation else { return }
+        let presented = (displayLayer as? AppleNV24MetalLayer)?.present(
+            at: displayLink.targetTimestamp
+        ) ?? true
+        if !presented { displayScheduler.presentationDidFail() }
     }
 
     private func configureDisplayLink() {
@@ -584,8 +633,19 @@ final class RemoteVideoCanvasNSView: NSView {
         displayLinkTarget = nil
         guard let metalLayer = displayLayer as? AppleNV24MetalLayer else { return }
 
+        metalLayer.usesExplicitPresentationTiming = false
         metalLayer.synchronizesPresentation = synchronizesPresentation
-        guard let window, synchronizesPresentation else { return }
+#if DEBUG
+        Self.diagnosticsLogger.notice(
+            "[DEBUG-TEAR-8A7C] mode vsync=\(self.synchronizesPresentation)"
+        )
+#endif
+        guard synchronizesPresentation else {
+            let pendingFrames = displayScheduler.takeLatestFrames()
+            if !pendingFrames.isEmpty { apply(pendingFrames) }
+            return
+        }
+        guard let window else { return }
 
         let target = RemoteVideoCanvasDisplayLinkTarget(view: self)
         let displayLink = window.displayLink(
@@ -603,6 +663,7 @@ final class RemoteVideoCanvasNSView: NSView {
             preferred: frameRate
         )
         displayLink.add(to: .main, forMode: .common)
+        metalLayer.usesExplicitPresentationTiming = true
         displayLinkTarget = target
         self.displayLink = displayLink
     }
@@ -616,7 +677,8 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func currentFrames() -> AppleVideoFrameStore.FrameBatch {
-        (0..<canvas.tileCount).reduce(into: [:]) { result, tileIndex in
+        ([AppleVideoFrameStore.fullCanvasIndex] + Array(0..<canvas.tileCount)).reduce(into: [:]) {
+            result, tileIndex in
             result[tileIndex] = frames.storedFrame(at: tileIndex)
         }
     }
@@ -689,6 +751,40 @@ enum AppleVideoCanvasLayout {
     struct Tile: Equatable {
         let container: CGRect
         let content: CGRect
+    }
+
+    static func fullCanvas(
+        canvas: AppleCanvas,
+        bounds: CGRect,
+        storageSize: CGSize? = nil,
+        fixedScale: CGFloat?,
+        sourceRect: CGRect? = nil
+    ) -> Tile {
+        guard canvas.width > 0, canvas.height > 0 else {
+            return Tile(container: .zero, content: .zero)
+        }
+        let canvasBounds = CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height)
+        let source = sourceRect.map { $0.intersection(canvasBounds) } ?? canvasBounds
+        guard !source.isNull, !source.isEmpty else {
+            return Tile(container: .zero, content: .zero)
+        }
+        let scale = fixedScale
+            ?? min(bounds.width / source.width, bounds.height / source.height)
+        let outputSize = CGSize(width: source.width * scale, height: source.height * scale)
+        let container = CGRect(
+            x: bounds.midX - outputSize.width / 2,
+            y: bounds.midY - outputSize.height / 2,
+            width: outputSize.width,
+            height: outputSize.height
+        )
+        let storage = storageSize ?? canvasBounds.size
+        let content = CGRect(
+            x: -source.minX * scale,
+            y: (source.maxY - storage.height) * scale,
+            width: storage.width * scale,
+            height: storage.height * scale
+        )
+        return Tile(container: container, content: content)
     }
 
     static func tiles(

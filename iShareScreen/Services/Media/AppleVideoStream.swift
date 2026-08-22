@@ -2,6 +2,7 @@ import Combine
 import CoreVideo
 import Foundation
 import OSLog
+import QuartzCore
 
 final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     enum State: Equatable {
@@ -23,7 +24,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let sourceAdoptionStall: TimeInterval = 2
     private static let minimumAdoptionPacketsPerSource = 5
     private static let receiverReportInterval: TimeInterval = 0.5
-    static let maximumPresentationWait: TimeInterval = 1.0 / 60.0
     private static let initialRecovery = AppleVideoInitialRecoveryPolicy()
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
@@ -43,8 +43,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var abandonedSources = Set<UInt32>()
     private var cachedUnits = [UInt32: [AppleHEVCAccessUnit]]()
     private var decodingOrderQueue = AppleHEVCDecodingOrderQueue()
-    private var submittedTimestamp: UInt32?
-    private var submittedTileIndices = Set<Int>()
+    private var playoutClock = AppleVideoPlayoutClock()
     private var isClosed = false
     private var frameCount = 0
     private var decodedTiles = Set<Int>()
@@ -67,10 +66,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         mediaStreamIndex = video.mediaStreamIndex
         displayIndex = video.displayIndex
         canvas = video.canvas
-        frames = AppleVideoFrameStore(
-            expectedTileCount: video.canvas.tileCount,
-            presentationDelay: Self.maximumPresentationWait
-        )
+        frames = AppleVideoFrameStore()
         performance = AppleVideoPerformanceMonitor(tileCount: video.canvas.tileCount)
         processor = try AppleHEVCStreamProcessor(keyBlob: video.serverKey)
         feedback = try AppleVideoFeedbackController(
@@ -253,12 +249,20 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         let parameterSets = processor.currentParameterSets()
         guard parameterSets.isComplete else { return }
         do {
-            decoder = try AppleHEVCDecoder(parameterSets: parameterSets) { [weak self] tileIndex, decodingOrderNumber, rtpTimestamp, frame in
+            decoder = try AppleHEVCDecoder(
+                parameterSets: parameterSets,
+                tileCount: canvas.tileCount,
+                backendHandler: { [weak performance] backend in
+                    performance?.setDecoderBackend(backend)
+                }
+            ) { [weak self] decodedFrame in
+                self?.performance.recordDecode(duration: decodedFrame.decodeDuration)
                 self?.publish(
-                    frame,
-                    tileIndex: tileIndex,
-                    decodingOrderNumber: decodingOrderNumber,
-                    rtpTimestamp: rtpTimestamp
+                    decodedFrame.pixelBuffer,
+                    region: decodedFrame.region,
+                    decodingOrderNumber: decodedFrame.decodingOrderNumber,
+                    rtpTimestamp: decodedFrame.rtpTimestamp,
+                    presentationTime: decodedFrame.presentationTime
                 )
             }
             decoderParameterSets = parameterSets
@@ -315,7 +319,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             lastDecoderRestartTime = now
             lastStallKeyFrameRequestTime = now
             do {
-                try decoder?.restart()
+                try decoder?.restartUsingVideoToolboxFallback()
                 resetDecodingOrder()
                 requestKeyFramesForAllTiles()
             } catch {
@@ -356,20 +360,18 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         let output = decodingOrderQueue.enqueue(selectedUnits)
         for accessUnit in output.ready {
             guard let tileIndex = sourceToTile[accessUnit.synchronizationSource] else { continue }
-            if accessUnit.nalUnits.contains(where: Self.isVideoSlice) {
-                registerSubmittedFrame(
-                    rtpTimestamp: accessUnit.timestamp,
-                    tileIndex: tileIndex
-                )
-            }
-            for nalUnit in accessUnit.nalUnits {
-                decode(
-                    nalUnit,
-                    tileIndex: tileIndex,
-                    decodingOrderNumber: accessUnit.decodingOrderNumber,
-                    rtpTimestamp: accessUnit.timestamp
-                )
-            }
+            guard accessUnit.nalUnits.contains(where: Self.isVideoSlice) else { continue }
+            let presentationTime = playoutClock.presentationTime(
+                for: accessUnit.timestamp,
+                hostTime: CACurrentMediaTime()
+            )
+            decode(
+                accessUnit.nalUnits,
+                tileIndex: tileIndex,
+                decodingOrderNumber: accessUnit.decodingOrderNumber,
+                rtpTimestamp: accessUnit.timestamp,
+                presentationTime: presentationTime
+            )
         }
         if output.requiresRefresh { recoverDecodingOrder() }
     }
@@ -379,23 +381,9 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         return type < 32
     }
 
-    private func registerSubmittedFrame(rtpTimestamp: UInt32, tileIndex: Int) {
-        if let submittedTimestamp,
-           submittedTimestamp != rtpTimestamp {
-            frames.seal(
-                rtpTimestamp: submittedTimestamp,
-                expectedTileIndices: submittedTileIndices
-            )
-            submittedTileIndices.removeAll(keepingCapacity: true)
-        }
-        submittedTimestamp = rtpTimestamp
-        submittedTileIndices.insert(tileIndex)
-    }
-
     private func resetDecodingOrder() {
         decodingOrderQueue.reset()
-        submittedTimestamp = nil
-        submittedTileIndices.removeAll(keepingCapacity: true)
+        playoutClock.reset()
     }
 
     private func recoverDecodingOrder() {
@@ -408,23 +396,19 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     }
 
     private func decode(
-        _ nalUnit: Data,
+        _ nalUnits: [Data],
         tileIndex: Int,
         decodingOrderNumber: UInt16?,
-        rtpTimestamp: UInt32
+        rtpTimestamp: UInt32,
+        presentationTime: TimeInterval
     ) {
-        let startedAt = ProcessInfo.processInfo.systemUptime
-        defer {
-            performance.recordDecode(
-                duration: ProcessInfo.processInfo.systemUptime - startedAt
-            )
-        }
         do {
             _ = try decoder?.decode(
-                nalUnit,
+                nalUnits,
                 tileIndex: tileIndex,
                 decodingOrderNumber: decodingOrderNumber,
-                rtpTimestamp: rtpTimestamp
+                rtpTimestamp: rtpTimestamp,
+                presentationTime: presentationTime
             )
         } catch AppleHEVCDecoderError.decodeFailed {
             requestKeyFrame(for: tileIndex)
@@ -466,23 +450,32 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func publish(
         _ frame: CVPixelBuffer,
-        tileIndex: Int,
+        region: AppleHEVCDecoder.FrameRegion,
         decodingOrderNumber: UInt16?,
-        rtpTimestamp: UInt32
+        rtpTimestamp: UInt32,
+        presentationTime: TimeInterval
     ) {
         let decodedAt = ProcessInfo.processInfo.systemUptime
+        let frameIndex: Int
+        switch region {
+        case let .tile(tileIndex):
+            frameIndex = tileIndex
+        case .fullCanvas:
+            frameIndex = AppleVideoFrameStore.fullCanvasIndex
+        }
         frames.publish(
             frame,
-            at: tileIndex,
+            at: frameIndex,
             decodingOrderNumber: decodingOrderNumber,
             rtpTimestamp: rtpTimestamp,
-            decodedAt: decodedAt
+            decodedAt: decodedAt,
+            presentationTime: presentationTime
         )
-        performance.recordDecodedFrame()
+        performance.recordDecodedFrame(rtpTimestamp: rtpTimestamp)
         countLock.withVideoStreamLock {
             self.lastDecodedFrameTime = decodedAt
         }
-        if tileIndex == 0, let decodingOrderNumber {
+        if (region == .fullCanvas || frameIndex == 0), let decodingOrderNumber {
             do {
                 try feedback.acknowledgeLongTermReference(frameID: decodingOrderNumber)
             } catch {
@@ -492,7 +485,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         let becameReady = countLock.withVideoStreamLock {
             frameCount += 1
             let wasReady = decodedTiles.count == canvas.tileCount
-            decodedTiles.insert(tileIndex)
+            if region == .fullCanvas {
+                decodedTiles = Set(0..<canvas.tileCount)
+            } else {
+                decodedTiles.insert(frameIndex)
+            }
             return !wasReady && decodedTiles.count == canvas.tileCount
         }
         if becameReady {

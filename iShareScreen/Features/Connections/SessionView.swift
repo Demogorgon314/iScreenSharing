@@ -316,6 +316,7 @@ private struct AppleVideoPerformanceOverlay: View {
                 format: "Stream   %.1f AU/s",
                 stats.accessUnitsPerSecond
             ))
+            Text("Decoder  \(stats.decoderBackend?.rawValue ?? "—")")
             Text(String(
                 format: "Decode   %.1f fps  %.2f ms",
                 stats.decodedFramesPerSecond,

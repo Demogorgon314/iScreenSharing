@@ -39,4 +39,21 @@ final class AppleHEVCNALUnitTests: XCTestCase {
             Data([0x60, 0x01, 0, 0, 0, 8, 0xaa]),
         ]).isEmpty)
     }
+
+    func testDropsEntireMalformedAggregationPacket() {
+        let validUnit = Data([0x40, 0x01, 0xaa])
+        var truncatedUnit = Data([0x60, 0x01, 0, 0])
+        truncatedUnit.appendUInt16BE(UInt16(validUnit.count))
+        truncatedUnit.append(validUnit)
+        truncatedUnit.append(0xff)
+
+        var overrunUnit = Data([0x60, 0x01, 0, 0])
+        overrunUnit.appendUInt16BE(UInt16(validUnit.count))
+        overrunUnit.append(validUnit)
+        overrunUnit.appendUInt16BE(8)
+        overrunUnit.append(0xaa)
+
+        XCTAssertTrue(AppleHEVCNALUnit.reassemble([truncatedUnit]).isEmpty)
+        XCTAssertTrue(AppleHEVCNALUnit.reassemble([overrunUnit]).isEmpty)
+    }
 }

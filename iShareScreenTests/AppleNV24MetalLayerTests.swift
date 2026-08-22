@@ -55,19 +55,24 @@ final class AppleNV24MetalLayerTests: XCTestCase {
     func testDisplaySchedulerPresentsLatestFrameOncePerDisplayLinkUpdate() {
         var scheduler = AppleVideoDisplayScheduler()
         var presentationCount = 0
+        var receivedTargetTimestamp: TimeInterval?
 
         scheduler.markNeedsPresentation()
         scheduler.markNeedsPresentation()
-        scheduler.displayLinkDidFire {
+        let firstUpdate = scheduler.displayLinkDidFire(targetTimestamp: 42)
+        XCTAssertTrue(firstUpdate.frames.isEmpty)
+        if firstUpdate.requiresPresentation {
             presentationCount += 1
-            return true
+            receivedTargetTimestamp = 42
         }
-        scheduler.displayLinkDidFire {
+        let secondUpdate = scheduler.displayLinkDidFire(targetTimestamp: 43)
+        XCTAssertTrue(secondUpdate.frames.isEmpty)
+        if secondUpdate.requiresPresentation {
             presentationCount += 1
-            return true
         }
 
         XCTAssertEqual(presentationCount, 1)
+        XCTAssertEqual(receivedTargetTimestamp, 42)
     }
 
     func testVideoCanvasUsesOneMetalLayerForAllTiles() {
@@ -257,10 +262,12 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         window.contentView = view
 
         XCTAssertTrue(view.usesSynchronizedDisplayLink)
-        XCTAssertTrue(metalLayer.displaySyncEnabled)
+        XCTAssertTrue(metalLayer.usesExplicitPresentationTiming)
+        XCTAssertFalse(metalLayer.displaySyncEnabled)
 
         view.synchronizesPresentation = false
         XCTAssertFalse(view.usesSynchronizedDisplayLink)
+        XCTAssertFalse(metalLayer.usesExplicitPresentationTiming)
         XCTAssertFalse(metalLayer.displaySyncEnabled)
     }
 }

@@ -105,9 +105,13 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private var latestFrames = AppleVideoFrameStore.FrameBatch()
     private var lastPresentedSequences = [Int: UInt64]()
     private var tileLayouts = [AppleVideoCanvasLayout.Tile]()
+    private var fullCanvasLayout = AppleVideoCanvasLayout.Tile(container: .zero, content: .zero)
     private var renderingBounds = CGRect.zero
     private let inFlightGate = AppleMetalInFlightGate()
     var synchronizesPresentation: Bool {
+        didSet { configurePresentation() }
+    }
+    var usesExplicitPresentationTiming = false {
         didSet { configurePresentation() }
     }
     var showsDeveloperHUD: Bool {
@@ -144,8 +148,10 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         latestFrames = source.latestFrames
         lastPresentedSequences = source.lastPresentedSequences
         tileLayouts = source.tileLayouts
+        fullCanvasLayout = source.fullCanvasLayout
         renderingBounds = source.renderingBounds
         synchronizesPresentation = source.synchronizesPresentation
+        usesExplicitPresentationTiming = false
         showsDeveloperHUD = false
         super.init(layer: layer)
         configurePresentation()
@@ -158,11 +164,23 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     func update(_ frame: AppleVideoFrameStore.Frame, at tileIndex: Int) {
-        latestFrames[tileIndex] = frame
+        if tileIndex == AppleVideoFrameStore.fullCanvasIndex {
+            latestFrames = [tileIndex: frame]
+            lastPresentedSequences = lastPresentedSequences.filter { $0.key == tileIndex }
+        } else {
+            latestFrames.removeValue(forKey: AppleVideoFrameStore.fullCanvasIndex)
+            lastPresentedSequences.removeValue(forKey: AppleVideoFrameStore.fullCanvasIndex)
+            latestFrames[tileIndex] = frame
+        }
     }
 
-    func update(layouts: [AppleVideoCanvasLayout.Tile], bounds: CGRect) {
+    func update(
+        layouts: [AppleVideoCanvasLayout.Tile],
+        fullCanvasLayout: AppleVideoCanvasLayout.Tile,
+        bounds: CGRect
+    ) {
         tileLayouts = layouts
+        self.fullCanvasLayout = fullCanvasLayout
         renderingBounds = bounds
         updateDrawableSize()
     }
@@ -175,8 +193,10 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         latestFrames.removeAll()
         lastPresentedSequences.removeAll()
         tileLayouts.removeAll()
+        fullCanvasLayout = AppleVideoCanvasLayout.Tile(container: .zero, content: .zero)
         renderingBounds = .zero
         self.performance = performance
+        usesExplicitPresentationTiming = false
         self.synchronizesPresentation = synchronizesPresentation
         self.showsDeveloperHUD = showsDeveloperHUD
     }
@@ -185,12 +205,13 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         latestFrames.removeAll()
         lastPresentedSequences.removeAll()
         tileLayouts.removeAll()
+        fullCanvasLayout = AppleVideoCanvasLayout.Tile(container: .zero, content: .zero)
         renderingBounds = .zero
         performance = nil
     }
 
     @discardableResult
-    func present() -> Bool {
+    func present(at targetTimestamp: TimeInterval? = nil) -> Bool {
         guard inFlightGate.begin() else {
             performance?.recordRendererBusy()
             return false
@@ -205,7 +226,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         commit(
             commandBuffer,
             presenting: drawable,
-            submittedAt: ProcessInfo.processInfo.systemUptime
+            submittedAt: ProcessInfo.processInfo.systemUptime,
+            targetTimestamp: targetTimestamp
         )
         return true
     }
@@ -213,7 +235,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private func commit(
         _ commandBuffer: MTLCommandBuffer,
         presenting drawable: CAMetalDrawable,
-        submittedAt: TimeInterval
+        submittedAt: TimeInterval,
+        targetTimestamp: TimeInterval?
     ) {
         recordPresentation(submittedAt: submittedAt)
         let presentationSubmittedAt = CACurrentMediaTime()
@@ -226,7 +249,12 @@ final class AppleNV24MetalLayer: CAMetalLayer {
                 presentedAt: drawable.presentedTime
             )
         }
-        commandBuffer.present(drawable)
+        if let targetTimestamp,
+           targetTimestamp > presentationSubmittedAt {
+            commandBuffer.present(drawable, atTime: targetTimestamp)
+        } else {
+            commandBuffer.present(drawable)
+        }
         let inFlightGate = inFlightGate
         commandBuffer.addCompletedHandler { commandBuffer in
             defer { inFlightGate.end() }
@@ -243,7 +271,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     private func configurePresentation() {
-        displaySyncEnabled = synchronizesPresentation
+        displaySyncEnabled = synchronizesPresentation && !usesExplicitPresentationTiming
         presentsWithTransaction = false
     }
 
@@ -263,24 +291,36 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encoder.setRenderPipelineState(context.pipeline)
-        for (tileIndex, frame) in latestFrames.sorted(by: { $0.key < $1.key }) {
-            let pixelBuffer = frame.pixelBuffer
-            guard tileLayouts.indices.contains(tileIndex),
-                  CVPixelBufferGetPlaneCount(pixelBuffer) >= 2,
-                  let vertices = vertices(for: tileLayouts[tileIndex]),
-                  let luma = texture(from: pixelBuffer, plane: 0, format: .r8Unorm),
-                  let chroma = texture(from: pixelBuffer, plane: 1, format: .rg8Unorm) else { continue }
-            encoder.setVertexBytes(
-                vertices,
-                length: MemoryLayout<Vertex>.stride * vertices.count,
-                index: 0
-            )
-            encoder.setFragmentTexture(luma, index: 0)
-            encoder.setFragmentTexture(chroma, index: 1)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        if let frame = latestFrames[AppleVideoFrameStore.fullCanvasIndex] {
+            encode(frame, layout: fullCanvasLayout, using: encoder)
+        } else {
+            for (tileIndex, frame) in latestFrames.sorted(by: { $0.key < $1.key }) {
+                guard tileLayouts.indices.contains(tileIndex) else { continue }
+                encode(frame, layout: tileLayouts[tileIndex], using: encoder)
+            }
         }
         encoder.endEncoding()
         return true
+    }
+
+    private func encode(
+        _ frame: AppleVideoFrameStore.Frame,
+        layout: AppleVideoCanvasLayout.Tile,
+        using encoder: MTLRenderCommandEncoder
+    ) {
+        let pixelBuffer = frame.pixelBuffer
+        guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 2,
+              let vertices = vertices(for: layout),
+              let luma = texture(from: pixelBuffer, plane: 0, format: .r8Unorm),
+              let chroma = texture(from: pixelBuffer, plane: 1, format: .rg8Unorm) else { return }
+        encoder.setVertexBytes(
+            vertices,
+            length: MemoryLayout<Vertex>.stride * vertices.count,
+            index: 0
+        )
+        encoder.setFragmentTexture(luma, index: 0)
+        encoder.setFragmentTexture(chroma, index: 1)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
     private func recordPresentation(submittedAt: TimeInterval) {

@@ -21,15 +21,8 @@ enum AppleHEVCNALUnit {
             guard let type = type(of: payload) else { continue }
             switch type {
             case aggregationType:
-                var offset = 4
-                while offset + 2 <= payload.count {
-                    guard let length = try? Int(payload.uint16BE(at: offset)),
-                          length > 0,
-                          offset + 2 + length <= payload.count else { break }
-                    offset += 2
-                    units.append(payload.subdata(in: offset..<(offset + length)))
-                    offset += length
-                }
+                guard let aggregated = aggregationUnits(in: payload) else { continue }
+                units.append(contentsOf: aggregated)
 
             case fragmentationType:
                 guard payload.count >= 6 else { continue }
@@ -64,6 +57,21 @@ enum AppleHEVCNALUnit {
             }
         }
         return units
+    }
+
+    private static func aggregationUnits(in payload: Data) -> [Data]? {
+        var offset = 4
+        var result = [Data]()
+        while offset < payload.count {
+            guard payload.count - offset >= 2,
+                  let length = try? Int(payload.uint16BE(at: offset)),
+                  length > 0 else { return nil }
+            offset += 2
+            guard length <= payload.count - offset else { return nil }
+            result.append(payload.subdata(in: offset..<(offset + length)))
+            offset += length
+        }
+        return result.isEmpty ? nil : result
     }
 
     static func firstDecodingOrderNumber(in payloads: [Data]) -> UInt16? {

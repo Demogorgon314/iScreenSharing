@@ -3,13 +3,6 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleVideoFrameStoreTests: XCTestCase {
-    func testStreamAllowsOneSourceFrameForLateTiles() {
-        XCTAssertGreaterThanOrEqual(
-            AppleVideoStream.maximumPresentationWait,
-            1.0 / 60.0
-        )
-    }
-
     func testPublishesStoresAndRemovesFrameObservers() async throws {
         let store = AppleVideoFrameStore()
         let firstFrame = try makePixelBuffer(width: 8, height: 8)
@@ -92,16 +85,66 @@ final class AppleVideoFrameStoreTests: XCTestCase {
         store.publish(
             changedTile,
             at: 2,
-            decodingOrderNumber: 100
+            decodingOrderNumber: 100,
+            rtpTimestamp: 90_000,
+            presentationTime: 42
         )
         await fulfillment(of: [published], timeout: 1)
 
         XCTAssertTrue(received?[2]?.pixelBuffer === changedTile)
+        XCTAssertEqual(received?[2]?.presentationTime, 42)
+    }
+
+    @MainActor
+    func testFullCanvasFrameReplacesTileSnapshot() async throws {
+        let store = AppleVideoFrameStore()
+        store.publish(try makePixelBuffer(width: 8, height: 8), at: 0)
+        store.publish(try makePixelBuffer(width: 8, height: 8), at: 1)
+        await Task.yield()
+
+        let published = expectation(description: "Full canvas published")
+        var received: AppleVideoFrameStore.FrameBatch?
+        _ = store.addObserver { frames in
+            received = frames
+            published.fulfill()
+        }
+        let fullCanvas = try makePixelBuffer(width: 16, height: 16)
+        store.publish(fullCanvas, at: AppleVideoFrameStore.fullCanvasIndex)
+
+        await fulfillment(of: [published], timeout: 1)
+        XCTAssertEqual(received?.count, 1)
+        XCTAssertTrue(
+            received?[AppleVideoFrameStore.fullCanvasIndex]?.pixelBuffer === fullCanvas
+        )
+    }
+
+    @MainActor
+    func testTileFrameReplacesFullCanvasSnapshot() async throws {
+        let store = AppleVideoFrameStore()
+        store.publish(
+            try makePixelBuffer(width: 16, height: 16),
+            at: AppleVideoFrameStore.fullCanvasIndex
+        )
+        await Task.yield()
+
+        let published = expectation(description: "Tile frame published")
+        var received: AppleVideoFrameStore.FrameBatch?
+        _ = store.addObserver { frames in
+            received = frames
+            published.fulfill()
+        }
+        let tile = try makePixelBuffer(width: 16, height: 8)
+        store.publish(tile, at: 0)
+
+        await fulfillment(of: [published], timeout: 1)
+        XCTAssertEqual(received?.count, 1)
+        XCTAssertTrue(received?[0]?.pixelBuffer === tile)
+        XCTAssertNil(received?[AppleVideoFrameStore.fullCanvasIndex])
     }
 
     @MainActor
     func testCoalescesTilesWithSharedRTPTimestampIntoOnePresentation() async throws {
-        let store = AppleVideoFrameStore(expectedTileCount: 4, presentationDelay: 1)
+        let store = AppleVideoFrameStore()
         let published = expectation(description: "Shared RTP timestamp presented")
         var receivedBatches = [AppleVideoFrameStore.FrameBatch]()
         _ = store.addObserver { frames in
@@ -125,77 +168,6 @@ final class AppleVideoFrameStoreTests: XCTestCase {
             XCTAssertTrue(receivedBatches[0][tileIndex]?.pixelBuffer === firstTimestampFrames[tileIndex])
             XCTAssertEqual(receivedBatches[0][tileIndex]?.rtpTimestamp, 90_000)
         }
-    }
-
-    @MainActor
-    func testPresentsSingleChangedTileAfterPlayoutDeadline() async throws {
-        let store = AppleVideoFrameStore(presentationDelay: 0.01)
-        let published = expectation(description: "Incremental tile deadline")
-        var received: AppleVideoFrameStore.FrameBatch?
-        _ = store.addObserver { frames in
-            received = frames
-            published.fulfill()
-        }
-
-        let changedTile = try makePixelBuffer(width: 8, height: 8)
-        store.publish(
-            changedTile,
-            at: 2,
-            decodingOrderNumber: 200,
-            rtpTimestamp: 180_000
-        )
-
-        await fulfillment(of: [published], timeout: 1)
-        XCTAssertTrue(received?[2]?.pixelBuffer === changedTile)
-        XCTAssertEqual(received?[2]?.rtpTimestamp, 180_000)
-    }
-
-    @MainActor
-    func testPresentsSealedPartialTimestampAsSoonAsExpectedTilesDecode() async throws {
-        let store = AppleVideoFrameStore(expectedTileCount: 4, presentationDelay: 1)
-        let published = expectation(description: "Sealed timestamp presented")
-        var received: AppleVideoFrameStore.FrameBatch?
-        _ = store.addObserver { frames in
-            received = frames
-            published.fulfill()
-        }
-        store.seal(rtpTimestamp: 270_000, expectedTileIndices: [0, 1, 2])
-
-        for tileIndex in 0..<3 {
-            store.publish(
-                try makePixelBuffer(width: 8, height: 8),
-                at: tileIndex,
-                decodingOrderNumber: UInt16(300 + tileIndex),
-                rtpTimestamp: 270_000
-            )
-        }
-
-        await fulfillment(of: [published], timeout: 0.2)
-        XCTAssertEqual(Set(received?.keys.map { $0 } ?? []), Set([0, 1, 2]))
-    }
-
-    @MainActor
-    func testPresentsPartialTimestampWhenSealedAfterDecode() async throws {
-        let store = AppleVideoFrameStore(expectedTileCount: 4, presentationDelay: 1)
-        let published = expectation(description: "Decoded timestamp sealed")
-        var received: AppleVideoFrameStore.FrameBatch?
-        _ = store.addObserver { frames in
-            received = frames
-            published.fulfill()
-        }
-        for tileIndex in 0..<2 {
-            store.publish(
-                try makePixelBuffer(width: 8, height: 8),
-                at: tileIndex,
-                decodingOrderNumber: UInt16(400 + tileIndex),
-                rtpTimestamp: 360_000
-            )
-        }
-
-        store.seal(rtpTimestamp: 360_000, expectedTileIndices: [0, 1])
-
-        await fulfillment(of: [published], timeout: 0.2)
-        XCTAssertEqual(Set(received?.keys.map { $0 } ?? []), Set([0, 1]))
     }
 
     private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
