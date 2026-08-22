@@ -9,6 +9,8 @@ struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
     var accessUnitsPerSecond = 0.0
     var averageAccessUnitKilobytes = 0.0
     var intraRefreshesPerSecond = 0.0
+    var rateControlFeedbacksPerSecond = 0.0
+    var estimatedReceiveBandwidthMegabitsPerSecond = 0.0
     var decodedFramesPerSecond = 0.0
     var presentedFramesPerSecond = 0.0
     var averageDecodeMilliseconds = 0.0
@@ -43,6 +45,8 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         var accessUnits = 0
         var accessUnitBytes = 0
         var intraRefreshes = 0
+        var rateControlFeedbacks = 0
+        var estimatedReceiveBandwidthKilobitsPerSecond: UInt32 = 0
         var decodedSubframes = 0
         var timestampedDecodedSubframes = 0
         var decodedSourceFrames = 0
@@ -122,6 +126,14 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         lock.withPerformanceLock {
             accumulator.accessUnitBytes += max(0, byteCount)
             accumulator.intraRefreshes += max(0, intraRefreshCount)
+        }
+    }
+
+    func recordRateControlFeedback(estimatedBandwidthKilobitsPerSecond: UInt32) {
+        lock.withPerformanceLock {
+            accumulator.rateControlFeedbacks += 1
+            accumulator.estimatedReceiveBandwidthKilobitsPerSecond =
+                estimatedBandwidthKilobitsPerSecond
         }
     }
 
@@ -226,6 +238,9 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
                     ? Double(values.accessUnitBytes) / Double(values.accessUnits) / 1_000
                     : 0,
                 intraRefreshesPerSecond: Double(values.intraRefreshes) / elapsed,
+                rateControlFeedbacksPerSecond: Double(values.rateControlFeedbacks) / elapsed,
+                estimatedReceiveBandwidthMegabitsPerSecond:
+                    Double(values.estimatedReceiveBandwidthKilobitsPerSecond) / 1_000,
                 decodedFramesPerSecond: Self.decodedFramesPerSecond(
                     values: values,
                     tileCount: tileCount,
@@ -281,7 +296,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         let next = sample(at: clock())
 #if DEBUG
         Self.logger.notice(
-            "[DEBUG-TEAR-8A7C] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s auKB=\(next.averageAccessUnitKilobytes, format: .fixed(precision: 2)) irap=\(next.intraRefreshesPerSecond, format: .fixed(precision: 1))/s decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
+            "[DEBUG-TEAR-8A7C] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s auKB=\(next.averageAccessUnitKilobytes, format: .fixed(precision: 2)) irap=\(next.intraRefreshesPerSecond, format: .fixed(precision: 1))/s rctl=\(next.rateControlFeedbacksPerSecond, format: .fixed(precision: 1))/s bwe=\(next.estimatedReceiveBandwidthMegabitsPerSecond, format: .fixed(precision: 1))Mbps decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
         )
 #endif
         DispatchQueue.main.async { [weak self] in self?.snapshot = next }

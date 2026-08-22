@@ -24,6 +24,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let sourceAdoptionStall: TimeInterval = 2
     private static let minimumAdoptionPacketsPerSource = 5
     private static let receiverReportInterval: TimeInterval = 1
+    private static let rateControlFeedbackInterval: TimeInterval = 0.05
     private static let initialRecovery = AppleVideoInitialRecoveryPolicy()
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
@@ -48,6 +49,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var frameCount = 0
     private var decodedTiles = Set<Int>()
     private var lastReceiverReportTime: TimeInterval = 0
+    private var nextRateControlFeedbackTime: TimeInterval?
     private var firstPacketTime: TimeInterval?
     private var initialBurstReadyTime: TimeInterval?
     private var initialPacketCountBaseline = [UInt32: Int]()
@@ -107,6 +109,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 initialPacketCountBaseline.removeAll(keepingCapacity: false)
                 countLock.withVideoStreamLock { self.lastDecodedFrameTime = 0 }
                 lastVideoPacketTime = 0
+                nextRateControlFeedbackTime = nil
                 lastInitialKeyFrameRequestTime = 0
                 lastStallKeyFrameRequestTime = 0
                 lastDecoderRestartTime = 0
@@ -153,6 +156,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     }
 
     private func processAvailablePackets() {
+        defer { sendRateControlFeedbackIfNeeded() }
         sendReceiverReportIfNeeded()
         let datagrams = receiver.drainVideoDatagrams(mediaStreamIndex: mediaStreamIndex)
         guard !datagrams.isEmpty else {
@@ -453,6 +457,27 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             try feedback.sendReceiverReport(report: report)
         } catch {
             Self.logger.debug("Receiver report failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func sendRateControlFeedbackIfNeeded() {
+        let currentTime = ProcessInfo.processInfo.systemUptime
+        guard let info = processor.rateControlFeedback(at: currentTime) else { return }
+        let deadline = nextRateControlFeedbackTime ?? currentTime
+        guard currentTime >= deadline else { return }
+        let elapsedIntervals = floor(
+            (currentTime - deadline) / Self.rateControlFeedbackInterval
+        )
+        nextRateControlFeedbackTime = deadline
+            + (elapsedIntervals + 1) * Self.rateControlFeedbackInterval
+        do {
+            try feedback.sendRateControl(mediaControlInfo: info.serialized())
+            performance.recordRateControlFeedback(
+                estimatedBandwidthKilobitsPerSecond:
+                    info.estimatedBandwidthKilobitsPerSecond
+            )
+        } catch {
+            Self.logger.debug("Rate-control feedback failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

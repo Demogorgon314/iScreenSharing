@@ -11,6 +11,11 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         monitor.recordNetwork(packetCount: 100, byteCount: 1_000_000)
         monitor.recordAccessUnits(240)
         monitor.recordAccessUnitBytes(480_000, intraRefreshCount: 2)
+        for _ in 0..<20 {
+            monitor.recordRateControlFeedback(
+                estimatedBandwidthKilobitsPerSecond: 32_001
+            )
+        }
         monitor.recordDecode(duration: 0.004)
         monitor.recordDecode(duration: 0.002)
         for _ in 0..<240 { monitor.recordDecodedFrame() }
@@ -30,6 +35,12 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         XCTAssertEqual(snapshot.accessUnitsPerSecond, 240, accuracy: 0.001)
         XCTAssertEqual(snapshot.averageAccessUnitKilobytes, 2, accuracy: 0.001)
         XCTAssertEqual(snapshot.intraRefreshesPerSecond, 2, accuracy: 0.001)
+        XCTAssertEqual(snapshot.rateControlFeedbacksPerSecond, 20, accuracy: 0.001)
+        XCTAssertEqual(
+            snapshot.estimatedReceiveBandwidthMegabitsPerSecond,
+            32.001,
+            accuracy: 0.001
+        )
         XCTAssertEqual(snapshot.decodedFramesPerSecond, 60, accuracy: 0.001)
         XCTAssertEqual(snapshot.presentedFramesPerSecond, 1, accuracy: 0.001)
         XCTAssertEqual(snapshot.averageDecodeMilliseconds, 3, accuracy: 0.001)

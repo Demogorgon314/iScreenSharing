@@ -318,6 +318,11 @@ private struct AppleVideoPerformanceOverlay: View {
                 stats.averageAccessUnitKilobytes
             ))
             Text(String(format: "Quality  IRAP %.1f/s", stats.intraRefreshesPerSecond))
+            Text(String(
+                format: "RCTL     %.1f/s  BWE %.1f Mb/s",
+                stats.rateControlFeedbacksPerSecond,
+                stats.estimatedReceiveBandwidthMegabitsPerSecond
+            ))
             Text("Decoder  \(stats.decoderBackend?.rawValue ?? "—")")
             Text(String(
                 format: "Decode   %.1f fps  %.2f ms",

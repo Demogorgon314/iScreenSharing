@@ -39,3 +39,218 @@ struct AppleVideoRateControlInfo: Equatable, Sendable {
         return UInt32(scaled.rounded(.down))
     }
 }
+
+struct AppleVideoPacketObservation: Equatable, Sendable {
+    let rtpTimestamp: UInt32
+    let arrivalTime: TimeInterval
+    let packetSize: Int
+}
+
+struct AppleVideoRateControlEstimator: Sendable {
+    private enum EstimateState: Sendable {
+        case initial
+        case stable
+        case pendingUp
+        case pendingDown
+        case committed
+    }
+
+    private struct ProbeGroup: Sendable {
+        let timestamp: UInt32
+        let referenceArrival: TimeInterval
+        var lastArrival: TimeInterval
+        var bytesAfterReference: UInt64 = 0
+        var packetsAfterReference = 0
+    }
+
+    private static let clockRate = 90_000.0
+    private static let maximumBandwidth = 60_000_000.0
+    private static let minimumProbeBytes: UInt64 = 250
+    private static let suddenChangeMargin = 200_000.0
+    private static let suddenChangePercentage = 0.5
+    private static let suddenChangeSamples = 3
+
+    private var probeGroup: ProbeGroup?
+    private var estimatedBandwidth: Double?
+    private var estimateState = EstimateState.stable
+    private var pendingDirection = 0
+    private var pendingBandwidth = 0.0
+    private var pendingCount = 0
+
+    private var didReceiveVideo = false
+    private var totalPacketsReceived: UInt32 = 0
+    private var previousTimestamp: UInt32?
+    private var lastAcceptedTimestamp: UInt32 = 0
+    private var lastAcceptedPacketCount: UInt32 = 0
+    private var lastAcceptedArrival: TimeInterval?
+
+    private var delayPreviousTimestamp: UInt32?
+    private var delayWrapOffset: UInt64 = 0
+    private var firstUnwrappedTimestamp: UInt64?
+    private var firstDelayArrival: TimeInterval?
+    private var shortDelay = 0.0
+    private var longDelay = 0.0
+    private var oneWayReceiveDelay = 0.0
+
+    mutating func observe(_ observation: AppleVideoPacketObservation) {
+        didReceiveVideo = true
+        totalPacketsReceived &+= 1
+        updateTimestampStatistics(observation)
+        updateBandwidthEstimate(observation)
+    }
+
+    func feedback(at time: TimeInterval) -> AppleVideoRateControlInfo? {
+        guard didReceiveVideo else { return nil }
+        return AppleVideoRateControlInfo(
+            rtpTimestamp: lastAcceptedTimestamp,
+            estimatedBandwidthKilobitsPerSecond: serializedBandwidth,
+            burstyLoss: 0,
+            receivedPacketCount: lastAcceptedPacketCount,
+            feedbackDelayMilliseconds: feedbackDelay(at: time),
+            echoTimestamp: AppleVideoRateControlInfo.echoTimestamp(at: time),
+            oneWayReceiveDelay: oneWayReceiveDelay
+        )
+    }
+
+    private var serializedBandwidth: UInt32 {
+        guard let estimatedBandwidth else { return 0 }
+        let kilobits = UInt32(max(0, estimatedBandwidth / 1_000)) & ~UInt32(7)
+        return estimateState == .stable ? kilobits &+ 1 : kilobits
+    }
+
+    private func feedbackDelay(at time: TimeInterval) -> UInt32 {
+        guard let lastAcceptedArrival else { return UInt32.max }
+        let milliseconds = max(0, (time - lastAcceptedArrival) * 1_000)
+        guard milliseconds.isFinite, milliseconds < Double(UInt32.max) else {
+            return UInt32.max
+        }
+        return UInt32(milliseconds.rounded(.towardZero))
+    }
+
+    private mutating func updateTimestampStatistics(_ observation: AppleVideoPacketObservation) {
+        guard let previousTimestamp else {
+            self.previousTimestamp = observation.rtpTimestamp
+            return
+        }
+        guard observation.rtpTimestamp != previousTimestamp else { return }
+        let delta = observation.rtpTimestamp &- previousTimestamp
+        guard delta < 0x7fff_ffff else { return }
+
+        self.previousTimestamp = observation.rtpTimestamp
+        lastAcceptedTimestamp = observation.rtpTimestamp
+        lastAcceptedPacketCount = totalPacketsReceived
+        lastAcceptedArrival = observation.arrivalTime
+        updateOneWayReceiveDelay(
+            timestamp: observation.rtpTimestamp,
+            arrivalTime: observation.arrivalTime
+        )
+    }
+
+    private mutating func updateBandwidthEstimate(_ observation: AppleVideoPacketObservation) {
+        guard var group = probeGroup else {
+            probeGroup = ProbeGroup(
+                timestamp: observation.rtpTimestamp,
+                referenceArrival: observation.arrivalTime,
+                lastArrival: observation.arrivalTime
+            )
+            return
+        }
+        guard observation.rtpTimestamp == group.timestamp else {
+            finalize(group)
+            probeGroup = ProbeGroup(
+                timestamp: observation.rtpTimestamp,
+                referenceArrival: observation.arrivalTime,
+                lastArrival: observation.arrivalTime
+            )
+            return
+        }
+
+        group.bytesAfterReference &+= UInt64(max(0, observation.packetSize))
+        group.packetsAfterReference += 1
+        group.lastArrival = max(group.lastArrival, observation.arrivalTime)
+        probeGroup = group
+    }
+
+    private mutating func finalize(_ group: ProbeGroup) {
+        guard group.bytesAfterReference > Self.minimumProbeBytes,
+              group.packetsAfterReference >= 1 else { return }
+        let duration = group.lastArrival - group.referenceArrival
+        guard duration > 0 else { return }
+        let candidate = min(
+            Self.maximumBandwidth,
+            Double(group.bytesAfterReference) * 8 / duration
+        )
+        apply(candidate: candidate)
+    }
+
+    private mutating func apply(candidate: Double) {
+        guard let estimatedBandwidth else {
+            self.estimatedBandwidth = max(candidate, 100_000)
+            estimateState = .initial
+            return
+        }
+        let difference = candidate - estimatedBandwidth
+        let isDown = candidate <= (1 - Self.suddenChangePercentage) * estimatedBandwidth
+            || -difference > Self.suddenChangeMargin
+        let isUp = candidate >= (1 + Self.suddenChangePercentage) * estimatedBandwidth
+            || difference > Self.suddenChangeMargin
+        guard isDown || isUp else {
+            self.estimatedBandwidth = 0.1 * candidate + 0.9 * estimatedBandwidth
+            clearPendingEstimate(state: .stable)
+            return
+        }
+
+        let direction = isUp ? 1 : -1
+        if direction != pendingDirection {
+            pendingDirection = direction
+            pendingBandwidth = candidate
+            pendingCount = 1
+        } else {
+            pendingBandwidth += candidate
+            pendingCount += 1
+        }
+        estimateState = direction > 0 ? .pendingUp : .pendingDown
+        guard pendingCount >= Self.suddenChangeSamples else { return }
+
+        self.estimatedBandwidth = pendingBandwidth / Double(pendingCount)
+        clearPendingEstimate(state: .committed)
+    }
+
+    private mutating func clearPendingEstimate(state: EstimateState) {
+        pendingDirection = 0
+        pendingBandwidth = 0
+        pendingCount = 0
+        estimateState = state
+    }
+
+    private mutating func updateOneWayReceiveDelay(
+        timestamp: UInt32,
+        arrivalTime: TimeInterval
+    ) {
+        if let previous = delayPreviousTimestamp,
+           timestamp < previous,
+           previous &- timestamp > 0x7fff_ffff {
+            delayWrapOffset &+= UInt64(UInt32.max)
+        }
+        delayPreviousTimestamp = timestamp
+        let unwrappedTimestamp = delayWrapOffset &+ UInt64(timestamp)
+        guard let firstUnwrappedTimestamp, let firstDelayArrival else {
+            self.firstUnwrappedTimestamp = unwrappedTimestamp
+            self.firstDelayArrival = arrivalTime
+            return
+        }
+
+        let sendRelative = Double(unwrappedTimestamp &- firstUnwrappedTimestamp) / Self.clockRate
+        let receiveRelative = arrivalTime - firstDelayArrival
+        let lag = receiveRelative - sendRelative
+        shortDelay = 0.1 * lag + 0.9 * shortDelay
+        longDelay = 0.0001 * lag + 0.9999 * longDelay
+        let delay = shortDelay - longDelay
+        if delay < 0 {
+            longDelay = shortDelay
+            oneWayReceiveDelay = 0
+        } else {
+            oneWayReceiveDelay = delay
+        }
+    }
+}

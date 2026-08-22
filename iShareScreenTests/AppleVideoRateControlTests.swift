@@ -48,6 +48,182 @@ final class AppleVideoRateControlTests: XCTestCase {
         ).serialized()
         XCTAssertEqual(try payload.uint16BE(at: 14), 0)
     }
+
+    func testStableProbeSequenceMatchesNativeGoldenVector() throws {
+        let feedback = try XCTUnwrap(
+            estimate(spacing: 0.0003).feedback(at: 1_002.05)
+        )
+
+        XCTAssertEqual(
+            feedback.serialized().hex,
+            "8500000418d4000000000042a833000002cb7d01"
+        )
+    }
+
+    func testFastProbeSequenceClampsAtNativeMaximumBandwidth() throws {
+        let feedback = try XCTUnwrap(
+            estimate(spacing: 0.0001).feedback(at: 1_002.05)
+        )
+
+        XCTAssertEqual(
+            feedback.serialized().hex,
+            "8500000418d4000000000042a833000002cbea61"
+        )
+    }
+
+    func testSparseProbeChangesBandwidthWithoutInventingBurstyLoss() throws {
+        let feedback = try XCTUnwrap(
+            estimate(spacing: 0.0003, packetIndexes: [0, 1, 4, 5])
+                .feedback(at: 1_002.05)
+        )
+
+        XCTAssertEqual(
+            feedback.serialized().hex,
+            "8500000418d4000000000042a833000001dd4b01"
+        )
+    }
+
+    func testOldTimestampDoesNotMovePlayoutStatistics() throws {
+        let feedback = try XCTUnwrap(
+            estimate(spacing: 0.0003, insertsOldTimestamp: true)
+                .feedback(at: 1_002.05)
+        )
+
+        XCTAssertEqual(
+            feedback.serialized().hex,
+            "8500000418d4000000000042a833000002cc7d01"
+        )
+    }
+
+    func testFeedbackPersistsWhileVideoIsIdleAndOnlyAgeChanges() throws {
+        let estimator = estimate(spacing: 0.0003)
+        let recent = try XCTUnwrap(estimator.feedback(at: 1_002.05)).serialized()
+        let idle = try XCTUnwrap(estimator.feedback(at: 1_007.05)).serialized()
+
+        XCTAssertEqual(try recent.uint16BE(at: 10), 66)
+        XCTAssertEqual(try idle.uint16BE(at: 10), 5_066)
+        XCTAssertEqual(recent.prefix(10), idle.prefix(10))
+        XCTAssertEqual(recent.suffix(6), idle.suffix(6))
+    }
+
+    func testRequiresThreeProbeGroupsBeforeCommittingSuddenBandwidthChange() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        feedGroup(&estimator, frame: 0, spacing: 0.0003)
+        feedGroup(&estimator, frame: 1, spacing: 0.0003)
+        feedGroup(&estimator, frame: 2, spacing: 0.002)
+        XCTAssertEqual(try bandwidth(in: estimator), 32_001)
+
+        feedGroup(&estimator, frame: 3, spacing: 0.002)
+        XCTAssertEqual(try bandwidth(in: estimator), 32_000)
+        feedGroup(&estimator, frame: 4, spacing: 0.002)
+        XCTAssertEqual(try bandwidth(in: estimator), 32_000)
+        feedGroup(&estimator, frame: 5, spacing: 0.002)
+        XCTAssertEqual(try bandwidth(in: estimator), 4_800)
+        feedGroup(&estimator, frame: 6, spacing: 0.002)
+        XCTAssertEqual(try bandwidth(in: estimator), 4_801)
+    }
+
+    func testAlternatingSuddenChangesNeverCommit() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        feedGroup(&estimator, frame: 0, spacing: 0.0003)
+        feedGroup(&estimator, frame: 1, spacing: 0.0003)
+
+        for frame in 2..<12 {
+            let spacing = frame.isMultiple(of: 2) ? 0.002 : 0.0001
+            feedGroup(&estimator, frame: frame, spacing: spacing)
+        }
+
+        XCTAssertEqual(try bandwidth(in: estimator), 32_000)
+    }
+
+    func testNeutralCandidatesUseNativeExponentialMovingAverage() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        feedGroup(&estimator, frame: 0, spacing: 0.0003)
+        feedGroup(&estimator, frame: 1, spacing: 0.0003)
+        feedGroup(&estimator, frame: 2, spacing: 0.000301)
+        feedGroup(&estimator, frame: 3, spacing: 0.000301)
+
+        XCTAssertEqual(try bandwidth(in: estimator), 31_985)
+    }
+
+    func testRelativeThresholdAppliesBelowAbsoluteMargin() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        feedGroup(&estimator, frame: 0, spacing: 0.8)
+        feedGroup(&estimator, frame: 1, spacing: 0.06)
+        XCTAssertEqual(try bandwidth(in: estimator), 96)
+
+        feedGroup(&estimator, frame: 2, spacing: 0.06)
+        feedGroup(&estimator, frame: 3, spacing: 0.06)
+        XCTAssertEqual(try bandwidth(in: estimator), 96)
+        feedGroup(&estimator, frame: 4, spacing: 0.06)
+        XCTAssertEqual(try bandwidth(in: estimator), 160)
+    }
+
+    func testTimestampWrapAdvancesFeedbackState() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        estimator.observe(AppleVideoPacketObservation(
+            rtpTimestamp: UInt32.max - 100,
+            arrivalTime: 1,
+            packetSize: 1_200
+        ))
+        estimator.observe(AppleVideoPacketObservation(
+            rtpTimestamp: 100,
+            arrivalTime: 1.01,
+            packetSize: 1_200
+        ))
+
+        let feedback = try XCTUnwrap(estimator.feedback(at: 1.02))
+        XCTAssertEqual(feedback.rtpTimestamp, 100)
+        XCTAssertEqual(feedback.receivedPacketCount, 2)
+    }
+
+    private func estimate(
+        spacing: TimeInterval,
+        packetIndexes: [Int] = Array(0..<6),
+        insertsOldTimestamp: Bool = false
+    ) -> AppleVideoRateControlEstimator {
+        var estimator = AppleVideoRateControlEstimator()
+        for frame in 0..<120 {
+            let timestamp = UInt32(90_000 + 1_500 * frame)
+            let frameArrival = 1_000 + Double(frame) / 60
+            for packetIndex in packetIndexes {
+                if insertsOldTimestamp, frame == 60, packetIndex == 2 {
+                    estimator.observe(AppleVideoPacketObservation(
+                        rtpTimestamp: timestamp &- 1_500,
+                        arrivalTime: frameArrival + Double(packetIndex) * spacing - 0.00001,
+                        packetSize: 1_200
+                    ))
+                }
+                estimator.observe(AppleVideoPacketObservation(
+                    rtpTimestamp: timestamp,
+                    arrivalTime: frameArrival + Double(packetIndex) * spacing,
+                    packetSize: 1_200
+                ))
+            }
+        }
+        return estimator
+    }
+
+    private func feedGroup(
+        _ estimator: inout AppleVideoRateControlEstimator,
+        frame: Int,
+        spacing: TimeInterval
+    ) {
+        let timestamp = UInt32(90_000 + 1_500 * frame)
+        let frameArrival = 1_000 + Double(frame) / 60
+        for packetIndex in 0..<6 {
+            estimator.observe(AppleVideoPacketObservation(
+                rtpTimestamp: timestamp,
+                arrivalTime: frameArrival + Double(packetIndex) * spacing,
+                packetSize: 1_200
+            ))
+        }
+    }
+
+    private func bandwidth(in estimator: AppleVideoRateControlEstimator) throws -> UInt16 {
+        let feedback = try XCTUnwrap(estimator.feedback(at: 1_001))
+        return try feedback.serialized().uint16BE(at: 18)
+    }
 }
 
 private extension Data {

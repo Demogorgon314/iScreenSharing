@@ -36,6 +36,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
     private var groups = [GroupKey: [AppleRTPPacket]]()
     private var sourcePacketCounts = [UInt32: Int]()
     private var sequenceTracker = AppleRTPSequenceTracker()
+    private var rateControlEstimator = AppleVideoRateControlEstimator()
     private(set) var parameterSets = AppleHEVCParameterSets()
 
     init(keyBlob: Data) throws {
@@ -47,7 +48,13 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             datagrams.compactMap { received -> (AppleRTPPacket, TimeInterval)? in
                 guard let packet = try? decryptor.decrypt(received.data) else { return nil }
                 return (packet, received.arrivalTime)
-            }.compactMap { processUnlocked($0.0, arrivalTime: $0.1) }
+            }.compactMap {
+                processUnlocked(
+                    $0.0,
+                    arrivalTime: $0.1,
+                    packetSize: $0.0.payload.count
+                )
+            }
         }
     }
 
@@ -55,13 +62,25 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         _ packet: AppleRTPPacket,
         arrivalTime: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) -> AppleHEVCAccessUnit? {
-        lock.withStreamLock { processUnlocked(packet, arrivalTime: arrivalTime) }
+        lock.withStreamLock {
+            processUnlocked(
+                packet,
+                arrivalTime: arrivalTime,
+                packetSize: packet.payload.count
+            )
+        }
     }
 
     private func processUnlocked(
         _ packet: AppleRTPPacket,
-        arrivalTime: TimeInterval
+        arrivalTime: TimeInterval,
+        packetSize: Int
     ) -> AppleHEVCAccessUnit? {
+        rateControlEstimator.observe(AppleVideoPacketObservation(
+            rtpTimestamp: packet.timestamp,
+            arrivalTime: arrivalTime,
+            packetSize: packetSize
+        ))
         sequenceTracker.observe(packet, arrivalTime: arrivalTime)
         let key = GroupKey(
             source: packet.synchronizationSource,
@@ -100,6 +119,10 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         lock.withStreamLock { sequenceTracker.receptionReport(for: source) }
     }
 
+    func rateControlFeedback(at time: TimeInterval) -> AppleVideoRateControlInfo? {
+        lock.withStreamLock { rateControlEstimator.feedback(at: time) }
+    }
+
     func currentParameterSets() -> AppleHEVCParameterSets {
         lock.withStreamLock { parameterSets }
     }
@@ -109,6 +132,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             groups.removeAll(keepingCapacity: false)
             sourcePacketCounts.removeAll(keepingCapacity: false)
             sequenceTracker = AppleRTPSequenceTracker()
+            rateControlEstimator = AppleVideoRateControlEstimator()
             parameterSets = AppleHEVCParameterSets()
         }
     }
