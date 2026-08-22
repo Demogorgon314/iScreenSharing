@@ -111,6 +111,9 @@ struct ConnectionsLibraryView: View {
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search")
         .searchFocused($searchFocused)
         .onOpenURL(perform: openConnection)
+        .task(id: discoveryAttempt) {
+            await discovery.browse()
+        }
         .installsConnectionMenuTitle()
         .sheet(item: $editingConnection) { connection in
             ConnectionEditorView(connection: connection, store: store) { endpoint in
@@ -211,6 +214,8 @@ struct ConnectionsLibraryView: View {
                         }
                 }
                 .listStyle(.inset)
+                .alternatingRowBackgrounds()
+                .environment(\.defaultMinListRowHeight, 50)
             case .failed(let message):
                 ContentUnavailableView {
                     Label("Can’t Browse Network", systemImage: "exclamationmark.triangle")
@@ -220,9 +225,6 @@ struct ConnectionsLibraryView: View {
                     Button("Try Again") { discoveryAttempt += 1 }
                 }
             }
-        }
-        .task(id: discoveryAttempt) {
-            await discovery.browse()
         }
     }
 
@@ -252,6 +254,8 @@ struct ConnectionsLibraryView: View {
                 }
         }
         .listStyle(.inset)
+        .alternatingRowBackgrounds()
+        .environment(\.defaultMinListRowHeight, 50)
     }
 
     private var connectionGrid: some View {
