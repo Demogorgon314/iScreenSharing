@@ -31,13 +31,19 @@ struct AuthenticationView: View {
     var body: some View {
         authenticationContent
             .onChange(of: coordinator.state) { _, state in
-                guard state == .authenticated else { return }
-                dismissWindow(id: "authentication", value: coordinator.endpoint)
-                DispatchQueue.main.async {
-                    SessionWindowCoordinator.shared.show(
-                        endpoint: coordinator.endpoint,
-                        sessions: sessions
-                    )
+                switch state {
+                case .authenticated:
+                    dismissWindow(id: "authentication", value: coordinator.endpoint)
+                    DispatchQueue.main.async {
+                        SessionWindowCoordinator.shared.show(
+                            endpoint: coordinator.endpoint,
+                            sessions: sessions
+                        )
+                    }
+                case .failed:
+                    focusedField = password.isEmpty ? .username : .password
+                case .idle, .authenticating:
+                    break
                 }
             }
     }
@@ -114,11 +120,10 @@ struct AuthenticationView: View {
         .padding(20)
         .frame(width: 440)
         .task {
-            if let saved = await coordinator.savedCredentials() {
+            if let saved = await coordinator.signInWithSavedCredentials() {
                 username = saved.username
                 password = saved.password
                 rememberPassword = true
-                focusedField = .password
             } else {
                 if let preferredUsername = coordinator.preferredUsername() {
                     username = preferredUsername

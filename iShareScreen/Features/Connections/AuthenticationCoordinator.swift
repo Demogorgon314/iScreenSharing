@@ -56,6 +56,19 @@ final class AuthenticationCoordinator: ObservableObject {
         }.value
     }
 
+    @discardableResult
+    func signInWithSavedCredentials() async -> ScreenSharingCredentials? {
+        guard let credentials = await savedCredentials(), !Task.isCancelled else {
+            return nil
+        }
+        signIn(
+            username: credentials.username,
+            password: credentials.password,
+            rememberPassword: true
+        )
+        return credentials
+    }
+
     func preferredUsername() -> String? {
         let username = connectionStore.connection(for: endpoint)?.preferredUsername ?? ""
         return username.isEmpty ? nil : username

@@ -58,6 +58,88 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
     }
 
+    func testAutomaticallySignsInWithSavedCredentials() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = try makeSession(endpoint: endpoint)
+        let credentials = MockCredentialStore()
+        let savedCredentials = try ScreenSharingCredentials(
+            username: "saved-user",
+            password: "saved-password"
+        )
+        try credentials.save(savedCredentials, for: endpoint)
+        let sessions = SessionManager()
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(result: .success(session)),
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: credentials,
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionManager: sessions
+        )
+
+        let restoredCredentials = await coordinator.signInWithSavedCredentials()
+        try await waitUntil { coordinator.state == .authenticated }
+
+        XCTAssertEqual(restoredCredentials, savedCredentials)
+        XCTAssertTrue(sessions.session(for: endpoint) === session)
+    }
+
+    func testAutomaticSignInWithoutSavedCredentialsKeepsCoordinatorIdle() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let sessions = SessionManager()
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(result: .success(try makeSession(endpoint: endpoint))),
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: MockCredentialStore(),
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionManager: sessions
+        )
+
+        let restoredCredentials = await coordinator.signInWithSavedCredentials()
+
+        XCTAssertNil(restoredCredentials)
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertNil(sessions.session(for: endpoint))
+    }
+
+    func testRejectedAutomaticSignInKeepsSavedCredentialsForManualRetry() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let credentials = MockCredentialStore()
+        let savedCredentials = try ScreenSharingCredentials(
+            username: "saved-user",
+            password: "stale-password"
+        )
+        try credentials.save(savedCredentials, for: endpoint)
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(
+                result: .failure(AppleRSA1Error.authenticationRejected(1))
+            ),
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: credentials,
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionManager: SessionManager()
+        )
+
+        let restoredCredentials = await coordinator.signInWithSavedCredentials()
+        try await waitUntil {
+            if case .failed = coordinator.state { return true }
+            return false
+        }
+
+        XCTAssertEqual(restoredCredentials, savedCredentials)
+        guard case .failed = coordinator.state else {
+            return XCTFail("Expected saved-credential authentication to fail")
+        }
+    }
+
     func testRestoresEachVirtualDisplaySizeDuringAuthentication() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let session = try makeSession(endpoint: endpoint)

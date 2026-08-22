@@ -230,16 +230,17 @@ struct ConnectionsLibraryView: View {
 
     private var connectionList: some View {
         List(filteredConnections, selection: $selectedConnection) { connection in
-            ConnectionRow(connection: connection) {
-                editingConnection = connection
-            }
+            ConnectionRow(
+                connection: connection,
+                onConnect: {
+                    openWindow(id: "authentication", value: connection.endpoint)
+                },
+                onEdit: {
+                    editingConnection = connection
+                }
+                )
                 .tag(connection.id)
                 .contentShape(Rectangle())
-                .simultaneousGesture(
-                    TapGesture().onEnded {
-                        selectedConnection = connection.id
-                    }
-                )
                 .onTapGesture(count: 2) {
                     openWindow(id: "authentication", value: connection.endpoint)
                 }
@@ -399,7 +400,9 @@ private struct NetworkConnectionRow: View {
 
 private struct ConnectionRow: View {
     let connection: SavedConnection
+    let onConnect: () -> Void
     let onEdit: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -418,8 +421,12 @@ private struct ConnectionRow: View {
 
             Spacer()
 
-            Text(connection.lastConnectedAt, format: .dateTime.month().day().year().hour().minute())
-                .foregroundStyle(.secondary)
+            if isHovered {
+                Button("Connect", action: onConnect)
+            } else {
+                Text(connection.lastConnectedAt, format: .dateTime.month().day().year().hour().minute())
+                    .foregroundStyle(.secondary)
+            }
             Button(action: onEdit) {
                 Image(systemName: "info.circle")
                     .foregroundStyle(.secondary)
@@ -428,5 +435,6 @@ private struct ConnectionRow: View {
             .help("Info")
         }
         .padding(.vertical, 7)
+        .onHover { isHovered = $0 }
     }
 }
