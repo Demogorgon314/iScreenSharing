@@ -101,7 +101,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
 
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoRenderer")
     private let context: AppleNV24MetalContext
-    private let performance: AppleVideoPerformanceMonitor?
+    private var performance: AppleVideoPerformanceMonitor?
     private var latestFrames = AppleVideoFrameStore.FrameBatch()
     private var lastPresentedSequences = [Int: UInt64]()
     private var tileLayouts = [AppleVideoCanvasLayout.Tile]()
@@ -110,14 +110,19 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
     }
+    var showsDeveloperHUD: Bool {
+        didSet { configureDeveloperHUD() }
+    }
 
     init(
         context: AppleNV24MetalContext,
         synchronizesPresentation: Bool = true,
+        showsDeveloperHUD: Bool = false,
         performance: AppleVideoPerformanceMonitor? = nil
     ) {
         self.context = context
         self.synchronizesPresentation = synchronizesPresentation
+        self.showsDeveloperHUD = showsDeveloperHUD
         self.performance = performance
         super.init()
         device = context.device
@@ -127,6 +132,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         maximumDrawableCount = 2
         allowsNextDrawableTimeout = true
         configurePresentation()
+        configureDeveloperHUD()
     }
 
     override init(layer: Any) {
@@ -140,8 +146,10 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         tileLayouts = source.tileLayouts
         renderingBounds = source.renderingBounds
         synchronizesPresentation = source.synchronizesPresentation
+        showsDeveloperHUD = false
         super.init(layer: layer)
         configurePresentation()
+        configureDeveloperHUD()
     }
 
     @available(*, unavailable)
@@ -159,6 +167,28 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         updateDrawableSize()
     }
 
+    func prepareForReuse(
+        synchronizesPresentation: Bool,
+        showsDeveloperHUD: Bool,
+        performance: AppleVideoPerformanceMonitor?
+    ) {
+        latestFrames.removeAll()
+        lastPresentedSequences.removeAll()
+        tileLayouts.removeAll()
+        renderingBounds = .zero
+        self.performance = performance
+        self.synchronizesPresentation = synchronizesPresentation
+        self.showsDeveloperHUD = showsDeveloperHUD
+    }
+
+    func prepareForInactivity() {
+        latestFrames.removeAll()
+        lastPresentedSequences.removeAll()
+        tileLayouts.removeAll()
+        renderingBounds = .zero
+        performance = nil
+    }
+
     @discardableResult
     func present() -> Bool {
         guard inFlightGate.begin() else {
@@ -172,23 +202,11 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             inFlightGate.end()
             return false
         }
-        commit(commandBuffer, presenting: drawable, submittedAt: ProcessInfo.processInfo.systemUptime)
-        return true
-    }
-
-    @discardableResult
-    func present(drawable: CAMetalDrawable) -> Bool {
-        guard inFlightGate.begin() else {
-            performance?.recordRendererBusy()
-            return false
-        }
-        guard !latestFrames.isEmpty,
-              let commandBuffer = context.commandQueue.makeCommandBuffer(),
-              encode(into: commandBuffer, drawable: drawable) else {
-            inFlightGate.end()
-            return false
-        }
-        commit(commandBuffer, presenting: drawable, submittedAt: ProcessInfo.processInfo.systemUptime)
+        commit(
+            commandBuffer,
+            presenting: drawable,
+            submittedAt: ProcessInfo.processInfo.systemUptime
+        )
         return true
     }
 
@@ -198,10 +216,18 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         submittedAt: TimeInterval
     ) {
         recordPresentation(submittedAt: submittedAt)
-        commandBuffer.present(drawable)
-        let logger = Self.logger
-        let inFlightGate = inFlightGate
+        let presentationSubmittedAt = CACurrentMediaTime()
         let performance = performance
+        let logger = Self.logger
+        drawable.addPresentedHandler { drawable in
+            guard drawable.presentedTime > 0 else { return }
+            performance?.recordDisplay(
+                duration: drawable.presentedTime - presentationSubmittedAt,
+                presentedAt: drawable.presentedTime
+            )
+        }
+        commandBuffer.present(drawable)
+        let inFlightGate = inFlightGate
         commandBuffer.addCompletedHandler { commandBuffer in
             defer { inFlightGate.end() }
             performance?.recordGPU(
@@ -219,6 +245,13 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private func configurePresentation() {
         displaySyncEnabled = synchronizesPresentation
         presentsWithTransaction = false
+    }
+
+    private func configureDeveloperHUD() {
+        let mode = showsDeveloperHUD ? "default" : "disabled"
+        developerHUDProperties = [
+            "mode": mode
+        ]
     }
 
     private func encode(into commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) -> Bool {
@@ -281,10 +314,12 @@ final class AppleNV24MetalLayer: CAMetalLayer {
 
     private func updateDrawableSize() {
         let scale = max(contentsScale, 1)
-        drawableSize = CGSize(
+        let nextDrawableSize = CGSize(
             width: max(1, bounds.width * scale),
             height: max(1, bounds.height * scale)
         )
+        guard drawableSize != nextDrawableSize else { return }
+        drawableSize = nextDrawableSize
     }
 
     private func vertices(for layout: AppleVideoCanvasLayout.Tile) -> [Vertex]? {

@@ -13,6 +13,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
     private var windowControllers: [WindowKey: NSWindowController] = [:]
     private var layoutSubscriptions: [ConnectionEndpoint: AnyCancellable] = [:]
+    private var videoRenderers: [WindowKey: AppleVideoRenderer] = [:]
 
     func show(endpoint: ConnectionEndpoint, sessions: SessionManager) {
         let primaryKey = WindowKey(endpoint: endpoint, displayIndex: 0)
@@ -132,7 +133,11 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
             displayIndex: key.displayIndex,
-            disconnectsSessionOnDisappear: disconnectsSessionOnDisappear
+            disconnectsSessionOnDisappear: disconnectsSessionOnDisappear,
+            videoRenderer: videoRenderer(
+                for: key.endpoint,
+                displayIndex: key.displayIndex
+            )
         )
         .frame(minWidth: 800, minHeight: 500)
         let window = NSWindow(
@@ -166,6 +171,19 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         let controller = NSWindowController(window: window)
         windowControllers[key] = controller
         controller.showWindow(nil)
+    }
+
+    func videoRenderer(
+        for endpoint: ConnectionEndpoint,
+        displayIndex: Int
+    ) -> AppleVideoRenderer {
+        let key = WindowKey(endpoint: endpoint, displayIndex: displayIndex)
+        if let renderer = videoRenderers[key] {
+            return renderer
+        }
+        let renderer = AppleVideoRenderer()
+        videoRenderers[key] = renderer
+        return renderer
     }
 
     private func saveFrame(from notification: Notification) {

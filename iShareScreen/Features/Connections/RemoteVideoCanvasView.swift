@@ -3,6 +3,7 @@ import QuartzCore
 import SwiftUI
 
 struct RemoteVideoCanvasView: NSViewRepresentable {
+    let renderer: AppleVideoRenderer
     let canvas: AppleCanvas
     let frames: AppleVideoFrameStore
     let performance: AppleVideoPerformanceMonitor
@@ -10,6 +11,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
+    let showsDeveloperHUD: Bool
     let sourceRect: CGRect?
     let inputMapping: AppleDisplayInputMapping?
     let inputCoordinatesAreDisplayLocal: Bool
@@ -17,12 +19,14 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
+            renderer: renderer,
             canvas: canvas,
             frames: frames,
             input: input,
             cursors: cursors,
             displayScale: displayScale,
             synchronizesPresentation: synchronizesPresentation,
+            showsDeveloperHUD: showsDeveloperHUD,
             sourceRect: sourceRect,
             inputMapping: inputMapping,
             inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
@@ -32,12 +36,64 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: RemoteVideoCanvasNSView, context: Context) {
+        view.update(canvas: canvas)
         view.displayScale = displayScale
         view.synchronizesPresentation = synchronizesPresentation
+        view.showsDeveloperHUD = showsDeveloperHUD
         view.sourceRect = sourceRect
         view.inputMapping = inputMapping
         view.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         view.inputDisplayID = inputDisplayID
+    }
+
+    static func dismantleNSView(_ view: RemoteVideoCanvasNSView, coordinator: ()) {
+        view.prepareForDismantle()
+    }
+}
+
+@MainActor
+private final class RemoteVideoCanvasDisplayLinkTarget: NSObject {
+    weak var view: RemoteVideoCanvasNSView?
+
+    init(view: RemoteVideoCanvasNSView) {
+        self.view = view
+    }
+
+    @objc func displayLinkDidFire(_ displayLink: CADisplayLink) {
+        view?.displayLinkDidFire(displayLink)
+    }
+}
+
+@MainActor
+final class AppleVideoRenderer {
+    private var retainedLayer: AppleNV24MetalLayer?
+
+    func displayLayer(
+        synchronizesPresentation: Bool,
+        showsDeveloperHUD: Bool,
+        performance: AppleVideoPerformanceMonitor?
+    ) -> CALayer {
+        if let retainedLayer {
+            retainedLayer.prepareForReuse(
+                synchronizesPresentation: synchronizesPresentation,
+                showsDeveloperHUD: showsDeveloperHUD,
+                performance: performance
+            )
+            return retainedLayer
+        }
+        guard let context = AppleNV24MetalContext() else {
+            let fallback = CALayer()
+            fallback.backgroundColor = NSColor.black.cgColor
+            return fallback
+        }
+        let layer = AppleNV24MetalLayer(
+            context: context,
+            synchronizesPresentation: synchronizesPresentation,
+            showsDeveloperHUD: showsDeveloperHUD,
+            performance: performance
+        )
+        retainedLayer = layer
+        return layer
     }
 }
 
@@ -53,8 +109,14 @@ final class RemoteVideoCanvasNSView: NSView {
     var synchronizesPresentation: Bool {
         didSet {
             guard synchronizesPresentation != oldValue else { return }
-            (displayLayer as? AppleNV24MetalLayer)?.synchronizesPresentation = synchronizesPresentation
+            configureDisplayLink()
             schedulePresentation()
+        }
+    }
+    var showsDeveloperHUD: Bool {
+        didSet {
+            guard showsDeveloperHUD != oldValue else { return }
+            (displayLayer as? AppleNV24MetalLayer)?.showsDeveloperHUD = showsDeveloperHUD
         }
     }
     var sourceRect: CGRect? {
@@ -67,7 +129,7 @@ final class RemoteVideoCanvasNSView: NSView {
     var inputCoordinatesAreDisplayLocal: Bool
     var inputDisplayID: UInt32?
 
-    private let canvas: AppleCanvas
+    private(set) var canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
     private let performance: AppleVideoPerformanceMonitor?
     private let input: AppleInputController?
@@ -83,14 +145,21 @@ final class RemoteVideoCanvasNSView: NSView {
     private var lastRemotePoint: (x: Int, y: Int)?
     private var activeModifiers = [UInt16: ActiveModifier]()
     private var inputTask: Task<Void, Never>?
+    private var displayLink: CADisplayLink?
+    private var displayLinkTarget: RemoteVideoCanvasDisplayLinkTarget?
+    private var displayScheduler = AppleVideoDisplayScheduler()
+
+    var usesSynchronizedDisplayLink: Bool { displayLink != nil }
 
     init(
+        renderer: AppleVideoRenderer? = nil,
         canvas: AppleCanvas,
         frames: AppleVideoFrameStore,
         input: AppleInputController?,
         cursors: AppleCursorStore?,
         displayScale: AppleVideoDisplayScale,
         synchronizesPresentation: Bool,
+        showsDeveloperHUD: Bool = false,
         sourceRect: CGRect?,
         inputMapping: AppleDisplayInputMapping?,
         inputCoordinatesAreDisplayLocal: Bool,
@@ -104,23 +173,17 @@ final class RemoteVideoCanvasNSView: NSView {
         self.cursors = cursors
         self.displayScale = displayScale
         self.synchronizesPresentation = synchronizesPresentation
+        self.showsDeveloperHUD = showsDeveloperHUD
         self.sourceRect = sourceRect
         self.inputMapping = inputMapping
         self.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         self.inputDisplayID = inputDisplayID
-        let metalContext = AppleNV24MetalContext()
         decodedTileHeights = Array(repeating: nil, count: canvas.tileCount)
-        if let metalContext {
-            displayLayer = AppleNV24MetalLayer(
-                context: metalContext,
-                synchronizesPresentation: synchronizesPresentation,
-                performance: performance
-            )
-        } else {
-            let fallback = CALayer()
-            fallback.backgroundColor = NSColor.black.cgColor
-            displayLayer = fallback
-        }
+        displayLayer = (renderer ?? AppleVideoRenderer()).displayLayer(
+            synchronizesPresentation: synchronizesPresentation,
+            showsDeveloperHUD: showsDeveloperHUD,
+            performance: performance
+        )
         super.init(frame: .zero)
 
         wantsLayer = true
@@ -142,6 +205,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     deinit {
+        displayLink?.invalidate()
         inputTask?.cancel()
         if let windowDidBecomeKeyObserver {
             NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
@@ -152,6 +216,7 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        configureDisplayLink()
         if let windowDidBecomeKeyObserver {
             NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
             self.windowDidBecomeKeyObserver = nil
@@ -172,6 +237,11 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func layout() {
         super.layout()
+        updateDisplayLayerGeometry()
+        schedulePresentation()
+    }
+
+    private func updateDisplayLayerGeometry() {
         let fallbackHeight = ceil(CGFloat(canvas.height) / CGFloat(canvas.tileCount))
         let slotHeights = decodedTileHeights.map { $0 ?? fallbackHeight }
         let layouts = AppleVideoCanvasLayout.tiles(
@@ -183,7 +253,30 @@ final class RemoteVideoCanvasNSView: NSView {
         )
         displayLayer.frame = bounds
         (displayLayer as? AppleNV24MetalLayer)?.update(layouts: layouts, bounds: bounds)
+    }
+
+    func update(canvas: AppleCanvas) {
+        guard canvas != self.canvas else { return }
+        self.canvas = canvas
+        decodedTileHeights = Array(repeating: nil, count: canvas.tileCount)
+        needsLayout = true
         schedulePresentation()
+    }
+
+    fileprivate func prepareForDismantle() {
+        displayLink?.invalidate()
+        displayLink = nil
+        displayLinkTarget = nil
+        if let observer {
+            frames.removeObserver(observer)
+            self.observer = nil
+        }
+        if let cursorObserver {
+            cursors?.removeObserver(cursorObserver)
+            self.cursorObserver = nil
+        }
+        (displayLayer as? AppleNV24MetalLayer)?.prepareForInactivity()
+        displayLayer.removeFromSuperlayer()
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -474,8 +567,52 @@ final class RemoteVideoCanvasNSView: NSView {
         (displayLayer as? AppleNV24MetalLayer)?.update(frame, at: tileIndex)
     }
 
+    fileprivate func displayLinkDidFire(_ displayLink: CADisplayLink) {
+        let callbackTime = CACurrentMediaTime()
+        performance?.recordDisplayLink(
+            lead: displayLink.targetTimestamp - callbackTime,
+            period: displayLink.targetTimestamp - displayLink.timestamp
+        )
+        displayScheduler.displayLinkDidFire { [displayLayer] in
+            (displayLayer as? AppleNV24MetalLayer)?.present() ?? true
+        }
+    }
+
+    private func configureDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+        displayLinkTarget = nil
+        guard let metalLayer = displayLayer as? AppleNV24MetalLayer else { return }
+
+        metalLayer.synchronizesPresentation = synchronizesPresentation
+        guard let window, synchronizesPresentation else { return }
+
+        let target = RemoteVideoCanvasDisplayLinkTarget(view: self)
+        let displayLink = window.displayLink(
+            target: target,
+            selector: #selector(RemoteVideoCanvasDisplayLinkTarget.displayLinkDidFire(_:))
+        )
+        let frameRate = Float(
+            window.screen?.maximumFramesPerSecond
+                ?? NSScreen.main?.maximumFramesPerSecond
+                ?? 60
+        )
+        displayLink.preferredFrameRateRange = CAFrameRateRange(
+            minimum: frameRate,
+            maximum: frameRate,
+            preferred: frameRate
+        )
+        displayLink.add(to: .main, forMode: .common)
+        displayLinkTarget = target
+        self.displayLink = displayLink
+    }
+
     private func schedulePresentation() {
-        _ = (displayLayer as? AppleNV24MetalLayer)?.present()
+        if synchronizesPresentation {
+            displayScheduler.markNeedsPresentation()
+        } else {
+            _ = (displayLayer as? AppleNV24MetalLayer)?.present()
+        }
     }
 
     private func currentFrames() -> AppleVideoFrameStore.FrameBatch {
