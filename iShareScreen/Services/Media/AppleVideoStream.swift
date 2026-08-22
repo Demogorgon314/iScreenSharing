@@ -23,7 +23,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let minimumInitialPacketCount = 100
     private static let sourceAdoptionStall: TimeInterval = 2
     private static let minimumAdoptionPacketsPerSource = 5
-    private static let receiverReportInterval: TimeInterval = 0.5
+    private static let usesNativePeriodicFeedback =
+        ProcessInfo.processInfo.environment["ISHARESCREEN_NATIVE_VIDEO_FEEDBACK"] != "0"
+    private static var receiverReportInterval: TimeInterval {
+        usesNativePeriodicFeedback ? 1 : 0.5
+    }
     private static let initialRecovery = AppleVideoInitialRecoveryPolicy()
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
@@ -174,6 +178,10 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
         let accessUnits = processor.process(datagrams)
         performance.recordAccessUnits(accessUnits.count)
+        performance.recordAccessUnitBytes(
+            accessUnits.reduce(0) { $0 + $1.encodedByteCount },
+            intraRefreshCount: accessUnits.filter(\.containsRandomAccessPicture).count
+        )
         sendPendingNACKs()
         if decoder == nil { prepareDecoderIfPossible() }
         replaceDecoderForChangedParameterSetsIfNeeded()
@@ -440,9 +448,21 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private func sendReceiverReportIfNeeded() {
         let currentTime = ProcessInfo.processInfo.systemUptime
         guard currentTime - lastReceiverReportTime >= Self.receiverReportInterval else { return }
-        lastReceiverReportTime = currentTime
         do {
-            try feedback.sendReceiverReport()
+            if Self.usesNativePeriodicFeedback {
+                let source = sourceToTile.first(where: { $0.value == 0 })?.key
+                    ?? processor.primarySources(tileCount: canvas.tileCount).first
+                guard let source,
+                      let report = processor.receptionReport(for: source) else { return }
+                lastReceiverReportTime = currentTime
+                try feedback.sendNativePeriodicFeedback(
+                    report: report,
+                    refreshSource: source
+                )
+            } else {
+                lastReceiverReportTime = currentTime
+                try feedback.sendReceiverReport()
+            }
         } catch {
             Self.logger.debug("Receiver report failed: \(error.localizedDescription, privacy: .public)")
         }

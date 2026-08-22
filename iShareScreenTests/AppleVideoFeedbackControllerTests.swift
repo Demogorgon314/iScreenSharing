@@ -47,6 +47,32 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
         XCTAssertThrowsError(try controller.sendReceiverReport())
     }
 
+    func testSendsNativePeriodicReportAndRefreshAsOneSRTCPDatagram() throws {
+        let sender = FeedbackSenderSpy()
+        let controller = try AppleVideoFeedbackController(
+            sender: sender,
+            keyBlob: Data(0..<46),
+            synchronizationSource: 0x1122_3344
+        )
+        let report = AppleRTPReceptionReport(
+            source: 0x5566_7788,
+            fractionLost: 0,
+            cumulativePacketsLost: 0,
+            extendedHighestSequence: 42,
+            interarrivalJitter: 3,
+            lastSenderReport: 0,
+            delaySinceLastSenderReport: 0
+        )
+
+        try controller.sendNativePeriodicFeedback(
+            report: report,
+            refreshSource: report.source
+        )
+
+        XCTAssertEqual(sender.datagrams.count, 1)
+        XCTAssertEqual(sender.datagrams[0].count, 58)
+    }
+
     func testAcknowledgesEachLongTermReferenceOnce() throws {
         let sender = FeedbackSenderSpy()
         let controller = try AppleVideoFeedbackController(

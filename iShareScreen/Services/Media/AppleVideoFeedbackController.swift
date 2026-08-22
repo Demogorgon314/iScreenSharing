@@ -61,6 +61,20 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
         try sender.sendControl(encryptor.protect(AppleRTCP.receiverReport(sender: synchronizationSource)))
     }
 
+    func sendNativePeriodicFeedback(
+        report: AppleRTPReceptionReport,
+        refreshSource: UInt32
+    ) throws {
+        let compound = AppleRTCP.receiverReport(
+            sender: synchronizationSource,
+            report: report
+        ) + AppleRTCP.nativeLegacyFullIntraRequest(
+            sender: synchronizationSource,
+            mediaSource: refreshSource
+        )
+        try sender.sendControl(encryptor.protect(compound))
+    }
+
     func acknowledgeLongTermReference(frameID: UInt16) throws {
         let packet = lock.withFeedbackLock { () -> Data? in
             guard lastAcknowledgedFrameID != frameID else { return nil }

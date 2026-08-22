@@ -32,6 +32,18 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         )
     }
 
+    func testMeasuresEncodedBytesAndRecognizesRandomAccessPictures() {
+        let accessUnit = AppleHEVCAccessUnit(
+            synchronizationSource: 1,
+            timestamp: 2,
+            decodingOrderNumber: 3,
+            nalUnits: [Data([0x26, 0x01, 0xaa]), Data([0x02, 0x01])]
+        )
+
+        XCTAssertEqual(accessUnit.encodedByteCount, 5)
+        XCTAssertTrue(accessUnit.containsRandomAccessPicture)
+    }
+
     func testDeduplicatesRetransmittedSequenceNumbers() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         let payload = Data([0x42, 0x01, 0, 1, 0xaa])
@@ -116,6 +128,28 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(tracker.drainMissingSequences(), [0x1122_3344: [0]])
     }
 
+    func testBuildsIntervalReceptionReportAcrossSequenceRollover() throws {
+        var tracker = AppleRTPSequenceTracker()
+        tracker.observe(
+            packet(sequence: UInt16.max, marker: false, payload: Data(), timestamp: 90_000),
+            arrivalTime: 1
+        )
+        tracker.observe(
+            packet(sequence: 1, marker: false, payload: Data(), timestamp: 90_900),
+            arrivalTime: 1.011
+        )
+
+        let first = try XCTUnwrap(tracker.receptionReport(for: 0x1122_3344))
+        XCTAssertEqual(first.extendedHighestSequence, 0x0001_0001)
+        XCTAssertEqual(first.cumulativePacketsLost, 1)
+        XCTAssertEqual(first.fractionLost, 85)
+        XCTAssertEqual(first.interarrivalJitter, 6)
+
+        let second = try XCTUnwrap(tracker.receptionReport(for: 0x1122_3344))
+        XCTAssertEqual(second.fractionLost, 0)
+        XCTAssertEqual(second.cumulativePacketsLost, 1)
+    }
+
     func testPrimarySourcesSelectsBusiestCompleteGroupAndCanExcludeIt() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         for sequence in 0..<8 {
@@ -151,13 +185,14 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         sequence: UInt16,
         marker: Bool,
         payload: Data,
-        source: UInt32 = 0x1122_3344
+        source: UInt32 = 0x1122_3344,
+        timestamp: UInt32 = 7
     ) -> AppleRTPPacket {
         AppleRTPPacket(
             header: Data(),
             payload: payload,
             sequenceNumber: sequence,
-            timestamp: 7,
+            timestamp: timestamp,
             synchronizationSource: source,
             payloadType: 96,
             marker: marker
