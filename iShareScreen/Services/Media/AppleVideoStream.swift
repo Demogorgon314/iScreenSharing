@@ -23,11 +23,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let minimumInitialPacketCount = 100
     private static let sourceAdoptionStall: TimeInterval = 2
     private static let minimumAdoptionPacketsPerSource = 5
-    private static let usesNativePeriodicFeedback =
-        ProcessInfo.processInfo.environment["ISHARESCREEN_NATIVE_VIDEO_FEEDBACK"] != "0"
-    private static var receiverReportInterval: TimeInterval {
-        usesNativePeriodicFeedback ? 1 : 0.5
-    }
+    private static let receiverReportInterval: TimeInterval = 1
     private static let initialRecovery = AppleVideoInitialRecoveryPolicy()
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
@@ -158,7 +154,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func processAvailablePackets() {
         sendReceiverReportIfNeeded()
-        let datagrams = receiver.drainVideoPackets(mediaStreamIndex: mediaStreamIndex)
+        let datagrams = receiver.drainVideoDatagrams(mediaStreamIndex: mediaStreamIndex)
         guard !datagrams.isEmpty else {
             if decoder == nil {
                 prepareDecoderIfPossible()
@@ -171,7 +167,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         lastVideoPacketTime = ProcessInfo.processInfo.systemUptime
         performance.recordNetwork(
             packetCount: datagrams.count,
-            byteCount: datagrams.reduce(0) { $0 + $1.count }
+            byteCount: datagrams.reduce(0) { $0 + $1.data.count }
         )
         if firstPacketTime == nil {
             firstPacketTime = ProcessInfo.processInfo.systemUptime
@@ -449,20 +445,12 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         let currentTime = ProcessInfo.processInfo.systemUptime
         guard currentTime - lastReceiverReportTime >= Self.receiverReportInterval else { return }
         do {
-            if Self.usesNativePeriodicFeedback {
-                let source = sourceToTile.first(where: { $0.value == 0 })?.key
-                    ?? processor.primarySources(tileCount: canvas.tileCount).first
-                guard let source,
-                      let report = processor.receptionReport(for: source) else { return }
-                lastReceiverReportTime = currentTime
-                try feedback.sendNativePeriodicFeedback(
-                    report: report,
-                    refreshSource: source
-                )
-            } else {
-                lastReceiverReportTime = currentTime
-                try feedback.sendReceiverReport()
-            }
+            let source = sourceToTile.first(where: { $0.value == 0 })?.key
+                ?? processor.primarySources(tileCount: canvas.tileCount).first
+            guard let source,
+                  let report = processor.receptionReport(for: source) else { return }
+            lastReceiverReportTime = currentTime
+            try feedback.sendReceiverReport(report: report)
         } catch {
             Self.logger.debug("Receiver report failed: \(error.localizedDescription, privacy: .public)")
         }

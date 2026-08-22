@@ -150,6 +150,24 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(second.cumulativePacketsLost, 1)
     }
 
+    func testUsesDatagramArrivalTimeForReceptionStatistics() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(0..<46))
+        let encrypted = Data([
+            0x80, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x11, 0x22, 0x33, 0x44, 0x8e, 0x12, 0xaf, 0xed,
+            0x43, 0x36, 0xc6, 0x40, 0xf7, 0x96, 0x80, 0xaa,
+            0xb7, 0x79, 0x04,
+        ])
+
+        _ = processor.process([
+            AppleReceivedVideoDatagram(data: encrypted, arrivalTime: 1),
+            AppleReceivedVideoDatagram(data: encrypted, arrivalTime: 1.01),
+        ])
+
+        let report = try XCTUnwrap(processor.receptionReport(for: 0x1122_3344))
+        XCTAssertEqual(report.interarrivalJitter, 56)
+    }
+
     func testPrimarySourcesSelectsBusiestCompleteGroupAndCanExcludeIt() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         for sequence in 0..<8 {

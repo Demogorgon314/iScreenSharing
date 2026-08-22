@@ -47,7 +47,7 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
         XCTAssertThrowsError(try controller.sendReceiverReport())
     }
 
-    func testSendsNativePeriodicReportAndRefreshAsOneSRTCPDatagram() throws {
+    func testSendsNativeReceiverReportAsOneSRTCPDatagram() throws {
         let sender = FeedbackSenderSpy()
         let controller = try AppleVideoFeedbackController(
             sender: sender,
@@ -64,13 +64,63 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
             delaySinceLastSenderReport: 0
         )
 
-        try controller.sendNativePeriodicFeedback(
-            report: report,
-            refreshSource: report.source
-        )
+        try controller.sendReceiverReport(report: report)
 
         XCTAssertEqual(sender.datagrams.count, 1)
-        XCTAssertEqual(sender.datagrams[0].count, 58)
+        XCTAssertEqual(sender.datagrams[0].count, 46)
+    }
+
+    func testSendsStandaloneRateControlPacket() throws {
+        let sender = FeedbackSenderSpy()
+        let controller = try AppleVideoFeedbackController(
+            sender: sender,
+            keyBlob: Data(0..<46),
+            synchronizationSource: 0x1122_3344
+        )
+
+        try controller.sendRateControl(mediaControlInfo: Data(0..<20))
+
+        XCTAssertEqual(sender.datagrams.count, 1)
+        XCTAssertEqual(sender.datagrams[0].count, 46)
+    }
+
+    func testRejectsInvalidRateControlPayload() throws {
+        let controller = try AppleVideoFeedbackController(
+            sender: FeedbackSenderSpy(),
+            keyBlob: Data(0..<46),
+            synchronizationSource: 1
+        )
+
+        XCTAssertThrowsError(
+            try controller.sendRateControl(mediaControlInfo: Data(repeating: 0, count: 19))
+        ) { error in
+            XCTAssertEqual(error as? AppleVideoFeedbackError, .invalidRateControlPayload)
+        }
+    }
+
+    func testConcurrentFeedbackPreservesSRTCPIndexSendOrder() throws {
+        let sender = FeedbackSenderSpy()
+        let controller = try AppleVideoFeedbackController(
+            sender: sender,
+            keyBlob: Data(0..<46),
+            synchronizationSource: 1
+        )
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "feedback-test", attributes: .concurrent)
+
+        for _ in 0..<100 {
+            group.enter()
+            queue.async {
+                try? controller.sendReceiverReport()
+                group.leave()
+            }
+        }
+        group.wait()
+
+        let indexes = try sender.datagrams.map { datagram in
+            try datagram.uint32BE(at: datagram.count - 14) & 0x7fff_ffff
+        }
+        XCTAssertEqual(indexes, Array(UInt32(0)..<UInt32(100)))
     }
 
     func testAcknowledgesEachLongTermReferenceOnce() throws {
@@ -90,14 +140,23 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
 }
 
 private final class FeedbackSenderSpy: AppleMediaControlSending, @unchecked Sendable {
-    private(set) var datagrams = [Data]()
+    private let lock = NSLock()
+    private var sentDatagrams = [Data]()
     private let error: Error?
 
     init(error: Error? = nil) { self.error = error }
 
+    var datagrams: [Data] {
+        lock.lock()
+        defer { lock.unlock() }
+        return sentDatagrams
+    }
+
     func sendControl(_ datagram: Data) throws {
         if let error { throw error }
-        datagrams.append(datagram)
+        lock.lock()
+        defer { lock.unlock() }
+        sentDatagrams.append(datagram)
     }
 }
 

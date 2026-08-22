@@ -1,6 +1,11 @@
 import Darwin
 import Foundation
 
+struct AppleReceivedVideoDatagram: Equatable, Sendable {
+    let data: Data
+    let arrivalTime: TimeInterval
+}
+
 final class AppleMediaReceiver: @unchecked Sendable {
     private enum PacketTarget { case control, primaryVideo, secondaryVideo }
     private static let maximumQueuedPackets = 16_384
@@ -17,8 +22,8 @@ final class AppleMediaReceiver: @unchecked Sendable {
     private let secondaryVideoSource: DispatchSourceRead?
     private let punchTimer: DispatchSourceTimer
     private var controlPackets = [Data]()
-    private var videoPackets = [Data]()
-    private var secondaryVideoPackets = [Data]()
+    private var videoPackets = [AppleReceivedVideoDatagram]()
+    private var secondaryVideoPackets = [AppleReceivedVideoDatagram]()
     private var isClosed = false
 
     init(
@@ -99,7 +104,7 @@ final class AppleMediaReceiver: @unchecked Sendable {
         lock.withLock { videoPackets.count }
     }
 
-    func drainVideoPackets(mediaStreamIndex: Int = 0) -> [Data] {
+    func drainVideoDatagrams(mediaStreamIndex: Int = 0) -> [AppleReceivedVideoDatagram] {
         lock.withLock {
             if mediaStreamIndex == 1 {
                 defer { secondaryVideoPackets.removeAll(keepingCapacity: true) }
@@ -195,18 +200,27 @@ final class AppleMediaReceiver: @unchecked Sendable {
         while true {
             let count = Darwin.recv(socket, &buffer, buffer.count, MSG_DONTWAIT)
             guard count > 0 else { break }
+            let arrivalTime = ProcessInfo.processInfo.systemUptime
             let packet = Data(buffer.prefix(count))
             lock.withLock {
                 switch target {
                 case .control: Self.enqueue(packet, in: &controlPackets)
-                case .primaryVideo: Self.enqueue(packet, in: &videoPackets)
-                case .secondaryVideo: Self.enqueue(packet, in: &secondaryVideoPackets)
+                case .primaryVideo:
+                    Self.enqueue(
+                        AppleReceivedVideoDatagram(data: packet, arrivalTime: arrivalTime),
+                        in: &videoPackets
+                    )
+                case .secondaryVideo:
+                    Self.enqueue(
+                        AppleReceivedVideoDatagram(data: packet, arrivalTime: arrivalTime),
+                        in: &secondaryVideoPackets
+                    )
                 }
             }
         }
     }
 
-    private static func enqueue(_ packet: Data, in packets: inout [Data]) {
+    private static func enqueue<Element>(_ packet: Element, in packets: inout [Element]) {
         if packets.count == maximumQueuedPackets {
             packets.removeFirst(maximumQueuedPackets / 4)
         }

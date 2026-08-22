@@ -42,18 +42,27 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         decryptor = try AppleSRTPDecryptor(keyBlob: keyBlob)
     }
 
-    func process(_ datagrams: [Data]) -> [AppleHEVCAccessUnit] {
+    func process(_ datagrams: [AppleReceivedVideoDatagram]) -> [AppleHEVCAccessUnit] {
         lock.withStreamLock {
-            datagrams.compactMap { try? decryptor.decrypt($0) }.compactMap(processUnlocked)
+            datagrams.compactMap { received -> (AppleRTPPacket, TimeInterval)? in
+                guard let packet = try? decryptor.decrypt(received.data) else { return nil }
+                return (packet, received.arrivalTime)
+            }.compactMap { processUnlocked($0.0, arrivalTime: $0.1) }
         }
     }
 
-    func process(_ packet: AppleRTPPacket) -> AppleHEVCAccessUnit? {
-        lock.withStreamLock { processUnlocked(packet) }
+    func process(
+        _ packet: AppleRTPPacket,
+        arrivalTime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> AppleHEVCAccessUnit? {
+        lock.withStreamLock { processUnlocked(packet, arrivalTime: arrivalTime) }
     }
 
-    private func processUnlocked(_ packet: AppleRTPPacket) -> AppleHEVCAccessUnit? {
-        sequenceTracker.observe(packet)
+    private func processUnlocked(
+        _ packet: AppleRTPPacket,
+        arrivalTime: TimeInterval
+    ) -> AppleHEVCAccessUnit? {
+        sequenceTracker.observe(packet, arrivalTime: arrivalTime)
         let key = GroupKey(
             source: packet.synchronizationSource,
             timestamp: packet.timestamp,

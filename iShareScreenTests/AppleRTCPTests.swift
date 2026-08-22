@@ -19,16 +19,6 @@ final class AppleRTCPTests: XCTestCase {
         )
     }
 
-    func testBuildsNativeExtendedLegacyFullIntraRequest() {
-        XCTAssertEqual(
-            AppleRTCP.nativeLegacyFullIntraRequest(
-                sender: 0x1122_3344,
-                mediaSource: 0x5566_7788
-            ).hex,
-            "80c000021122334455667788"
-        )
-    }
-
     func testBuildsCompoundGenericNACKMatchingReference() {
         let nack = AppleRTCP.genericNACK(
             sender: 0x1122_3344,
@@ -84,6 +74,22 @@ final class AppleRTCPTests: XCTestCase {
                 frameID: 0xabcd
             ).hex,
             "80cc000311223344000000050000abcd"
+        )
+    }
+
+    func testBuildsStandaloneRateControlPacket() {
+        XCTAssertEqual(
+            AppleRTCP.rateControl(sender: 0x1122_3344, mediaControlInfo: Data(0..<20)).hex,
+            "80cc0007112233445243544c000102030405060708090a0b0c0d0e0f10111213"
+        )
+    }
+
+    func testRejectsInvalidRateControlPayloadLength() {
+        XCTAssertTrue(
+            AppleRTCP.rateControl(
+                sender: 1,
+                mediaControlInfo: Data(repeating: 0, count: 19)
+            ).isEmpty
         )
     }
 }

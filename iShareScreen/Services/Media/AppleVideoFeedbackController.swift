@@ -4,6 +4,7 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
     private static let minimumKeyFrameInterval: TimeInterval = 1
 
     private let lock = NSLock()
+    private let sendLock = NSLock()
     private let sender: AppleMediaControlSending
     private let encryptor: AppleSRTCPEncryptor
     private let synchronizationSource: UInt32
@@ -58,21 +59,23 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
     }
 
     func sendReceiverReport() throws {
-        try sender.sendControl(encryptor.protect(AppleRTCP.receiverReport(sender: synchronizationSource)))
+        try send(packet: AppleRTCP.receiverReport(sender: synchronizationSource))
     }
 
-    func sendNativePeriodicFeedback(
-        report: AppleRTPReceptionReport,
-        refreshSource: UInt32
-    ) throws {
-        let compound = AppleRTCP.receiverReport(
+    func sendReceiverReport(report: AppleRTPReceptionReport) throws {
+        try send(packet: AppleRTCP.receiverReport(
             sender: synchronizationSource,
             report: report
-        ) + AppleRTCP.nativeLegacyFullIntraRequest(
+        ))
+    }
+
+    func sendRateControl(mediaControlInfo: Data) throws {
+        let packet = AppleRTCP.rateControl(
             sender: synchronizationSource,
-            mediaSource: refreshSource
+            mediaControlInfo: mediaControlInfo
         )
-        try sender.sendControl(encryptor.protect(compound))
+        guard !packet.isEmpty else { throw AppleVideoFeedbackError.invalidRateControlPayload }
+        try send(packet: packet)
     }
 
     func acknowledgeLongTermReference(frameID: UInt16) throws {
@@ -85,13 +88,23 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
             )
         }
         guard let packet else { return }
-        try sender.sendControl(encryptor.protect(packet))
+        try send(packet: packet)
     }
 
     private func send(feedback: Data) throws {
         let compound = AppleRTCP.compound(sender: synchronizationSource, feedback: feedback)
-        try sender.sendControl(encryptor.protect(compound))
+        try send(packet: compound)
     }
+
+    private func send(packet: Data) throws {
+        try sendLock.withFeedbackLock {
+            try sender.sendControl(encryptor.protect(packet))
+        }
+    }
+}
+
+enum AppleVideoFeedbackError: Error, Equatable {
+    case invalidRateControlPayload
 }
 
 private extension NSLock {

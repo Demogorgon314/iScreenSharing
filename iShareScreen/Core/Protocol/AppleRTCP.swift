@@ -82,18 +82,20 @@ enum AppleRTCP {
         return packet
     }
 
-    static func nativeLegacyFullIntraRequest(sender: UInt32, mediaSource: UInt32) -> Data {
-        var packet = Data([0x80, 192, 0, 2])
-        packet.appendUInt32BE(sender)
-        packet.appendUInt32BE(mediaSource)
-        return packet
-    }
-
     static func longTermReferenceAcknowledgement(sender: UInt32, frameID: UInt16) -> Data {
         var packet = Data([0x80, 204, 0, 3])
         packet.appendUInt32BE(sender)
         packet.appendUInt32BE(5)
         packet.appendUInt32BE(UInt32(frameID))
+        return packet
+    }
+
+    static func rateControl(sender: UInt32, mediaControlInfo: Data) -> Data {
+        guard mediaControlInfo.count == 20 else { return Data() }
+        var packet = Data([0x80, 204, 0, 7])
+        packet.appendUInt32BE(sender)
+        packet.append(contentsOf: [0x52, 0x43, 0x54, 0x4c]) // "RCTL"
+        packet.append(mediaControlInfo)
         return packet
     }
 
