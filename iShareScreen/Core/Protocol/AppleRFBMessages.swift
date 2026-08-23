@@ -109,12 +109,6 @@ enum AppleRFBMessages {
         return message
     }
 
-    static func keyEvent(isDown: Bool, keySymbol: UInt32) -> Data {
-        var message = Data([0x04, isDown ? 0x01 : 0x00, 0x00, 0x00])
-        message.appendUInt32BE(keySymbol)
-        return message
-    }
-
     static func controlMode(observing: Bool) -> Data {
         var message = Data([0x0a, 0x00])
         message.appendUInt16BE(observing ? 0 : 1)

@@ -88,19 +88,6 @@ enum AppleRTCP {
         return packet
     }
 
-    static func pictureLossIndication(sender: UInt32, mediaSource: UInt32) -> Data {
-        var packet = Data([0x81, 206, 0, 2])
-        packet.appendUInt32BE(sender)
-        packet.appendUInt32BE(mediaSource)
-        return packet
-    }
-
-    static func legacyFullIntraRequest(mediaSource: UInt32) -> Data {
-        var packet = Data([0x80, 192, 0, 1])
-        packet.appendUInt32BE(mediaSource)
-        return packet
-    }
-
     static func longTermReferenceAcknowledgement(
         sender: UInt32,
         mediaSource: UInt32,

@@ -109,25 +109,6 @@ final class AppleEncryptedRecordLayer: @unchecked Sendable {
         throw AppleEncryptedRecordError.authenticationFailed
     }
 
-    func decryptAvailableRecords(in buffer: inout Data) throws -> [Data] {
-        var messages = [Data]()
-        var consumed = 0
-        while buffer.count - consumed >= 2 {
-            let length = try Int(buffer.uint16BE(at: consumed))
-            guard length > 0, length.isMultiple(of: Self.blockSize) else {
-                throw AppleEncryptedRecordError.invalidCiphertext
-            }
-            guard buffer.count - consumed >= 2 + length else { break }
-            let start = consumed + 2
-            messages.append(try decrypt(buffer.subdata(in: start..<(start + length))))
-            consumed += 2 + length
-        }
-        if consumed > 0 {
-            buffer.removeSubrange(0..<consumed)
-        }
-        return messages
-    }
-
     private func candidateCounters(around counter: UInt32) -> [UInt32] {
         let lower = counter == 0 ? 0 : counter - 1
         let upper = counter.addingReportingOverflow(Self.receiveCounterWindow - 1)

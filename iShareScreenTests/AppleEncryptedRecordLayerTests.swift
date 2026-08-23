@@ -24,28 +24,15 @@ final class AppleEncryptedRecordLayerTests: XCTestCase {
     }
 
     func testEncryptsSelectedDisplayAndPointerAsOneOrderedBatch() throws {
-        let sender = try makeLayer()
-        let receiver = try makeLayer()
         let messages = [Data([0x0d, 0x01]), Data([0x10, 0x02])]
-        var records = try sender.encrypt(messages)
+        let batchedRecords = try makeLayer().encrypt(messages)
+        let sequentialSender = try makeLayer()
+        var sequentialRecords = Data()
+        for message in messages {
+            sequentialRecords.append(try sequentialSender.encrypt(message))
+        }
 
-        XCTAssertEqual(try receiver.decryptAvailableRecords(in: &records), messages)
-        XCTAssertTrue(records.isEmpty)
-    }
-
-    func testStreamingDecoderKeepsIncompleteTail() throws {
-        let sender = try makeLayer()
-        let receiver = try makeLayer()
-        let first = try sender.encrypt(Data("one".utf8))
-        let second = try sender.encrypt(Data("two".utf8))
-        var buffer = first + second.prefix(9)
-
-        XCTAssertEqual(try receiver.decryptAvailableRecords(in: &buffer), [Data("one".utf8)])
-        XCTAssertEqual(buffer, second.prefix(9))
-
-        buffer.append(second.dropFirst(9))
-        XCTAssertEqual(try receiver.decryptAvailableRecords(in: &buffer), [Data("two".utf8)])
-        XCTAssertTrue(buffer.isEmpty)
+        XCTAssertEqual(batchedRecords, sequentialRecords)
     }
 
     func testRejectsTamperedAuthenticationCodeAndInvalidFrameLength() throws {
@@ -58,8 +45,9 @@ final class AppleEncryptedRecordLayerTests: XCTestCase {
             XCTAssertEqual(error as? AppleEncryptedRecordError, .authenticationFailed)
         }
 
-        var malformed = Data([0x00, 0x11]) + Data(repeating: 0, count: 17)
-        XCTAssertThrowsError(try makeLayer().decryptAvailableRecords(in: &malformed))
+        XCTAssertThrowsError(try makeLayer().decrypt(Data(repeating: 0, count: 17))) { error in
+            XCTAssertEqual(error as? AppleEncryptedRecordError, .invalidCiphertext)
+        }
     }
 
     private func makeLayer() throws -> AppleEncryptedRecordLayer {

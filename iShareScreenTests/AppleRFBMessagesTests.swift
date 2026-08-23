@@ -64,13 +64,6 @@ final class AppleRFBMessagesTests: XCTestCase {
         XCTAssertFalse(AppleRFBMessages.highPerformanceEncodings.contains(16))
     }
 
-    func testBuildsKeyEventWithX11KeySymbol() {
-        XCTAssertEqual(
-            AppleRFBMessages.keyEvent(isDown: true, keySymbol: 0xff51),
-            Data([0x04, 0x01, 0, 0, 0, 0, 0xff, 0x51])
-        )
-    }
-
     func testBuildsObserveAndControlModeMessages() {
         XCTAssertEqual(AppleRFBMessages.controlMode(observing: true), Data([0x0a, 0, 0, 0]))
         XCTAssertEqual(AppleRFBMessages.controlMode(observing: false), Data([0x0a, 0, 0, 1]))
