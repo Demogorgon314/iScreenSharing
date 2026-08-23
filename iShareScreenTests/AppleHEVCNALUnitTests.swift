@@ -20,6 +20,21 @@ final class AppleHEVCNALUnitTests: XCTestCase {
         ))
     }
 
+    func testClassifiesNativeBandwidthProbeStartPackets() {
+        XCTAssertTrue(AppleHEVCNALUnit.startsBandwidthProbe(
+            Data([0x62, 0x01, 0x01, 0x00])
+        ))
+        XCTAssertTrue(AppleHEVCNALUnit.startsBandwidthProbe(
+            Data([0x92, 0xe6, 0xc0, 0xa3])
+        ))
+        XCTAssertFalse(AppleHEVCNALUnit.startsBandwidthProbe(
+            Data([0x26, 0x01, 0x00, 0x01])
+        ))
+        XCTAssertFalse(AppleHEVCNALUnit.startsBandwidthProbe(
+            Data([0x62, 0x01, 0x01])
+        ))
+    }
+
     func testExtractsAggregationPacketUnits() {
         let first = Data([0x40, 0x01, 0xaa])
         let second = Data([0x42, 0x01, 0xbb, 0xcc])

@@ -253,11 +253,12 @@ final class AppleMediaReceiver: @unchecked Sendable {
     ) {
         var buffer = [UInt8](repeating: 0, count: Self.maximumDatagramLength)
         while true {
+            let arrivalTime = ProcessInfo.processInfo.systemUptime
             let count = Darwin.recv(socket, &buffer, buffer.count, MSG_DONTWAIT)
             guard count > 0 else { return }
             let datagram = AppleReceivedVideoDatagram(
                 data: Data(buffer.prefix(count)),
-                arrivalTime: ProcessInfo.processInfo.systemUptime
+                arrivalTime: arrivalTime
             )
             handler(datagram)
         }

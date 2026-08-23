@@ -148,6 +148,129 @@ final class AppleVideoRateControlTests: XCTestCase {
         XCTAssertEqual(recent.suffix(6), idle.suffix(6))
     }
 
+    func testNativeProbeGateSuppressesPacketsForTwoSecondsAfterMarker() {
+        var gate = AppleVideoBandwidthProbeGate()
+        let fragment = Data([0x62, 0x01, 0x01, 0x00])
+        let singleNAL = Data([0x26, 0x01, 0x00, 0x01])
+
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 100,
+                arrivalTime: 10,
+                isEndOfFrame: false,
+                payload: fragment
+            ),
+            .active
+        )
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 100,
+                arrivalTime: 10.005,
+                isEndOfFrame: true,
+                payload: singleNAL
+            ),
+            .active
+        )
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 200,
+                arrivalTime: 11,
+                isEndOfFrame: true,
+                payload: fragment
+            ),
+            .suppressed
+        )
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 300,
+                arrivalTime: 12.005,
+                isEndOfFrame: false,
+                payload: fragment
+            ),
+            .active
+        )
+    }
+
+    func testNativeProbeGateEmitsInactiveBoundaryForUnrecognizedNewTimestamp() {
+        var gate = AppleVideoBandwidthProbeGate()
+        let fragment = Data([0x62, 0x01, 0x01, 0x00])
+        let singleNAL = Data([0x26, 0x01, 0x00, 0x01])
+
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 100,
+                arrivalTime: 10,
+                isEndOfFrame: false,
+                payload: fragment
+            ),
+            .active
+        )
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 101,
+                arrivalTime: 10.005,
+                isEndOfFrame: false,
+                payload: singleNAL
+            ),
+            .boundary
+        )
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 102,
+                arrivalTime: 12.004,
+                isEndOfFrame: false,
+                payload: fragment
+            ),
+            .suppressed
+        )
+        XCTAssertEqual(
+            gate.classify(
+                timestamp: 103,
+                arrivalTime: 12.005,
+                isEndOfFrame: false,
+                payload: fragment
+            ),
+            .active
+        )
+    }
+
+    func testSuppressedProbePacketsDoNotChangeBandwidthEstimate() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        let firstTimestamp: UInt32 = 24_000
+        for packetIndex in 0..<6 {
+            estimator.observe(
+                AppleVideoPacketObservation(
+                    rtpTimestamp: firstTimestamp,
+                    arrivalTime: 1_000 + Double(packetIndex) * 0.001,
+                    packetSize: 1_200
+                ),
+                bandwidthProbeActivity: .active
+            )
+        }
+        estimator.observe(
+            AppleVideoPacketObservation(
+                rtpTimestamp: firstTimestamp + 400,
+                arrivalTime: 1_002,
+                packetSize: 1_200
+            ),
+            bandwidthProbeActivity: .boundary
+        )
+        let initialBandwidth = try bandwidth(in: estimator)
+
+        for frame in 2..<120 {
+            estimator.observe(
+                AppleVideoPacketObservation(
+                    rtpTimestamp: firstTimestamp + UInt32(frame * 400),
+                    arrivalTime: 1_002 + Double(frame) / 60,
+                    packetSize: 400
+                ),
+                bandwidthProbeActivity: .suppressed
+            )
+        }
+
+        XCTAssertEqual(try bandwidth(in: estimator), initialBandwidth)
+    }
+
     func testRequiresThreeProbeGroupsBeforeCommittingSuddenBandwidthChange() throws {
         var estimator = AppleVideoRateControlEstimator()
         feedGroup(&estimator, frame: 0, spacing: 0.0003, packetCount: 33)

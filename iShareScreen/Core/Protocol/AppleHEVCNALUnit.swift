@@ -24,6 +24,18 @@ enum AppleHEVCNALUnit {
         return payload.count >= 4
     }
 
+    /// Matches the portable subset of AVConference's ReadFrameSliceHeader
+    /// results that can start a high-performance bandwidth probe. Every HEVC
+    /// fragmentation packet qualifies, including continuation fragments; the
+    /// private frame-header signature is the other unambiguous wire form.
+    static func startsBandwidthProbe(_ payload: Data) -> Bool {
+        guard payload.count >= 4 else { return false }
+        if payload.starts(with: [0x92, 0xe6, 0xc0, 0xa3]) {
+            return true
+        }
+        return type(of: payload) == fragmentationType
+    }
+
     static func reassemble(_ payloads: [Data]) -> [Data] {
         var units = [Data]()
         var fragmented = Data()

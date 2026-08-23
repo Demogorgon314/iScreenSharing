@@ -498,6 +498,70 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(report.interarrivalJitter, 15)
     }
 
+    func testRateControlUsesNativeSparseBandwidthProbeCadence() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        var sequence: UInt16 = 0
+
+        func feedProbe(timestamp: UInt32, startTime: TimeInterval) {
+            var start = Data([0x62, 0x01, 0x81, 0, 1])
+            start.append(Data(repeating: 0xaa, count: 1_195))
+            var end = Data([0x62, 0x01, 0x41, 0, 1])
+            end.append(Data(repeating: 0xbb, count: 1_195))
+            _ = processor.process(
+                packet(sequence: sequence, marker: false, payload: start, timestamp: timestamp),
+                arrivalTime: startTime
+            )
+            sequence &+= 1
+            _ = processor.process(
+                packet(sequence: sequence, marker: true, payload: end, timestamp: timestamp),
+                arrivalTime: startTime + 0.005
+            )
+            sequence &+= 1
+        }
+
+        feedProbe(timestamp: 24_000, startTime: 10)
+        for frame in 1..<120 {
+            _ = processor.process(
+                packet(
+                    sequence: sequence,
+                    marker: true,
+                    payload: Data([0x02, 0x01, 0, 1, 0xaa]),
+                    timestamp: 24_000 + UInt32(frame * 400)
+                ),
+                arrivalTime: 10.005 + Double(frame) / 60
+            )
+            sequence &+= 1
+        }
+        XCTAssertEqual(
+            try XCTUnwrap(processor.rateControlFeedback(at: 12))
+                .estimatedBandwidthKilobitsPerSecond,
+            0
+        )
+
+        feedProbe(timestamp: 72_000, startTime: 12.01)
+        feedProbe(timestamp: 120_000, startTime: 14.02)
+        XCTAssertEqual(
+            try XCTUnwrap(processor.rateControlFeedback(at: 14.03))
+                .estimatedBandwidthKilobitsPerSecond,
+            0
+        )
+
+        _ = processor.process(
+            packet(
+                sequence: sequence,
+                marker: false,
+                payload: Data([0x62, 0x01, 0x01, 0, 1, 0xcc]),
+                timestamp: 168_000
+            ),
+            arrivalTime: 16.03
+        )
+        XCTAssertGreaterThan(
+            try XCTUnwrap(processor.rateControlFeedback(at: 16.03))
+                .estimatedBandwidthKilobitsPerSecond,
+            0
+        )
+    }
+
     func testPrimarySourcesSelectsBusiestCompleteGroupAndCanExcludeIt() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         for sequence in 0..<8 {

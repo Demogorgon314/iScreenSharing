@@ -55,6 +55,47 @@ struct AppleVideoRateControlDiagnostics: Equatable, Sendable {
     let pendingSampleCount: Int
 }
 
+enum AppleVideoBandwidthProbeActivity: Equatable, Sendable {
+    case active
+    case boundary
+    case suppressed
+}
+
+struct AppleVideoBandwidthProbeGate: Sendable {
+    private static let cooldown: TimeInterval = 2
+
+    private var activeTimestamp: UInt32?
+    private var lastProbeEnd: TimeInterval?
+
+    mutating func classify(
+        timestamp: UInt32,
+        arrivalTime: TimeInterval,
+        isEndOfFrame: Bool,
+        payload: Data
+    ) -> AppleVideoBandwidthProbeActivity {
+        if let lastProbeEnd,
+           arrivalTime - lastProbeEnd < Self.cooldown {
+            return .suppressed
+        }
+
+        let isActive: Bool
+        if AppleHEVCNALUnit.startsBandwidthProbe(payload) {
+            activeTimestamp = timestamp
+            isActive = true
+        } else if activeTimestamp == timestamp {
+            isActive = true
+        } else {
+            activeTimestamp = nil
+            isActive = false
+        }
+
+        if isEndOfFrame || !isActive {
+            lastProbeEnd = arrivalTime
+        }
+        return isActive ? .active : .boundary
+    }
+}
+
 enum AppleVideoRateControlMode: Equatable, Sendable {
     case estimated
     case fixedLAN
@@ -150,10 +191,24 @@ struct AppleVideoRateControlEstimator: Sendable {
     }
 
     mutating func observe(_ observation: AppleVideoPacketObservation) {
+        observe(observation, bandwidthProbeActivity: .active)
+    }
+
+    mutating func observe(
+        _ observation: AppleVideoPacketObservation,
+        bandwidthProbeActivity: AppleVideoBandwidthProbeActivity
+    ) {
         didReceiveVideo = true
         totalPacketsReceived &+= 1
         updateTimestampStatistics(observation)
-        updateBandwidthEstimate(observation)
+        switch bandwidthProbeActivity {
+        case .active:
+            updateBandwidthEstimate(observation)
+        case .boundary:
+            finalizeBandwidthProbe()
+        case .suppressed:
+            break
+        }
     }
 
     func feedback(at time: TimeInterval) -> AppleVideoRateControlInfo? {
@@ -238,6 +293,12 @@ struct AppleVideoRateControlEstimator: Sendable {
         group.packetsAfterReference += 1
         group.lastArrival = max(group.lastArrival, observation.arrivalTime)
         probeGroup = group
+    }
+
+    private mutating func finalizeBandwidthProbe() {
+        guard let probeGroup else { return }
+        finalize(probeGroup)
+        self.probeGroup = nil
     }
 
     private mutating func finalize(_ group: ProbeGroup) {

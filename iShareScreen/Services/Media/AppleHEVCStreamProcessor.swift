@@ -89,6 +89,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
     private var sourcePacketCounts = [UInt32: Int]()
     private var sequenceTracker = AppleRTPSequenceTracker()
     private var rateControlEstimator = AppleVideoRateControlEstimator()
+    private var bandwidthProbeGate = AppleVideoBandwidthProbeGate()
     private var playoutTimestamp: UInt32?
     private var cachedFrameLosses = [UInt32: CachedFrameLoss]()
     private(set) var parameterSets = AppleHEVCParameterSets()
@@ -141,11 +142,21 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         arrivalTime: TimeInterval,
         packetSize: Int
     ) -> AppleHEVCAccessUnit? {
-        rateControlEstimator.observe(AppleVideoPacketObservation(
+        let observation = AppleVideoPacketObservation(
             rtpTimestamp: packet.timestamp,
             arrivalTime: arrivalTime,
             packetSize: packetSize
-        ))
+        )
+        let bandwidthProbeActivity = bandwidthProbeGate.classify(
+            timestamp: packet.timestamp,
+            arrivalTime: arrivalTime,
+            isEndOfFrame: packet.marker,
+            payload: packet.payload
+        )
+        rateControlEstimator.observe(
+            observation,
+            bandwidthProbeActivity: bandwidthProbeActivity
+        )
         sequenceTracker.observe(packet, arrivalTime: arrivalTime)
         correctCachedFrameLoss(with: packet)
         let key = GroupKey(
@@ -292,6 +303,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             sourcePacketCounts.removeAll(keepingCapacity: false)
             sequenceTracker = AppleRTPSequenceTracker()
             rateControlEstimator = AppleVideoRateControlEstimator()
+            bandwidthProbeGate = AppleVideoBandwidthProbeGate()
             playoutTimestamp = nil
             cachedFrameLosses.removeAll(keepingCapacity: false)
             parameterSets = AppleHEVCParameterSets()
