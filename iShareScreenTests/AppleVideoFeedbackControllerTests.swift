@@ -18,23 +18,20 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
         )
     }
 
-    func testRateLimitsKeyFrameRequestsPerSource() throws {
+    func testSendsEachRequestedKeyFrameRefresh() throws {
         let sender = FeedbackSenderSpy()
-        var currentTime: TimeInterval = 100
         let controller = try AppleVideoFeedbackController(
             sender: sender,
             keyBlob: Data(0..<46),
-            synchronizationSource: 1,
-            now: { currentTime }
+            synchronizationSource: 1
         )
 
         try controller.requestKeyFrame(for: 2)
         try controller.requestKeyFrame(for: 2)
         try controller.requestKeyFrame(for: 3)
-        currentTime += 1
-        try controller.requestKeyFrame(for: 2)
 
         XCTAssertEqual(sender.datagrams.count, 3)
+        XCTAssertTrue(sender.datagrams.allSatisfy { $0.count == 34 })
     }
 
     func testPropagatesTransportFailure() throws {
@@ -84,6 +81,26 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
         XCTAssertEqual(sender.datagrams[0].count, 46)
     }
 
+    func testSendsStandaloneFrameLossFeedback() throws {
+        let sender = FeedbackSenderSpy()
+        let controller = try AppleVideoFeedbackController(
+            sender: sender,
+            keyBlob: Data(0..<46),
+            synchronizationSource: 0x1122_3344
+        )
+
+        try controller.sendFrameLossFeedback(
+            mediaSource: 0x5566_7788,
+            rtpTimestamp: 7,
+            packedLoss: 8,
+            framePacketCount: 9,
+            frameLostPacketCount: 10
+        )
+
+        XCTAssertEqual(sender.datagrams.count, 1)
+        XCTAssertEqual(sender.datagrams[0].count, 38)
+    }
+
     func testRejectsInvalidRateControlPayload() throws {
         let controller = try AppleVideoFeedbackController(
             sender: FeedbackSenderSpy(),
@@ -131,9 +148,9 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
             synchronizationSource: 0x1122_3344
         )
 
-        try controller.acknowledgeLongTermReference(frameID: 7)
-        try controller.acknowledgeLongTermReference(frameID: 7)
-        try controller.acknowledgeLongTermReference(frameID: 8)
+        try controller.acknowledgeLongTermReference(rtpTimestamp: 7, mediaSource: 2)
+        try controller.acknowledgeLongTermReference(rtpTimestamp: 7, mediaSource: 2)
+        try controller.acknowledgeLongTermReference(rtpTimestamp: 8, mediaSource: 2)
 
         XCTAssertEqual(sender.datagrams.count, 2)
     }

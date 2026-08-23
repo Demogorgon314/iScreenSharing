@@ -51,19 +51,30 @@ final class AppleRTCPTests: XCTestCase {
         )
     }
 
-    func testBuildsNativeCompatibleKeyFrameRequests() {
+    func testBuildsNativeHighPerformanceKeyFrameRequest() {
         let feedback = AppleRTCP.fullIntraRequest(
             sender: 0x1122_3344,
             mediaSource: 0x5566_7788,
             sequence: 7
-        ) + AppleRTCP.pictureLossIndication(
-            sender: 0x1122_3344,
-            mediaSource: 0x5566_7788
-        ) + AppleRTCP.legacyFullIntraRequest(mediaSource: 0x5566_7788)
+        )
 
         XCTAssertEqual(
             feedback.hex,
-            "84ce00041122334400000000556677880700000081ce0002112233445566778880c0000155667788"
+            "84ce000411223344000000005566778807000000"
+        )
+    }
+
+    func testBuildsNativeFrameLossFeedback() {
+        XCTAssertEqual(
+            AppleRTCP.frameLossFeedback(
+                sender: 0x1122_3344,
+                mediaSource: 0x5566_7788,
+                rtpTimestamp: 0x99aa_bbcc,
+                packedLoss: 0x1234,
+                framePacketCount: 0x56,
+                frameLostPacketCount: 0x78
+            ).hex,
+            "8fce000511223344556677880000000699aabbcc12345678"
         )
     }
 
@@ -71,9 +82,10 @@ final class AppleRTCPTests: XCTestCase {
         XCTAssertEqual(
             AppleRTCP.longTermReferenceAcknowledgement(
                 sender: 0x1122_3344,
-                frameID: 0xabcd
+                mediaSource: 0x5566_7788,
+                rtpTimestamp: 0xaabb_ccdd
             ).hex,
-            "80cc000311223344000000050000abcd"
+            "8fce0004112233445566778800000005aabbccdd"
         )
     }
 

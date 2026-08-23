@@ -2,6 +2,17 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleVideoPerformanceMonitorTests: XCTestCase {
+    func testExposesMostRecentPresentedFrameForPlaybackWatchdog() {
+        let monitor = AppleVideoPerformanceMonitor(
+            tileCount: 4,
+            automaticallyPublishes: false
+        )
+
+        XCTAssertNil(monitor.mostRecentDisplayTime)
+        monitor.recordDisplay(duration: 0.003, presentedAt: 12.5)
+        XCTAssertEqual(monitor.mostRecentDisplayTime, 12.5)
+    }
+
     func testCalculatesRatesLatenciesAndRecoveryCounters() {
         let monitor = AppleVideoPerformanceMonitor(
             tileCount: 4,

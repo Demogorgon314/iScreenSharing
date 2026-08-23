@@ -13,6 +13,21 @@ struct AppleHEVCAccessUnit: Equatable, Sendable {
     let timestamp: UInt32
     let decodingOrderNumber: UInt16?
     let nalUnits: [Data]
+    let isLongTermReferenceFrame: Bool
+
+    init(
+        synchronizationSource: UInt32,
+        timestamp: UInt32,
+        decodingOrderNumber: UInt16?,
+        nalUnits: [Data],
+        isLongTermReferenceFrame: Bool = false
+    ) {
+        self.synchronizationSource = synchronizationSource
+        self.timestamp = timestamp
+        self.decodingOrderNumber = decodingOrderNumber
+        self.nalUnits = nalUnits
+        self.isLongTermReferenceFrame = isLongTermReferenceFrame
+    }
 
     var encodedByteCount: Int { nalUnits.reduce(0) { $0 + $1.count } }
 
@@ -24,19 +39,58 @@ struct AppleHEVCAccessUnit: Equatable, Sendable {
     }
 }
 
+struct AppleVideoFrameLossFeedback: Equatable, Sendable {
+    let mediaSource: UInt32
+    let rtpTimestamp: UInt32
+    let expectedPacketCount: UInt16
+    let lostPacketCount: UInt16
+
+    var packedLoss: UInt16 {
+        ((expectedPacketCount & 0x3f) << 6) | (lostPacketCount & 0x3f)
+    }
+
+    var wirePacketCount: UInt8 { UInt8(truncatingIfNeeded: expectedPacketCount) }
+    var wireLostPacketCount: UInt8 { UInt8(truncatingIfNeeded: lostPacketCount) }
+}
+
 final class AppleHEVCStreamProcessor: @unchecked Sendable {
+    private static let rtpClockRate: UInt32 = 24_000
+    private static let maximumIncompleteTimestampDelta = rtpClockRate / 2
+    private static let maximumIncompleteAge: TimeInterval = 0.5
+    private static let frameLossFeedbackRepeatInterval: TimeInterval = 0.1
+
     private struct GroupKey: Hashable {
         let source: UInt32
         let timestamp: UInt32
-        let decodingOrderNumber: UInt16?
+    }
+
+    private struct PendingAccessUnit {
+        var firstSeenAt: TimeInterval?
+        var decodingOrderNumber: UInt16?
+        var framePacketInfo: AppleRTPFramePacketInfo?
+        var packets = [AppleRTPPacket]()
+    }
+
+    private struct CachedFrameLoss {
+        let rtpTimestamp: UInt32
+        let frameSequenceNumber: UInt16
+        let expectedPacketCount: UInt16
+        var receivedSequences: Set<UInt16>
+        var lastSentAt: TimeInterval?
+
+        var lostPacketCount: UInt16 {
+            UInt16(max(0, Int(expectedPacketCount) - receivedSequences.count))
+        }
     }
 
     private let lock = NSLock()
     private let decryptor: AppleSRTPDecryptor
-    private var groups = [GroupKey: [AppleRTPPacket]]()
+    private var groups = [GroupKey: PendingAccessUnit]()
     private var sourcePacketCounts = [UInt32: Int]()
     private var sequenceTracker = AppleRTPSequenceTracker()
     private var rateControlEstimator = AppleVideoRateControlEstimator()
+    private var playoutTimestamp: UInt32?
+    private var cachedFrameLosses = [UInt32: CachedFrameLoss]()
     private(set) var parameterSets = AppleHEVCParameterSets()
 
     init(keyBlob: Data) throws {
@@ -55,6 +109,17 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
                     packetSize: $0.0.payload.count
                 )
             }
+        }
+    }
+
+    func process(_ datagram: AppleReceivedVideoDatagram) -> AppleHEVCAccessUnit? {
+        lock.withStreamLock {
+            guard let packet = try? decryptor.decrypt(datagram.data) else { return nil }
+            return processUnlocked(
+                packet,
+                arrivalTime: datagram.arrivalTime,
+                packetSize: packet.payload.count
+            )
         }
     }
 
@@ -82,32 +147,67 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             packetSize: packetSize
         ))
         sequenceTracker.observe(packet, arrivalTime: arrivalTime)
+        correctCachedFrameLoss(with: packet)
         let key = GroupKey(
             source: packet.synchronizationSource,
-            timestamp: packet.timestamp,
-            decodingOrderNumber: AppleHEVCNALUnit.firstDecodingOrderNumber(in: [packet.payload])
+            timestamp: packet.timestamp
         )
+        let packetDecodingOrderNumber = AppleHEVCNALUnit.firstDecodingOrderNumber(
+            in: [packet.payload]
+        )
+        let packetFrameInfo = packet.framePacketInfo
         sourcePacketCounts[key.source, default: 0] += 1
-        var packets = groups[key, default: []]
-        if !packets.contains(where: { $0.sequenceNumber == packet.sequenceNumber }) {
-            packets.append(packet)
+        var group = groups[key, default: PendingAccessUnit()]
+        if group.firstSeenAt == nil {
+            group.firstSeenAt = arrivalTime
         }
-        groups[key] = packets
-        guard packets.contains(where: \.marker) else { return nil }
-        let ordered = Self.sequenceOrdered(packets)
-        guard ordered.last?.marker == true else { return nil }
+        if let existing = group.decodingOrderNumber,
+           let packetDecodingOrderNumber,
+           packetDecodingOrderNumber != existing {
+            groups[key] = group
+            advancePlayoutTimestamp(to: packet.timestamp)
+            evictStaleIncompleteAccessUnits(at: arrivalTime)
+            return nil
+        }
+        if group.decodingOrderNumber == nil {
+            group.decodingOrderNumber = packetDecodingOrderNumber
+        }
+        if let existing = group.framePacketInfo,
+           let packetFrameInfo,
+           packetFrameInfo != existing {
+            groups[key] = group
+            advancePlayoutTimestamp(to: packet.timestamp)
+            evictStaleIncompleteAccessUnits(at: arrivalTime)
+            return nil
+        }
+        if group.framePacketInfo == nil {
+            group.framePacketInfo = packetFrameInfo
+        }
+        if !group.packets.contains(where: { $0.sequenceNumber == packet.sequenceNumber }) {
+            group.packets.append(packet)
+        }
+        groups[key] = group
+        advancePlayoutTimestamp(to: packet.timestamp)
+        evictStaleIncompleteAccessUnits(at: arrivalTime)
+        guard group.packets.contains(where: \.marker) else { return nil }
+        let ordered = Self.sequenceOrdered(group.packets)
+        guard ordered.last?.marker == true,
+              let firstPacket = ordered.first,
+              AppleHEVCNALUnit.startsAccessUnit(firstPacket.payload) else { return nil }
         let units = AppleHEVCNALUnit.reassemble(ordered.map(\.payload))
         let isComplete = ordered.indices.dropLast().allSatisfy { index in
             ordered[index].sequenceNumber &+ 1 == ordered[index + 1].sequenceNumber
         }
         guard isComplete, !units.isEmpty else { return nil }
         groups.removeValue(forKey: key)
+        cacheFrameLossIfNeeded(for: key, group: group)
         harvest(units)
         return AppleHEVCAccessUnit(
             synchronizationSource: key.source,
             timestamp: key.timestamp,
-            decodingOrderNumber: key.decodingOrderNumber,
-            nalUnits: units
+            decodingOrderNumber: group.decodingOrderNumber,
+            nalUnits: units,
+            isLongTermReferenceFrame: ordered.contains(where: \.isLongTermReferenceFrame)
         )
     }
 
@@ -131,8 +231,59 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         lock.withStreamLock { rateControlEstimator.diagnostics }
     }
 
+    func frameLossFeedbackDue(at time: TimeInterval) -> [AppleVideoFrameLossFeedback] {
+        lock.withStreamLock {
+            var feedback = [AppleVideoFrameLossFeedback]()
+            for source in cachedFrameLosses.keys.sorted() {
+                guard let loss = cachedFrameLosses[source], loss.lostPacketCount > 0 else {
+                    cachedFrameLosses.removeValue(forKey: source)
+                    continue
+                }
+                if let lastSentAt = loss.lastSentAt,
+                   time - lastSentAt < Self.frameLossFeedbackRepeatInterval {
+                    continue
+                }
+                feedback.append(AppleVideoFrameLossFeedback(
+                    mediaSource: source,
+                    rtpTimestamp: loss.rtpTimestamp,
+                    expectedPacketCount: loss.expectedPacketCount,
+                    lostPacketCount: loss.lostPacketCount
+                ))
+            }
+            return feedback
+        }
+    }
+
+    func markFrameLossFeedbackSent(
+        _ feedback: AppleVideoFrameLossFeedback,
+        at time: TimeInterval
+    ) {
+        lock.withStreamLock {
+            guard var loss = cachedFrameLosses[feedback.mediaSource],
+                  loss.rtpTimestamp == feedback.rtpTimestamp else { return }
+            loss.lastSentAt = time
+            cachedFrameLosses[feedback.mediaSource] = loss
+        }
+    }
+
     func currentParameterSets() -> AppleHEVCParameterSets {
         lock.withStreamLock { parameterSets }
+    }
+
+    var currentPlayoutTimestamp: UInt32? {
+        lock.withStreamLock { playoutTimestamp }
+    }
+
+    func discardBufferedAccessUnits() {
+        lock.withStreamLock {
+            groups.removeAll(keepingCapacity: false)
+        }
+    }
+
+    func expireIncompleteAccessUnits(at time: TimeInterval) {
+        lock.withStreamLock {
+            evictStaleIncompleteAccessUnits(at: time)
+        }
     }
 
     func reset() {
@@ -141,6 +292,8 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             sourcePacketCounts.removeAll(keepingCapacity: false)
             sequenceTracker = AppleRTPSequenceTracker()
             rateControlEstimator = AppleVideoRateControlEstimator()
+            playoutTimestamp = nil
+            cachedFrameLosses.removeAll(keepingCapacity: false)
             parameterSets = AppleHEVCParameterSets()
         }
     }
@@ -211,6 +364,61 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         }
     }
 
+    private func advancePlayoutTimestamp(to timestamp: UInt32) {
+        guard let playoutTimestamp else {
+            self.playoutTimestamp = timestamp
+            return
+        }
+        let delta = timestamp &- playoutTimestamp
+        if delta > 0, delta <= 0x7fff_ffff {
+            self.playoutTimestamp = timestamp
+        }
+    }
+
+    private func evictStaleIncompleteAccessUnits(at time: TimeInterval) {
+        groups = groups.filter { key, group in
+            let isWithinHostTimeWindow: Bool
+            if let firstSeenAt = group.firstSeenAt {
+                let age = time - firstSeenAt
+                isWithinHostTimeWindow = age < 0 || age <= Self.maximumIncompleteAge
+            } else {
+                isWithinHostTimeWindow = true
+            }
+            guard isWithinHostTimeWindow, let playoutTimestamp else {
+                return isWithinHostTimeWindow
+            }
+            let delta = playoutTimestamp &- key.timestamp
+            return delta > 0x7fff_ffff || delta <= Self.maximumIncompleteTimestampDelta
+        }
+    }
+
+    private func cacheFrameLossIfNeeded(for key: GroupKey, group: PendingAccessUnit) {
+        guard let info = group.framePacketInfo,
+              Int(info.totalPacketsPerFrame) > group.packets.count else { return }
+        cachedFrameLosses[key.source] = CachedFrameLoss(
+            rtpTimestamp: key.timestamp,
+            frameSequenceNumber: info.frameSequenceNumber,
+            expectedPacketCount: info.totalPacketsPerFrame,
+            receivedSequences: Set(group.packets.map(\.sequenceNumber)),
+            lastSentAt: nil
+        )
+    }
+
+    private func correctCachedFrameLoss(with packet: AppleRTPPacket) {
+        let source = packet.synchronizationSource
+        guard var loss = cachedFrameLosses[source],
+              loss.rtpTimestamp == packet.timestamp,
+              let info = packet.framePacketInfo,
+              info.frameSequenceNumber == loss.frameSequenceNumber,
+              info.totalPacketsPerFrame == loss.expectedPacketCount else { return }
+        loss.receivedSequences.insert(packet.sequenceNumber)
+        if loss.lostPacketCount == 0 {
+            cachedFrameLosses.removeValue(forKey: source)
+        } else {
+            cachedFrameLosses[source] = loss
+        }
+    }
+
     private static func sequenceOrdered(_ packets: [AppleRTPPacket]) -> [AppleRTPPacket] {
         let sorted = packets.sorted { $0.sequenceNumber < $1.sequenceNumber }
         guard sorted.count > 1,
@@ -244,7 +452,7 @@ struct AppleRTPSequenceTracker: Sendable {
         var jitter = 0.0
     }
 
-    private static let clockRate = 90_000.0
+    private static let clockRate = 24_000.0
     private static let recentMissingPacketLimit = 17
     private static let nackRetryInterval = 0.150
     private static let missingPacketLifetime = 1.0

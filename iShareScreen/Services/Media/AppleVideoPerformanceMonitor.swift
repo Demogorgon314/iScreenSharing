@@ -74,6 +74,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
 
     private let tileCount: Int
     private let clock: @Sendable () -> TimeInterval
+    private let diagnosticsEnabled: Bool
     private let lock = NSLock()
     private let timer: DispatchSourceTimer?
     private var accumulator = Accumulator()
@@ -88,11 +89,15 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
     init(
         tileCount: Int,
         clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-        automaticallyPublishes: Bool = true
+        automaticallyPublishes: Bool = true,
+        diagnosticsEnabled: Bool = ProcessInfo.processInfo.environment[
+            "ISHARESCREEN_FREEZE_DIAGNOSTICS"
+        ] == "1"
     ) {
         precondition(tileCount > 0)
         self.tileCount = tileCount
         self.clock = clock
+        self.diagnosticsEnabled = diagnosticsEnabled
         lastSampleTime = clock()
         if automaticallyPublishes {
             let timer = DispatchSource.makeTimerSource(
@@ -198,6 +203,10 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         }
     }
 
+    var mostRecentDisplayTime: TimeInterval? {
+        lock.withPerformanceLock { lastDisplayedTime }
+    }
+
     func recordDisplayLink(lead: TimeInterval, period: TimeInterval) {
         lock.withPerformanceLock {
             accumulator.displayLinkLead += max(0, lead)
@@ -295,10 +304,15 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
     private func publishSample() {
         let next = sample(at: clock())
 #if DEBUG
-        Self.logger.notice(
-            "[DEBUG-TEAR-8A7C] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s auKB=\(next.averageAccessUnitKilobytes, format: .fixed(precision: 2)) irap=\(next.intraRefreshesPerSecond, format: .fixed(precision: 1))/s rctl=\(next.rateControlFeedbacksPerSecond, format: .fixed(precision: 1))/s bwe=\(next.estimatedReceiveBandwidthMegabitsPerSecond, format: .fixed(precision: 1))Mbps decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
-        )
+        let shouldLogDiagnostics = true
+#else
+        let shouldLogDiagnostics = diagnosticsEnabled
 #endif
+        if shouldLogDiagnostics {
+            Self.logger.notice(
+            "[DEBUG-TEAR-8A7C] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s auKB=\(next.averageAccessUnitKilobytes, format: .fixed(precision: 2)) irap=\(next.intraRefreshesPerSecond, format: .fixed(precision: 1))/s rctl=\(next.rateControlFeedbacksPerSecond, format: .fixed(precision: 1))/s bwe=\(next.estimatedReceiveBandwidthMegabitsPerSecond, format: .fixed(precision: 1))Mbps decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
+            )
+        }
         DispatchQueue.main.async { [weak self] in self?.snapshot = next }
     }
 

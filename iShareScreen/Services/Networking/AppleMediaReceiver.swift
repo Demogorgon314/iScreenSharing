@@ -6,9 +6,10 @@ struct AppleReceivedVideoDatagram: Equatable, Sendable {
     let arrivalTime: TimeInterval
 }
 
+typealias AppleVideoDatagramHandler = @Sendable (AppleReceivedVideoDatagram) -> Void
+
 final class AppleMediaReceiver: @unchecked Sendable {
-    private enum PacketTarget { case control, primaryVideo, secondaryVideo }
-    private static let maximumQueuedPackets = 16_384
+    private static let maximumQueuedControlPackets = 16_384
     private static let maximumDatagramLength = 65_535
 
     private let lock = NSLock()
@@ -18,12 +19,10 @@ final class AppleMediaReceiver: @unchecked Sendable {
     private let videoSocket: Int32
     private let secondaryVideoSocket: Int32?
     private let controlSource: DispatchSourceRead
-    private let videoSource: DispatchSourceRead
-    private let secondaryVideoSource: DispatchSourceRead?
+    private var videoSource: DispatchSourceRead?
+    private var secondaryVideoSource: DispatchSourceRead?
     private let punchTimer: DispatchSourceTimer
     private var controlPackets = [Data]()
-    private var videoPackets = [AppleReceivedVideoDatagram]()
-    private var secondaryVideoPackets = [AppleReceivedVideoDatagram]()
     private var isClosed = false
 
     init(
@@ -71,48 +70,75 @@ final class AppleMediaReceiver: @unchecked Sendable {
         let receiverQueue = DispatchQueue(label: "com.isharescreen.media-receiver")
         queue = receiverQueue
         controlSource = DispatchSource.makeReadSource(fileDescriptor: controlSocket, queue: receiverQueue)
-        videoSource = DispatchSource.makeReadSource(fileDescriptor: videoSocket, queue: receiverQueue)
-        if let preparedSecondaryVideoSocket {
-            secondaryVideoSource = DispatchSource.makeReadSource(
-                fileDescriptor: preparedSecondaryVideoSocket,
-                queue: receiverQueue
-            )
-        } else {
-            secondaryVideoSource = nil
-        }
+        videoSource = nil
+        secondaryVideoSource = nil
         punchTimer = DispatchSource.makeTimerSource(queue: receiverQueue)
 
-        controlSource.setEventHandler { [weak self] in self?.drain(self?.controlSocket, target: .control) }
-        videoSource.setEventHandler { [weak self] in self?.drain(self?.videoSocket, target: .primaryVideo) }
-        secondaryVideoSource?.setEventHandler {
-            [weak self] in self?.drain(self?.secondaryVideoSocket, target: .secondaryVideo)
-        }
+        controlSource.setEventHandler { [weak self] in self?.receiveAvailableControlPackets() }
         controlSource.setCancelHandler { [controlSocket] in Darwin.close(controlSocket) }
-        videoSource.setCancelHandler { [videoSocket] in Darwin.close(videoSocket) }
-        secondaryVideoSource?.setCancelHandler { [secondaryVideoSocket] in
-            if let secondaryVideoSocket { Darwin.close(secondaryVideoSocket) }
-        }
         punchTimer.setEventHandler { [weak self] in self?.punch() }
         punchTimer.schedule(deadline: .now(), repeating: .milliseconds(100))
         controlSource.activate()
-        videoSource.activate()
-        secondaryVideoSource?.activate()
         punchTimer.activate()
     }
 
-    var queuedVideoPacketCount: Int {
-        lock.withLock { videoPackets.count }
+    func startVideoDelivery(
+        mediaStreamIndex: Int,
+        on deliveryQueue: DispatchQueue,
+        handler: @escaping @Sendable (AppleReceivedVideoDatagram) -> Void
+    ) throws {
+        try lock.withLock {
+            guard !isClosed else { throw AppleMediaReceiverError.closed }
+            switch mediaStreamIndex {
+            case 0:
+                guard videoSource == nil else {
+                    throw AppleMediaReceiverError.videoDeliveryAlreadyStarted
+                }
+                let source = DispatchSource.makeReadSource(
+                    fileDescriptor: videoSocket,
+                    queue: deliveryQueue
+                )
+                source.setEventHandler { [weak self] in
+                    guard let self else { return }
+                    self.receiveAvailableVideoPackets(
+                        socket: self.videoSocket,
+                        handler: handler
+                    )
+                }
+                source.setCancelHandler { [videoSocket] in Darwin.close(videoSocket) }
+                videoSource = source
+            case 1:
+                guard secondaryVideoSource == nil, let secondaryVideoSocket else {
+                    throw AppleMediaReceiverError.secondaryVideoUnavailable
+                }
+                let source = DispatchSource.makeReadSource(
+                    fileDescriptor: secondaryVideoSocket,
+                    queue: deliveryQueue
+                )
+                source.setEventHandler { [weak self] in
+                    self?.receiveAvailableVideoPackets(
+                        socket: secondaryVideoSocket,
+                        handler: handler
+                    )
+                }
+                source.setCancelHandler { Darwin.close(secondaryVideoSocket) }
+                secondaryVideoSource = source
+            default:
+                throw AppleMediaReceiverError.invalidMediaStreamIndex
+            }
+            if mediaStreamIndex == 0 {
+                videoSource?.activate()
+            } else {
+                secondaryVideoSource?.activate()
+            }
+        }
     }
 
-    func drainVideoDatagrams(mediaStreamIndex: Int = 0) -> [AppleReceivedVideoDatagram] {
-        lock.withLock {
-            if mediaStreamIndex == 1 {
-                defer { secondaryVideoPackets.removeAll(keepingCapacity: true) }
-                return secondaryVideoPackets
-            }
-            defer { videoPackets.removeAll(keepingCapacity: true) }
-            return videoPackets
+    func stopVideoDelivery(mediaStreamIndex: Int) {
+        let source = lock.withLock {
+            mediaStreamIndex == 0 ? videoSource : secondaryVideoSource
         }
+        source?.cancel()
     }
 
     func drainControlPackets() -> [Data] {
@@ -169,16 +195,29 @@ final class AppleMediaReceiver: @unchecked Sendable {
     }
 
     func close() {
-        let shouldClose = lock.withLock {
-            guard !isClosed else { return false }
+        let resources = lock.withLock { () -> (
+            primarySource: DispatchSourceRead?,
+            secondarySource: DispatchSourceRead?
+        )? in
+            guard !isClosed else { return nil }
             isClosed = true
-            return true
+            return (videoSource, secondaryVideoSource)
         }
-        guard shouldClose else { return }
+        guard let resources else { return }
         punchTimer.cancel()
         controlSource.cancel()
-        videoSource.cancel()
-        secondaryVideoSource?.cancel()
+        if let primarySource = resources.primarySource {
+            primarySource.cancel()
+        } else {
+            Darwin.close(videoSocket)
+        }
+        if let secondaryVideoSocket {
+            if let secondarySource = resources.secondarySource {
+                secondarySource.cancel()
+            } else {
+                Darwin.close(secondaryVideoSocket)
+            }
+        }
     }
 
     deinit {
@@ -194,37 +233,34 @@ final class AppleMediaReceiver: @unchecked Sendable {
         }
     }
 
-    private func drain(_ socket: Int32?, target: PacketTarget) {
-        guard let socket else { return }
+    private func receiveAvailableControlPackets() {
         var buffer = [UInt8](repeating: 0, count: Self.maximumDatagramLength)
         while true {
-            let count = Darwin.recv(socket, &buffer, buffer.count, MSG_DONTWAIT)
+            let count = Darwin.recv(controlSocket, &buffer, buffer.count, MSG_DONTWAIT)
             guard count > 0 else { break }
-            let arrivalTime = ProcessInfo.processInfo.systemUptime
-            let packet = Data(buffer.prefix(count))
             lock.withLock {
-                switch target {
-                case .control: Self.enqueue(packet, in: &controlPackets)
-                case .primaryVideo:
-                    Self.enqueue(
-                        AppleReceivedVideoDatagram(data: packet, arrivalTime: arrivalTime),
-                        in: &videoPackets
-                    )
-                case .secondaryVideo:
-                    Self.enqueue(
-                        AppleReceivedVideoDatagram(data: packet, arrivalTime: arrivalTime),
-                        in: &secondaryVideoPackets
-                    )
+                if controlPackets.count == Self.maximumQueuedControlPackets {
+                    controlPackets.removeFirst(Self.maximumQueuedControlPackets / 4)
                 }
+                controlPackets.append(Data(buffer.prefix(count)))
             }
         }
     }
 
-    private static func enqueue<Element>(_ packet: Element, in packets: inout [Element]) {
-        if packets.count == maximumQueuedPackets {
-            packets.removeFirst(maximumQueuedPackets / 4)
+    private func receiveAvailableVideoPackets(
+        socket: Int32,
+        handler: AppleVideoDatagramHandler
+    ) {
+        var buffer = [UInt8](repeating: 0, count: Self.maximumDatagramLength)
+        while true {
+            let count = Darwin.recv(socket, &buffer, buffer.count, MSG_DONTWAIT)
+            guard count > 0 else { return }
+            let datagram = AppleReceivedVideoDatagram(
+                data: Data(buffer.prefix(count)),
+                arrivalTime: ProcessInfo.processInfo.systemUptime
+            )
+            handler(datagram)
         }
-        packets.append(packet)
     }
 
     private static func makeSocket(
@@ -329,6 +365,8 @@ enum AppleMediaReceiverError: LocalizedError {
     case unsupportedAddressFamily
     case invalidPort
     case secondaryVideoUnavailable
+    case invalidMediaStreamIndex
+    case videoDeliveryAlreadyStarted
     case closed
     case sendFailed(Int32)
 
@@ -344,6 +382,10 @@ enum AppleMediaReceiverError: LocalizedError {
             "The Screen Sharing port is too high to allocate its media port."
         case .secondaryVideoUnavailable:
             "The secondary Screen Sharing video connection is unavailable."
+        case .invalidMediaStreamIndex:
+            "The negotiated Screen Sharing video stream index is invalid."
+        case .videoDeliveryAlreadyStarted:
+            "Screen Sharing video delivery has already started."
         case .closed:
             "The Screen Sharing media connection is closed."
         case .sendFailed:

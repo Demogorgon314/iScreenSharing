@@ -1,28 +1,22 @@
 import Foundation
 
 final class AppleVideoFeedbackController: @unchecked Sendable {
-    private static let minimumKeyFrameInterval: TimeInterval = 1
-
     private let lock = NSLock()
     private let sendLock = NSLock()
     private let sender: AppleMediaControlSending
     private let encryptor: AppleSRTCPEncryptor
     private let synchronizationSource: UInt32
-    private let now: () -> TimeInterval
     private var feedbackSequence: UInt8 = 0
-    private var lastKeyFrameRequest = [UInt32: TimeInterval]()
-    private var lastAcknowledgedFrameID: UInt16?
+    private var lastAcknowledgedLongTermReferenceTimestamp: UInt32?
 
     init(
         sender: AppleMediaControlSending,
         keyBlob: Data,
-        synchronizationSource: UInt32,
-        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        synchronizationSource: UInt32
     ) throws {
         self.sender = sender
         encryptor = try AppleSRTCPEncryptor(keyBlob: keyBlob)
         self.synchronizationSource = synchronizationSource
-        self.now = now
     }
 
     func sendNACKs(_ missingBySource: [UInt32: [UInt16]]) throws {
@@ -39,23 +33,15 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
     }
 
     func requestKeyFrame(for source: UInt32) throws {
-        let feedback = lock.withFeedbackLock { () -> Data? in
-            let currentTime = now()
-            guard currentTime - lastKeyFrameRequest[source, default: -.infinity]
-                    >= Self.minimumKeyFrameInterval else { return nil }
-            lastKeyFrameRequest[source] = currentTime
+        let feedback = lock.withFeedbackLock { () -> Data in
             defer { feedbackSequence &+= 1 }
             return AppleRTCP.fullIntraRequest(
                 sender: synchronizationSource,
                 mediaSource: source,
                 sequence: feedbackSequence
-            ) + AppleRTCP.pictureLossIndication(
-                sender: synchronizationSource,
-                mediaSource: source
-            ) + AppleRTCP.legacyFullIntraRequest(mediaSource: source)
+            )
         }
-        guard let feedback else { return }
-        try send(feedback: feedback)
+        try send(packet: feedback)
     }
 
     func sendReceiverReport() throws {
@@ -78,13 +64,34 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
         try send(packet: packet)
     }
 
-    func acknowledgeLongTermReference(frameID: UInt16) throws {
+    func sendFrameLossFeedback(
+        mediaSource: UInt32,
+        rtpTimestamp: UInt32,
+        packedLoss: UInt16,
+        framePacketCount: UInt8,
+        frameLostPacketCount: UInt8
+    ) throws {
+        try send(packet: AppleRTCP.frameLossFeedback(
+            sender: synchronizationSource,
+            mediaSource: mediaSource,
+            rtpTimestamp: rtpTimestamp,
+            packedLoss: packedLoss,
+            framePacketCount: framePacketCount,
+            frameLostPacketCount: frameLostPacketCount
+        ))
+    }
+
+    func acknowledgeLongTermReference(
+        rtpTimestamp: UInt32,
+        mediaSource: UInt32
+    ) throws {
         let packet = lock.withFeedbackLock { () -> Data? in
-            guard lastAcknowledgedFrameID != frameID else { return nil }
-            lastAcknowledgedFrameID = frameID
+            guard lastAcknowledgedLongTermReferenceTimestamp != rtpTimestamp else { return nil }
+            lastAcknowledgedLongTermReferenceTimestamp = rtpTimestamp
             return AppleRTCP.longTermReferenceAcknowledgement(
                 sender: synchronizationSource,
-                frameID: frameID
+                mediaSource: mediaSource,
+                rtpTimestamp: rtpTimestamp
             )
         }
         guard let packet else { return }

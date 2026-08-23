@@ -69,6 +69,25 @@ enum AppleRTCP {
         return packet
     }
 
+    static func frameLossFeedback(
+        sender: UInt32,
+        mediaSource: UInt32,
+        rtpTimestamp: UInt32,
+        packedLoss: UInt16,
+        framePacketCount: UInt8,
+        frameLostPacketCount: UInt8
+    ) -> Data {
+        var packet = Data([0x8f, 206, 0, 5])
+        packet.appendUInt32BE(sender)
+        packet.appendUInt32BE(mediaSource)
+        packet.appendUInt32BE(6)
+        packet.appendUInt32BE(rtpTimestamp)
+        packet.appendUInt16BE(packedLoss)
+        packet.append(framePacketCount)
+        packet.append(frameLostPacketCount)
+        return packet
+    }
+
     static func pictureLossIndication(sender: UInt32, mediaSource: UInt32) -> Data {
         var packet = Data([0x81, 206, 0, 2])
         packet.appendUInt32BE(sender)
@@ -82,11 +101,16 @@ enum AppleRTCP {
         return packet
     }
 
-    static func longTermReferenceAcknowledgement(sender: UInt32, frameID: UInt16) -> Data {
-        var packet = Data([0x80, 204, 0, 3])
+    static func longTermReferenceAcknowledgement(
+        sender: UInt32,
+        mediaSource: UInt32,
+        rtpTimestamp: UInt32
+    ) -> Data {
+        var packet = Data([0x8f, 206, 0, 4])
         packet.appendUInt32BE(sender)
+        packet.appendUInt32BE(mediaSource)
         packet.appendUInt32BE(5)
-        packet.appendUInt32BE(UInt32(frameID))
+        packet.appendUInt32BE(rtpTimestamp)
         return packet
     }
 

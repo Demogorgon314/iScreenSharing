@@ -2,6 +2,24 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleHEVCNALUnitTests: XCTestCase {
+    func testClassifiesNativeAccessUnitStartPackets() {
+        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(
+            Data([0x42, 0x01, 0, 1])
+        ))
+        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(
+            Data([0x60, 0x01, 0, 1])
+        ))
+        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(
+            Data([0x62, 0x01, 0x81, 0, 1])
+        ))
+        XCTAssertFalse(AppleHEVCNALUnit.startsAccessUnit(
+            Data([0x62, 0x01, 0x01, 0, 1])
+        ))
+        XCTAssertFalse(AppleHEVCNALUnit.startsAccessUnit(
+            Data([0x62, 0x01, 0x81, 0])
+        ))
+    }
+
     func testExtractsAggregationPacketUnits() {
         let first = Data([0x40, 0x01, 0xaa])
         let second = Data([0x42, 0x01, 0xbb, 0xcc])

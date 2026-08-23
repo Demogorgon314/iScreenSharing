@@ -258,6 +258,28 @@ final class AppleVideoRateControlTests: XCTestCase {
         XCTAssertLessThan(feedback.oneWayReceiveDelay, 0.001)
     }
 
+    func testHighPerformanceFeedbackReportsGrowingReceiveDelay() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        estimator.observe(AppleVideoPacketObservation(
+            rtpTimestamp: 24_000,
+            arrivalTime: 1_000,
+            packetSize: 1_200
+        ))
+        estimator.observe(AppleVideoPacketObservation(
+            rtpTimestamp: 24_400,
+            arrivalTime: 1_000 + 1.0 / 60,
+            packetSize: 1_200
+        ))
+        estimator.observe(AppleVideoPacketObservation(
+            rtpTimestamp: 24_800,
+            arrivalTime: 1_000 + 2.0 / 60 + 0.010,
+            packetSize: 1_200
+        ))
+
+        let feedback = try XCTUnwrap(estimator.feedback(at: 1_001))
+        XCTAssertEqual(feedback.oneWayReceiveDelay, 0.000999, accuracy: 0.000001)
+    }
+
     private func estimate(
         spacing: TimeInterval,
         packetIndexes: [Int] = Array(0..<6),

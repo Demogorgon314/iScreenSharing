@@ -44,6 +44,38 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertTrue(accessUnit.containsRandomAccessPicture)
     }
 
+    func testRTPMediaControlBitsDoNotReplaceIRAPNALClassification() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let ordinarySlice = Data([0x02, 0x01, 0, 1, 0xaa])
+        let unit = try XCTUnwrap(processor.process(packet(
+            sequence: 10,
+            marker: true,
+            payload: ordinarySlice,
+            mediaControlBits: 0x02
+        )))
+
+        XCTAssertFalse(unit.containsRandomAccessPicture)
+    }
+
+    func testPropagatesLongTermReferenceMarkerToCompletedAccessUnit() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x02, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(packet(
+            sequence: 10,
+            marker: false,
+            payload: payload,
+            mediaControlBits: 0x01
+        )))
+        let unit = try XCTUnwrap(processor.process(packet(
+            sequence: 11,
+            marker: true,
+            payload: payload
+        )))
+
+        XCTAssertTrue(unit.isLongTermReferenceFrame)
+    }
+
     func testDeduplicatesRetransmittedSequenceNumbers() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         let payload = Data([0x42, 0x01, 0, 1, 0xaa])
@@ -75,24 +107,258 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(unit.decodingOrderNumber, 1)
     }
 
-    func testSeparatesInterleavedAccessUnitsWhenRTPTimestampDoesNotChange() throws {
+    func testWaitsForFragmentStartThatArrivesAfterMarker() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let start = Data([0x62, 0x01, 0x81, 0, 1, 0xaa])
+        let continuation = Data([0x62, 0x01, 0x01, 0, 1, 0xbb])
+        let end = Data([0x62, 0x01, 0x41, 0, 1, 0xcc])
+
+        XCTAssertNil(processor.process(packet(
+            sequence: 11,
+            marker: false,
+            payload: continuation
+        )))
+        XCTAssertNil(processor.process(packet(
+            sequence: 12,
+            marker: true,
+            payload: end
+        )))
+
+        let unit = try XCTUnwrap(processor.process(packet(
+            sequence: 10,
+            marker: false,
+            payload: start
+        )))
+        XCTAssertEqual(unit.nalUnits, [Data([0x02, 0x01, 0xaa, 0xbb, 0xcc])])
+    }
+
+    func testEvictsIncompleteAccessUnitBeyondNativePlayoutWindow() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let oldPayload = Data([0x42, 0x01, 0, 1, 0xaa])
+        let currentPayload = Data([0x42, 0x01, 0, 2, 0xbb])
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: oldPayload, timestamp: 7)
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 12, marker: true, payload: oldPayload, timestamp: 7)
+        ))
+        _ = processor.process(
+            packet(sequence: 13, marker: true, payload: currentPayload, timestamp: 12_008)
+        )
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 11, marker: false, payload: oldPayload, timestamp: 7)
+        ))
+    }
+
+    func testRetainsIncompleteAccessUnitAtNativePlayoutWindowBoundary() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let oldPayload = Data([0x42, 0x01, 0, 1, 0xaa])
+        let currentPayload = Data([0x42, 0x01, 0, 2, 0xbb])
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: oldPayload, timestamp: 7)
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 12, marker: true, payload: oldPayload, timestamp: 7)
+        ))
+        _ = processor.process(
+            packet(sequence: 13, marker: true, payload: currentPayload, timestamp: 12_007)
+        )
+
+        XCTAssertNotNil(processor.process(
+            packet(sequence: 11, marker: false, payload: oldPayload, timestamp: 7)
+        ))
+    }
+
+    func testEvictsIncompleteAccessUnitAfterNativeHostTimeWindow() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: payload),
+            arrivalTime: 1
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 12, marker: true, payload: payload),
+            arrivalTime: 1.01
+        ))
+
+        processor.expireIncompleteAccessUnits(at: 1.501)
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 11, marker: false, payload: payload),
+            arrivalTime: 1.502
+        ))
+    }
+
+    func testRetainsIncompleteAccessUnitAtNativeHostTimeBoundary() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: payload),
+            arrivalTime: 1
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 12, marker: true, payload: payload),
+            arrivalTime: 1.01
+        ))
+
+        processor.expireIncompleteAccessUnits(at: 1.5)
+
+        XCTAssertNotNil(processor.process(
+            packet(sequence: 11, marker: false, payload: payload),
+            arrivalTime: 1.5
+        ))
+    }
+
+    func testEvictsIncompleteAccessUnitAcrossRTPTimestampRollover() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let oldTimestamp = UInt32.max - 10
+        let currentTimestamp = oldTimestamp &+ 12_001
+        let oldPayload = Data([0x42, 0x01, 0, 1, 0xaa])
+        let currentPayload = Data([0x42, 0x01, 0, 2, 0xbb])
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: oldPayload, timestamp: oldTimestamp)
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 12, marker: true, payload: oldPayload, timestamp: oldTimestamp)
+        ))
+        _ = processor.process(
+            packet(sequence: 13, marker: true, payload: currentPayload, timestamp: currentTimestamp)
+        )
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 11, marker: false, payload: oldPayload, timestamp: oldTimestamp)
+        ))
+    }
+
+    func testRefreshDiscardClearsEveryIncompleteAccessUnit() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: payload, source: 100)
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 12, marker: true, payload: payload, source: 100)
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 20, marker: false, payload: payload, source: 200)
+        ))
+
+        processor.discardBufferedAccessUnits()
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 11, marker: false, payload: payload, source: 100)
+        ))
+    }
+
+    func testRejectsInconsistentDecodingOrderWithinOneSourceTimestamp() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         let firstPayload = Data([0x42, 0x01, 0, 1, 0xaa])
         let secondPayload = Data([0x42, 0x01, 0, 2, 0xbb])
 
         XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: firstPayload)))
-        XCTAssertNil(processor.process(packet(sequence: 20, marker: false, payload: secondPayload)))
-        let first = try XCTUnwrap(
+        XCTAssertNil(processor.process(packet(sequence: 11, marker: true, payload: secondPayload)))
+        let unit = try XCTUnwrap(
             processor.process(packet(sequence: 11, marker: true, payload: firstPayload))
         )
-        let second = try XCTUnwrap(
-            processor.process(packet(sequence: 21, marker: true, payload: secondPayload))
-        )
 
-        XCTAssertEqual(first.decodingOrderNumber, 1)
-        XCTAssertEqual(first.nalUnits.count, 2)
-        XCTAssertEqual(second.decodingOrderNumber, 2)
-        XCTAssertEqual(second.nalUnits.count, 2)
+        XCTAssertEqual(unit.decodingOrderNumber, 1)
+        XCTAssertEqual(unit.nalUnits.count, 2)
+    }
+
+    func testEmitsNativeFrameLossFeedbackFromSenderDeclaredPacketCount() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(packet(
+            sequence: 10,
+            marker: false,
+            payload: payload,
+            totalPacketsPerFrame: 3,
+            frameSequenceNumber: 9
+        )))
+        XCTAssertNotNil(processor.process(packet(
+            sequence: 11,
+            marker: true,
+            payload: payload,
+            totalPacketsPerFrame: 3,
+            frameSequenceNumber: 9
+        )))
+
+        let first = processor.frameLossFeedbackDue(at: 1)
+        XCTAssertEqual(first, [
+            AppleVideoFrameLossFeedback(
+                mediaSource: 0x1122_3344,
+                rtpTimestamp: 7,
+                expectedPacketCount: 3,
+                lostPacketCount: 1
+            ),
+        ])
+        processor.markFrameLossFeedbackSent(try XCTUnwrap(first.first), at: 1)
+        XCTAssertTrue(processor.frameLossFeedbackDue(at: 1.099).isEmpty)
+        XCTAssertEqual(processor.frameLossFeedbackDue(at: 1.101).count, 1)
+    }
+
+    func testLatePacketCorrectsCachedFrameLossFeedback() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+        _ = processor.process(packet(
+            sequence: 10,
+            marker: false,
+            payload: payload,
+            totalPacketsPerFrame: 3,
+            frameSequenceNumber: 9
+        ))
+        _ = processor.process(packet(
+            sequence: 11,
+            marker: true,
+            payload: payload,
+            totalPacketsPerFrame: 3,
+            frameSequenceNumber: 9
+        ))
+        XCTAssertEqual(processor.frameLossFeedbackDue(at: 1).count, 1)
+
+        _ = processor.process(packet(
+            sequence: 9,
+            marker: false,
+            payload: payload,
+            totalPacketsPerFrame: 3,
+            frameSequenceNumber: 9
+        ))
+
+        XCTAssertTrue(processor.frameLossFeedbackDue(at: 1.2).isEmpty)
+    }
+
+    func testNewerFrameLossReplacesTheCachedRecordForOneSource() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let firstPayload = Data([0x42, 0x01, 0, 1, 0xaa])
+        let secondPayload = Data([0x42, 0x01, 0, 2, 0xbb])
+        _ = processor.process(packet(
+            sequence: 10,
+            marker: true,
+            payload: firstPayload,
+            totalPacketsPerFrame: 2,
+            frameSequenceNumber: 9
+        ))
+        _ = processor.process(packet(
+            sequence: 11,
+            marker: true,
+            payload: secondPayload,
+            timestamp: 8,
+            totalPacketsPerFrame: 3,
+            frameSequenceNumber: 10
+        ))
+
+        let feedback = processor.frameLossFeedbackDue(at: 1)
+        XCTAssertEqual(feedback.count, 1)
+        XCTAssertEqual(feedback.first?.rtpTimestamp, 8)
+        XCTAssertEqual(feedback.first?.lostPacketCount, 2)
     }
 
     func testRetriesMissingPacketsUntilLatePacketArrives() throws {
@@ -195,11 +461,11 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
     func testBuildsIntervalReceptionReportAcrossSequenceRollover() throws {
         var tracker = AppleRTPSequenceTracker()
         tracker.observe(
-            packet(sequence: UInt16.max, marker: false, payload: Data(), timestamp: 90_000),
+            packet(sequence: UInt16.max, marker: false, payload: Data(), timestamp: 24_000),
             arrivalTime: 1
         )
         tracker.observe(
-            packet(sequence: 1, marker: false, payload: Data(), timestamp: 90_900),
+            packet(sequence: 1, marker: false, payload: Data(), timestamp: 24_240),
             arrivalTime: 1.011
         )
 
@@ -207,7 +473,7 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(first.extendedHighestSequence, 0x0001_0001)
         XCTAssertEqual(first.cumulativePacketsLost, 1)
         XCTAssertEqual(first.fractionLost, 85)
-        XCTAssertEqual(first.interarrivalJitter, 6)
+        XCTAssertEqual(first.interarrivalJitter, 2)
 
         let second = try XCTUnwrap(tracker.receptionReport(for: 0x1122_3344))
         XCTAssertEqual(second.fractionLost, 0)
@@ -229,7 +495,7 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         ])
 
         let report = try XCTUnwrap(processor.receptionReport(for: 0x1122_3344))
-        XCTAssertEqual(report.interarrivalJitter, 56)
+        XCTAssertEqual(report.interarrivalJitter, 15)
     }
 
     func testPrimarySourcesSelectsBusiestCompleteGroupAndCanExcludeIt() throws {
@@ -268,10 +534,31 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         marker: Bool,
         payload: Data,
         source: UInt32 = 0x1122_3344,
-        timestamp: UInt32 = 7
+        timestamp: UInt32 = 7,
+        mediaControlBits: UInt8? = nil,
+        totalPacketsPerFrame: UInt16? = nil,
+        frameSequenceNumber: UInt16 = 0
     ) -> AppleRTPPacket {
-        AppleRTPPacket(
-            header: Data(),
+        let header: Data
+        if let totalPacketsPerFrame {
+            header = Data([
+                0x90, 0x60, 0, 0, 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44,
+                0x80 | (mediaControlBits ?? 0), 0x01, 0, 1,
+                UInt8(truncatingIfNeeded: totalPacketsPerFrame >> 8),
+                UInt8(truncatingIfNeeded: totalPacketsPerFrame),
+                UInt8(truncatingIfNeeded: frameSequenceNumber >> 8),
+                UInt8(truncatingIfNeeded: frameSequenceNumber),
+            ])
+        } else if let mediaControlBits {
+            header = Data([
+                0x90, 0x60, 0, 0, 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44,
+                0x80 | (mediaControlBits & 0x3f), 0x10, 0, 0,
+            ])
+        } else {
+            header = Data()
+        }
+        return AppleRTPPacket(
+            header: header,
             payload: payload,
             sequenceNumber: sequence,
             timestamp: timestamp,

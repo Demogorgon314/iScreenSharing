@@ -52,6 +52,85 @@ final class AppleSRTPTests: XCTestCase {
             XCTAssertEqual(error as? AppleSRTPError, .invalidPacket)
         }
     }
+
+    func testReadsLongTermReferenceMarkerFromAppleRTPHeaderExtension() {
+        var ltrHeader = Data(repeating: 0, count: 16)
+        ltrHeader[0] = 0x90
+        ltrHeader[12] = 0x81
+        let ltrPacket = AppleRTPPacket(
+            header: ltrHeader,
+            payload: Data(),
+            sequenceNumber: 1,
+            timestamp: 2,
+            synchronizationSource: 3,
+            payloadType: 100,
+            marker: true
+        )
+
+        var ordinaryHeader = ltrHeader
+        ordinaryHeader[12] = 0x80
+        let ordinaryPacket = AppleRTPPacket(
+            header: ordinaryHeader,
+            payload: Data(),
+            sequenceNumber: 1,
+            timestamp: 2,
+            synchronizationSource: 3,
+            payloadType: 100,
+            marker: true
+        )
+
+        XCTAssertTrue(ltrPacket.isLongTermReferenceFrame)
+        XCTAssertFalse(ordinaryPacket.isLongTermReferenceFrame)
+    }
+
+    func testReadsFramePacketInfoFromAppleRTPHeaderExtension() {
+        let packet = rtpPacket(header: Data([
+            0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x80, 0x01, 0, 1,
+            0x01, 0x23, 0x45, 0x67,
+        ]))
+
+        XCTAssertEqual(packet.framePacketInfo, AppleRTPFramePacketInfo(
+            totalPacketsPerFrame: 0x0123,
+            frameSequenceNumber: 0x4567
+        ))
+    }
+
+    func testReadsFramePacketInfoAfterOptionalMediaControlWord() {
+        let packet = rtpPacket(header: Data([
+            0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x80, 0x03, 0, 2,
+            0xde, 0xad, 0xbe, 0xef,
+            0, 9, 0, 7,
+        ]))
+
+        XCTAssertEqual(packet.framePacketInfo, AppleRTPFramePacketInfo(
+            totalPacketsPerFrame: 9,
+            frameSequenceNumber: 7
+        ))
+    }
+
+    func testRejectsTruncatedFramePacketInfo() {
+        let packet = rtpPacket(header: Data([
+            0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x80, 0x01, 0, 1,
+        ]))
+
+        XCTAssertNil(packet.framePacketInfo)
+    }
+
+    private func rtpPacket(header: Data) -> AppleRTPPacket {
+        AppleRTPPacket(
+            header: header,
+            payload: Data(),
+            sequenceNumber: 1,
+            timestamp: 2,
+            synchronizationSource: 3,
+            payloadType: 96,
+            marker: false
+        )
+    }
+
 }
 
 private extension Data {

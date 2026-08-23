@@ -12,6 +12,18 @@ enum AppleHEVCNALUnit {
         return (data[0] >> 1) & 0x3f
     }
 
+    /// Matches VideoPacketBuffer's start-of-frame flag. Single NAL and
+    /// aggregation packets start a frame; an FU packet only starts one when
+    /// its fragmentation header carries the S bit.
+    static func startsAccessUnit(_ payload: Data) -> Bool {
+        guard let type = type(of: payload) else { return false }
+        if type == fragmentationType {
+            guard payload.count >= 5 else { return false }
+            return payload[2] & 0x80 != 0
+        }
+        return payload.count >= 4
+    }
+
     static func reassemble(_ payloads: [Data]) -> [Data] {
         var units = [Data]()
         var fragmented = Data()

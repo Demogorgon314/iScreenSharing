@@ -115,6 +115,11 @@ final class AppleHEVCDecoder: @unchecked Sendable {
             guard let session else { throw AppleHEVCDecoderError.sessionClosed }
             switch session {
             case let .videoProcessing(session):
+                // AVConference normally forwards DON as TileOrder because its
+                // transmitter and VCP receiver both start at zero. We may join
+                // after the transmitter has advanced, while VCP still requires
+                // the first submitted TileOrder to be zero, so rebase DON to a
+                // session-local monotonic sequence.
                 let tileOrder = Self.takeVideoProcessingTileOrder(
                     from: &nextVideoProcessingTileOrder
                 )
@@ -134,6 +139,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                 } catch let error as AppleVCPDecompressionSessionError {
                     switch error {
                     case let .decodeFailed(status):
+                        nextVideoProcessingTileOrder = tileOrder
                         throw AppleHEVCDecoderError.decodeFailed(status)
                     case .sessionClosed:
                         throw AppleHEVCDecoderError.sessionClosed
@@ -177,29 +183,6 @@ final class AppleHEVCDecoder: @unchecked Sendable {
             guard let session else { return }
             session.close()
             self.session = nil
-        }
-    }
-
-    func restart() throws {
-        try lock.withDecoderLock {
-            let replacement = try makeSession(allowsVideoProcessing: true)
-            session?.close()
-            session = replacement
-            nextVideoProcessingTileOrder = 0
-            backendHandler(replacement.backend)
-        }
-    }
-
-    func restartUsingVideoToolboxFallback() throws {
-        try lock.withDecoderLock {
-            let replacement = Session.videoToolbox(try Self.makeVideoToolboxSession(
-                formatDescription: formatDescription
-            ))
-            session?.close()
-            session = replacement
-            nextVideoProcessingTileOrder = 0
-            backendHandler(replacement.backend)
-            Self.logger.warning("Fell back to per-tile VideoToolbox decoding after a VCP stall")
         }
     }
 

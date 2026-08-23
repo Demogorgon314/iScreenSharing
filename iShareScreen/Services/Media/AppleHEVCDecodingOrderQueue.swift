@@ -1,62 +1,37 @@
 import Foundation
 
+/// Applies the receiver's wrap-safe DON admission. Complete forward subframes
+/// are never held waiting for a missing DON; late subframes are discarded.
 struct AppleHEVCDecodingOrderQueue {
-    private let maximumPendingCount: Int
-    private var expectedDecodingOrderNumber: UInt16?
-    private var pending = [UInt16: AppleHEVCAccessUnit]()
-
-    init(maximumPendingCount: Int = 8) {
-        precondition(maximumPendingCount > 0)
-        self.maximumPendingCount = maximumPendingCount
+    struct Output {
+        let accessUnits: [AppleHEVCAccessUnit]
     }
 
-    mutating func enqueue(_ accessUnits: [AppleHEVCAccessUnit]) -> [AppleHEVCAccessUnit] {
+    private var expectedDecodingOrderNumber: UInt16?
+
+    mutating func enqueue(
+        _ accessUnits: [AppleHEVCAccessUnit]
+    ) -> Output {
         var ready = accessUnits.filter { $0.decodingOrderNumber == nil }
-        let orderedUnits = accessUnits.filter { $0.decodingOrderNumber != nil }
+        let receivedUnits = accessUnits.filter { $0.decodingOrderNumber != nil }
+        let orderedUnits = expectedDecodingOrderNumber == nil
+            ? Self.circularlyOrdered(receivedUnits)
+            : receivedUnits
 
-        if expectedDecodingOrderNumber == nil, !orderedUnits.isEmpty {
-            let bootstrap = Self.circularlyOrdered(orderedUnits)
-            expectedDecodingOrderNumber = bootstrap.first?.decodingOrderNumber
-            insert(bootstrap)
-        } else {
-            insert(orderedUnits)
+        for accessUnit in orderedUnits {
+            guard let order = accessUnit.decodingOrderNumber else { continue }
+            if let expectedDecodingOrderNumber {
+                let delta = order &- expectedDecodingOrderNumber
+                guard delta <= 0x7ffe else { continue }
+            }
+            ready.append(accessUnit)
+            expectedDecodingOrderNumber = order &+ 1
         }
-
-        ready.append(contentsOf: drainReady())
-        if pending.count > maximumPendingCount,
-           let expectedDecodingOrderNumber,
-           let nextAvailable = pending.keys.min(by: {
-               $0 &- expectedDecodingOrderNumber < $1 &- expectedDecodingOrderNumber
-           }) {
-            self.expectedDecodingOrderNumber = nextAvailable
-            ready.append(contentsOf: drainReady())
-        }
-        return ready
+        return Output(accessUnits: ready)
     }
 
     mutating func reset() {
         expectedDecodingOrderNumber = nil
-        pending.removeAll(keepingCapacity: false)
-    }
-
-    private mutating func insert(_ accessUnits: [AppleHEVCAccessUnit]) {
-        for accessUnit in accessUnits {
-            guard let decodingOrderNumber = accessUnit.decodingOrderNumber,
-                  let expectedDecodingOrderNumber else { continue }
-            let distance = decodingOrderNumber &- expectedDecodingOrderNumber
-            guard distance <= 0x7ffe else { continue }
-            pending[decodingOrderNumber] = accessUnit
-        }
-    }
-
-    private mutating func drainReady() -> [AppleHEVCAccessUnit] {
-        var ready = [AppleHEVCAccessUnit]()
-        while let expectedDecodingOrderNumber,
-              let accessUnit = pending.removeValue(forKey: expectedDecodingOrderNumber) {
-            ready.append(accessUnit)
-            self.expectedDecodingOrderNumber = expectedDecodingOrderNumber &+ 1
-        }
-        return ready
     }
 
     private static func circularlyOrdered(

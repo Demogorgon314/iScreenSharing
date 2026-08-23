@@ -10,19 +10,21 @@ final class AppleHEVCDecodingOrderQueueTests: XCTestCase {
             accessUnit(source: 100, decodingOrderNumber: 10),
         ])
 
-        XCTAssertEqual(output.map(\.decodingOrderNumber), [10, 11])
+        XCTAssertEqual(output.accessUnits.map(\.decodingOrderNumber), [10, 11])
     }
 
-    func testHoldsFutureAccessUnitAcrossBatchesUntilGapArrives() {
+    func testForwardAccessUnitAdvancesImmediatelyAndLateGapIsDropped() {
         var queue = AppleHEVCDecodingOrderQueue()
         _ = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 10)])
 
-        XCTAssertTrue(queue.enqueue([
-            accessUnit(source: 100, decodingOrderNumber: 12),
-        ]).isEmpty)
         XCTAssertEqual(
-            queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 11)]).map(\.decodingOrderNumber),
-            [11, 12]
+            queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 12)])
+                .accessUnits.map(\.decodingOrderNumber),
+            [12]
+        )
+        XCTAssertTrue(
+            queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 11)])
+                .accessUnits.isEmpty
         )
     }
 
@@ -30,53 +32,88 @@ final class AppleHEVCDecodingOrderQueueTests: XCTestCase {
         var queue = AppleHEVCDecodingOrderQueue()
         _ = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: .max)])
 
-        XCTAssertTrue(queue.enqueue([
-            accessUnit(source: 200, decodingOrderNumber: 1),
-        ]).isEmpty)
         XCTAssertEqual(
-            queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 0)]).map(\.decodingOrderNumber),
-            [0, 1]
+            queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 1)])
+                .accessUnits.map(\.decodingOrderNumber),
+            [1]
+        )
+        XCTAssertTrue(
+            queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 0)])
+                .accessUnits.isEmpty
         )
     }
 
-    func testSkipsUnrecoverableGapWithoutDiscardingBufferedAccessUnits() {
-        var queue = AppleHEVCDecodingOrderQueue(maximumPendingCount: 2)
+    func testForwardGapDoesNotWaitForAnArbitraryPendingLimit() {
+        var queue = AppleHEVCDecodingOrderQueue()
         _ = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 10)])
 
-        XCTAssertTrue(queue.enqueue([
+        let output = queue.enqueue([
             accessUnit(source: 100, decodingOrderNumber: 12),
             accessUnit(source: 200, decodingOrderNumber: 13),
-        ]).isEmpty)
-        let output = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 14)])
+        ])
 
-        XCTAssertEqual(output.map(\.decodingOrderNumber), [12, 13, 14])
-        XCTAssertTrue(queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 11)]).isEmpty)
+        XCTAssertEqual(output.accessUnits.map(\.decodingOrderNumber), [12, 13])
+        XCTAssertTrue(
+            queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 11)])
+                .accessUnits.isEmpty
+        )
+    }
+
+    func testRandomAccessPicturesUseTheSameForwardAdmissionRules() {
+        var queue = AppleHEVCDecodingOrderQueue()
+        _ = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 10)])
+
+        let output = queue.enqueue([
+            accessUnit(
+                source: 200,
+                decodingOrderNumber: 12,
+                isRandomAccessPicture: true
+            ),
+            accessUnit(
+                source: 100,
+                decodingOrderNumber: 11,
+                isRandomAccessPicture: true
+            ),
+        ])
+
+        XCTAssertEqual(
+            output.accessUnits.map(\.decodingOrderNumber),
+            [12]
+        )
+        XCTAssertTrue(
+            queue.enqueue([
+                accessUnit(
+                    source: 100,
+                    decodingOrderNumber: 11,
+                    isRandomAccessPicture: true
+                )
+            ])
+                .accessUnits.isEmpty
+        )
     }
 
     func testUnitsWithoutDecodingOrderRemainDecodable() {
         var queue = AppleHEVCDecodingOrderQueue()
         let unit = accessUnit(source: 100, decodingOrderNumber: nil)
 
-        XCTAssertEqual(queue.enqueue([unit]), [unit])
+        XCTAssertEqual(queue.enqueue([unit]).accessUnits, [unit])
     }
 
-    func testResetStartsAnewSequenceAndDiscardsPendingUnits() {
-        var queue = AppleHEVCDecodingOrderQueue()
-        _ = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 10)])
-        _ = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 12)])
-
-        queue.reset()
-        let output = queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 40)])
-
-        XCTAssertEqual(output.map(\.decodingOrderNumber), [40])
-    }
-
-    private func accessUnit(source: UInt32, decodingOrderNumber: UInt16?) -> AppleHEVCAccessUnit {
+    private func accessUnit(
+        source: UInt32,
+        decodingOrderNumber: UInt16?,
+        isRefresh: Bool = false,
+        isRandomAccessPicture: Bool? = nil
+    ) -> AppleHEVCAccessUnit {
         AppleHEVCAccessUnit(
             synchronizationSource: source,
             timestamp: 0,
             decodingOrderNumber: decodingOrderNumber,
-            nalUnits: [Data([0x02, 0x01, UInt8(truncatingIfNeeded: source)])]
+            nalUnits: [Data([
+                (isRandomAccessPicture ?? isRefresh) ? 0x26 : 0x02,
+                0x01,
+                UInt8(truncatingIfNeeded: source),
+            ])]
         )
     }
 }

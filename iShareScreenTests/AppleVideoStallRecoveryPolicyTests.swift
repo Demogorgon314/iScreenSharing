@@ -20,28 +20,21 @@ final class AppleVideoStallRecoveryPolicyTests: XCTestCase {
 
     func testRequestsKeyFramesWhilePacketsFlowButFramesAreStalled() {
         XCTAssertEqual(
-            action(now: 10, frame: 6, packet: 10),
+            action(now: 10, frame: 4, packet: 10),
             .requestKeyFrames
         )
     }
 
     func testRateLimitsKeyFrameRequests() {
         XCTAssertEqual(
-            action(now: 10, frame: 6, packet: 10, keyFrameRequest: 9),
+            action(now: 10, frame: 4, packet: 10, keyFrameRequest: 9),
             .none
         )
     }
 
-    func testRestartsDecoderAfterProlongedStall() {
+    func testProlongedStallStillUsesProtocolRefreshInsteadOfReplacingDecoder() {
         XCTAssertEqual(
             action(now: 10, frame: 1, packet: 10),
-            .restartDecoderAndRequestKeyFrames
-        )
-    }
-
-    func testRateLimitsDecoderRestartsAndFallsBackToKeyFrameRequest() {
-        XCTAssertEqual(
-            action(now: 10, frame: 1, packet: 10, decoderRestart: 9),
             .requestKeyFrames
         )
     }
@@ -50,16 +43,45 @@ final class AppleVideoStallRecoveryPolicyTests: XCTestCase {
         now: TimeInterval,
         frame: TimeInterval,
         packet: TimeInterval,
-        keyFrameRequest: TimeInterval = 0,
-        decoderRestart: TimeInterval = 0
+        keyFrameRequest: TimeInterval = 0
     ) -> AppleVideoStallRecoveryPolicy.Action {
         policy.action(
             now: now,
-            lastDecodedFrameTime: frame,
+            lastDisplayedFrameTime: frame,
             lastVideoPacketTime: packet,
-            lastKeyFrameRequestTime: keyFrameRequest,
-            lastDecoderRestartTime: decoderRestart
+            lastKeyFrameRequestTime: keyFrameRequest
         )
+    }
+}
+
+final class AppleVideoRefreshSchedulerTests: XCTestCase {
+    func testAcceptsRefreshImmediately() {
+        var scheduler = AppleVideoRefreshScheduler()
+
+        XCTAssertTrue(scheduler.accept(timestamp: 100))
+    }
+
+    func testDeduplicatesTimestampWithoutSuppressingAChangedRequest() {
+        var scheduler = AppleVideoRefreshScheduler()
+
+        XCTAssertTrue(scheduler.accept(timestamp: 100))
+        XCTAssertFalse(scheduler.accept(timestamp: 100))
+        XCTAssertTrue(scheduler.accept(timestamp: 101))
+    }
+
+    func testWatchdogRequestsWithoutTimestampCanRepeat() {
+        var scheduler = AppleVideoRefreshScheduler()
+
+        XCTAssertTrue(scheduler.accept(timestamp: nil))
+        XCTAssertTrue(scheduler.accept(timestamp: nil))
+    }
+
+    func testResetClearsTimestampDeduplication() {
+        var scheduler = AppleVideoRefreshScheduler()
+        XCTAssertTrue(scheduler.accept(timestamp: 100))
+
+        scheduler.reset()
+        XCTAssertTrue(scheduler.accept(timestamp: 100))
     }
 }
 

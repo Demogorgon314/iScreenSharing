@@ -1,6 +1,11 @@
 import CryptoKit
 import Foundation
 
+struct AppleRTPFramePacketInfo: Equatable, Sendable {
+    let totalPacketsPerFrame: UInt16
+    let frameSequenceNumber: UInt16
+}
+
 struct AppleRTPPacket: Equatable, Sendable {
     let header: Data
     let payload: Data
@@ -9,6 +14,41 @@ struct AppleRTPPacket: Equatable, Sendable {
     let synchronizationSource: UInt32
     let payloadType: UInt8
     let marker: Bool
+
+    /// Apple carries the FaceTime-video media-control header in the RTP
+    /// extension header itself. Bit zero of its first byte marks an LTR frame.
+    var isLongTermReferenceFrame: Bool {
+        guard header.count >= 12, header[0] & 0x10 != 0 else { return false }
+        let extensionOffset = 12 + Int(header[0] & 0x0f) * 4
+        guard extensionOffset + 4 <= header.count else { return false }
+        return header[extensionOffset] & 0x01 != 0
+    }
+
+    /// Apple MCI Info ID 6 carries the sender-declared packet count for this
+    /// encoded frame. Its four bytes follow the Apple RTP extension header and
+    /// the optional Info ID 4 word, when present.
+    var framePacketInfo: AppleRTPFramePacketInfo? {
+        guard header.count >= 12, header[0] & 0x10 != 0 else { return nil }
+        let extensionOffset = 12 + Int(header[0] & 0x0f) * 4
+        guard extensionOffset + 4 <= header.count,
+              header[extensionOffset] >> 6 == 2,
+              let wordCount = try? Int(header.uint16BE(at: extensionOffset + 2)) else {
+            return nil
+        }
+        let extensionEnd = extensionOffset + 4 + wordCount * 4
+        let flags = header[extensionOffset + 1]
+        guard extensionEnd <= header.count, flags & 0x01 != 0 else { return nil }
+        let infoOffset = extensionOffset + 4 + (flags & 0x02 == 0 ? 0 : 4)
+        guard infoOffset + 4 <= extensionEnd,
+              let totalPacketsPerFrame = try? header.uint16BE(at: infoOffset),
+              let frameSequenceNumber = try? header.uint16BE(at: infoOffset + 2) else {
+            return nil
+        }
+        return AppleRTPFramePacketInfo(
+            totalPacketsPerFrame: totalPacketsPerFrame,
+            frameSequenceNumber: frameSequenceNumber
+        )
+    }
 }
 
 struct AppleSRTPKeySchedule: Equatable, Sendable {

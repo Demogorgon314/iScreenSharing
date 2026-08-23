@@ -334,4 +334,5 @@ struct AppleVideoRateControlEstimator: Sendable {
             oneWayReceiveDelay = delay
         }
     }
+
 }
