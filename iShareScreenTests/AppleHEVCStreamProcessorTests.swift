@@ -95,14 +95,69 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(second.nalUnits.count, 2)
     }
 
-    func testTracksSequenceGapsAndCancelsNACKForLatePacket() throws {
+    func testRetriesMissingPacketsUntilLatePacketArrives() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
-        XCTAssertNil(processor.process(packet(sequence: 10, marker: false, payload: Data([1]))))
-        XCTAssertNil(processor.process(packet(sequence: 13, marker: false, payload: Data([1]))))
-        XCTAssertNil(processor.process(packet(sequence: 11, marker: false, payload: Data([1]))))
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: Data([1])),
+            arrivalTime: 1
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 13, marker: false, payload: Data([1])),
+            arrivalTime: 1.01
+        ))
 
-        XCTAssertEqual(processor.drainMissingSequences(), [0x1122_3344: [12]])
-        XCTAssertTrue(processor.drainMissingSequences().isEmpty)
+        let first = processor.missingSequencesDueForNACK(at: 1.01)
+        XCTAssertEqual(first, [0x1122_3344: [11, 12]])
+        processor.markNACKsSent(first, at: 1.01)
+        XCTAssertTrue(processor.missingSequencesDueForNACK(at: 1.159).isEmpty)
+        XCTAssertEqual(
+            processor.missingSequencesDueForNACK(at: 1.161),
+            [0x1122_3344: [11, 12]]
+        )
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 11, marker: false, payload: Data([1])),
+            arrivalTime: 1.17
+        ))
+        XCTAssertEqual(
+            processor.missingSequencesDueForNACK(at: 1.17),
+            [0x1122_3344: [12]]
+        )
+    }
+
+    func testExpiresMissingPacketsAfterNativeRetryLifetime() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: Data([1])),
+            arrivalTime: 1
+        ))
+        XCTAssertNil(processor.process(
+            packet(sequence: 12, marker: false, payload: Data([1])),
+            arrivalTime: 1.01
+        ))
+
+        XCTAssertEqual(
+            processor.missingSequencesDueForNACK(at: 1.01),
+            [0x1122_3344: [11]]
+        )
+        XCTAssertTrue(processor.missingSequencesDueForNACK(at: 2.011).isEmpty)
+    }
+
+    func testLargeGapTracksOnlyNativeRecentSequenceWindow() {
+        var tracker = AppleRTPSequenceTracker()
+        tracker.observe(
+            packet(sequence: 100, marker: false, payload: Data()),
+            arrivalTime: 1
+        )
+        tracker.observe(
+            packet(sequence: 200, marker: false, payload: Data()),
+            arrivalTime: 1.01
+        )
+
+        XCTAssertEqual(
+            tracker.missingSequencesDueForNACK(at: 1.01)[0x1122_3344],
+            Array(UInt16(183)...UInt16(199))
+        )
     }
 
     func testResetDiscardsSourcesParametersAndMissingSequences() throws {
@@ -118,14 +173,23 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(processor.currentParameterSets(), AppleHEVCParameterSets())
         XCTAssertEqual(processor.totalPacketCount, 0)
         XCTAssertTrue(processor.primarySources(tileCount: 1).isEmpty)
-        XCTAssertTrue(processor.drainMissingSequences().isEmpty)
+        XCTAssertTrue(processor.missingSequencesDueForNACK(at: 1).isEmpty)
     }
 
     func testSequenceTrackingHandlesRollover() {
         var tracker = AppleRTPSequenceTracker()
-        tracker.observe(packet(sequence: UInt16.max, marker: false, payload: Data()))
-        tracker.observe(packet(sequence: 1, marker: false, payload: Data()))
-        XCTAssertEqual(tracker.drainMissingSequences(), [0x1122_3344: [0]])
+        tracker.observe(
+            packet(sequence: UInt16.max, marker: false, payload: Data()),
+            arrivalTime: 1
+        )
+        tracker.observe(
+            packet(sequence: 1, marker: false, payload: Data()),
+            arrivalTime: 1.01
+        )
+        XCTAssertEqual(
+            tracker.missingSequencesDueForNACK(at: 1),
+            [0x1122_3344: [0]]
+        )
     }
 
     func testBuildsIntervalReceptionReportAcrossSequenceRollover() throws {

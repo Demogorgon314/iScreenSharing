@@ -8,6 +8,12 @@ import VideoToolbox
 /// decompression entry points used by Screen Sharing.app. Keeping the symbols
 /// behind `dlopen` lets unsupported systems fall back to public VideoToolbox.
 final class AppleVCPDecompressionSession: @unchecked Sendable {
+    enum OutputDisposition: Equatable {
+        case pending
+        case frame
+        case failure(OSStatus)
+    }
+
     struct FrameMetadata: Sendable {
         let tileIndex: Int
         let tileOrder: UInt16
@@ -18,12 +24,18 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
     }
 
     typealias FrameHandler = @Sendable (FrameMetadata, CVPixelBuffer) -> Void
+    typealias FailureHandler = @Sendable (FrameMetadata, OSStatus) -> Void
 
     private final class CallbackContext: @unchecked Sendable {
         let frameHandler: FrameHandler
+        let failureHandler: FailureHandler
 
-        init(frameHandler: @escaping FrameHandler) {
+        init(
+            frameHandler: @escaping FrameHandler,
+            failureHandler: @escaping FailureHandler
+        ) {
             self.frameHandler = frameHandler
+            self.failureHandler = failureHandler
         }
     }
 
@@ -58,6 +70,7 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
         tileCount: Int,
         negotiationDetails: String,
         nativePixelFormat: OSType,
+        failureHandler: @escaping FailureHandler = { _, _ in },
         frameHandler: @escaping FrameHandler
     ) {
         guard tileCount > 1,
@@ -65,7 +78,10 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
               let functions = Self.functions else { return nil }
 
         self.functions = functions
-        callbackContext = CallbackContext(frameHandler: frameHandler)
+        callbackContext = CallbackContext(
+            frameHandler: frameHandler,
+            failureHandler: failureHandler
+        )
 
         let decoderSpecification = Self.decoderSpecification(
             tileCount: tileCount,
@@ -166,8 +182,38 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
         let callback = Unmanaged<CallbackContext>
             .fromOpaque(outputRefCon)
             .takeUnretainedValue()
-        guard status == noErr, let imageBuffer else { return }
-        callback.frameHandler(source.metadata, imageBuffer)
+        dispatchOutput(
+            metadata: source.metadata,
+            status: status,
+            imageBuffer: imageBuffer,
+            frameHandler: callback.frameHandler,
+            failureHandler: callback.failureHandler
+        )
+    }
+
+    static func dispatchOutput(
+        metadata: FrameMetadata,
+        status: OSStatus,
+        imageBuffer: CVPixelBuffer?,
+        frameHandler: FrameHandler,
+        failureHandler: FailureHandler
+    ) {
+        switch outputDisposition(status: status, hasImageBuffer: imageBuffer != nil) {
+        case .pending:
+            return
+        case .frame:
+            frameHandler(metadata, imageBuffer!)
+        case let .failure(status):
+            failureHandler(metadata, status)
+        }
+    }
+
+    static func outputDisposition(
+        status: OSStatus,
+        hasImageBuffer: Bool
+    ) -> OutputDisposition {
+        if status != noErr { return .failure(status) }
+        return hasImageBuffer ? .frame : .pending
     }
 
     private static func attachMetadata(

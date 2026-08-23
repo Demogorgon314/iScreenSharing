@@ -10,8 +10,7 @@ final class AppleHEVCDecodingOrderQueueTests: XCTestCase {
             accessUnit(source: 100, decodingOrderNumber: 10),
         ])
 
-        XCTAssertEqual(output.ready.map(\.decodingOrderNumber), [10, 11])
-        XCTAssertFalse(output.requiresRefresh)
+        XCTAssertEqual(output.map(\.decodingOrderNumber), [10, 11])
     }
 
     func testHoldsFutureAccessUnitAcrossBatchesUntilGapArrives() {
@@ -20,9 +19,9 @@ final class AppleHEVCDecodingOrderQueueTests: XCTestCase {
 
         XCTAssertTrue(queue.enqueue([
             accessUnit(source: 100, decodingOrderNumber: 12),
-        ]).ready.isEmpty)
+        ]).isEmpty)
         XCTAssertEqual(
-            queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 11)]).ready.map(\.decodingOrderNumber),
+            queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 11)]).map(\.decodingOrderNumber),
             [11, 12]
         )
     }
@@ -33,32 +32,32 @@ final class AppleHEVCDecodingOrderQueueTests: XCTestCase {
 
         XCTAssertTrue(queue.enqueue([
             accessUnit(source: 200, decodingOrderNumber: 1),
-        ]).ready.isEmpty)
+        ]).isEmpty)
         XCTAssertEqual(
-            queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 0)]).ready.map(\.decodingOrderNumber),
+            queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 0)]).map(\.decodingOrderNumber),
             [0, 1]
         )
     }
 
-    func testRequestsRefreshInsteadOfGrowingPastReorderLimit() {
+    func testSkipsUnrecoverableGapWithoutDiscardingBufferedAccessUnits() {
         var queue = AppleHEVCDecodingOrderQueue(maximumPendingCount: 2)
         _ = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 10)])
 
-        XCTAssertFalse(queue.enqueue([
+        XCTAssertTrue(queue.enqueue([
             accessUnit(source: 100, decodingOrderNumber: 12),
             accessUnit(source: 200, decodingOrderNumber: 13),
-        ]).requiresRefresh)
+        ]).isEmpty)
         let output = queue.enqueue([accessUnit(source: 100, decodingOrderNumber: 14)])
 
-        XCTAssertTrue(output.ready.isEmpty)
-        XCTAssertTrue(output.requiresRefresh)
+        XCTAssertEqual(output.map(\.decodingOrderNumber), [12, 13, 14])
+        XCTAssertTrue(queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 11)]).isEmpty)
     }
 
     func testUnitsWithoutDecodingOrderRemainDecodable() {
         var queue = AppleHEVCDecodingOrderQueue()
         let unit = accessUnit(source: 100, decodingOrderNumber: nil)
 
-        XCTAssertEqual(queue.enqueue([unit]).ready, [unit])
+        XCTAssertEqual(queue.enqueue([unit]), [unit])
     }
 
     func testResetStartsAnewSequenceAndDiscardsPendingUnits() {
@@ -69,8 +68,7 @@ final class AppleHEVCDecodingOrderQueueTests: XCTestCase {
         queue.reset()
         let output = queue.enqueue([accessUnit(source: 200, decodingOrderNumber: 40)])
 
-        XCTAssertEqual(output.ready.map(\.decodingOrderNumber), [40])
-        XCTAssertFalse(output.requiresRefresh)
+        XCTAssertEqual(output.map(\.decodingOrderNumber), [40])
     }
 
     private func accessUnit(source: UInt32, decodingOrderNumber: UInt16?) -> AppleHEVCAccessUnit {

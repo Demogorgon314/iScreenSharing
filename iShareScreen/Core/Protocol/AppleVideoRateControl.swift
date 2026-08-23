@@ -46,10 +46,53 @@ struct AppleVideoPacketObservation: Equatable, Sendable {
     let packetSize: Int
 }
 
+struct AppleVideoRateControlDiagnostics: Equatable, Sendable {
+    let candidateBandwidthMegabitsPerSecond: Double
+    let probeDurationMilliseconds: Double
+    let probeBytesAfterReference: UInt64
+    let timestampDelta: UInt32
+    let estimateState: String
+    let pendingSampleCount: Int
+}
+
+enum AppleVideoRateControlMode: Equatable, Sendable {
+    case estimated
+    case fixedLAN
+    case disabled
+
+    init(environmentValue: String?) {
+        switch environmentValue?.lowercased() {
+        case "fixed-lan": self = .fixedLAN
+        case "disabled": self = .disabled
+        default: self = .estimated
+        }
+    }
+
+    func apply(to info: AppleVideoRateControlInfo) -> AppleVideoRateControlInfo? {
+        switch self {
+        case .estimated:
+            return info
+        case .fixedLAN:
+            return AppleVideoRateControlInfo(
+                rtpTimestamp: info.rtpTimestamp,
+                estimatedBandwidthKilobitsPerSecond: 60_001,
+                burstyLoss: info.burstyLoss,
+                receivedPacketCount: info.receivedPacketCount,
+                feedbackDelayMilliseconds: info.feedbackDelayMilliseconds,
+                echoTimestamp: info.echoTimestamp,
+                oneWayReceiveDelay: 0
+            )
+        case .disabled:
+            return nil
+        }
+    }
+}
+
 struct AppleVideoRateControlEstimator: Sendable {
-    private enum EstimateState: Sendable {
+    private enum EstimateState: String, Sendable {
         case initial
         case stable
+        case insufficientProbeWindow
         case pendingUp
         case pendingDown
         case committed
@@ -63,9 +106,11 @@ struct AppleVideoRateControlEstimator: Sendable {
         var packetsAfterReference = 0
     }
 
-    private static let clockRate = 90_000.0
+    private static let defaultHighPerformanceTimestampRate: UInt32 = 24_000
     private static let maximumBandwidth = 60_000_000.0
     private static let minimumProbeBytes: UInt64 = 250
+    private static let minimumProbeDuration: TimeInterval = 0.008
+    private static let shortProbeConfirmationCount = 3
     private static let suddenChangeMargin = 200_000.0
     private static let suddenChangePercentage = 0.5
     private static let suddenChangeSamples = 3
@@ -76,6 +121,11 @@ struct AppleVideoRateControlEstimator: Sendable {
     private var pendingDirection = 0
     private var pendingBandwidth = 0.0
     private var pendingCount = 0
+    private var consecutiveShortProbeCount = 0
+    private var lastCandidateBandwidth = 0.0
+    private var lastProbeDuration = 0.0
+    private var lastProbeBytesAfterReference: UInt64 = 0
+    private var lastTimestampDelta: UInt32 = 0
 
     private var didReceiveVideo = false
     private var totalPacketsReceived: UInt32 = 0
@@ -91,6 +141,13 @@ struct AppleVideoRateControlEstimator: Sendable {
     private var shortDelay = 0.0
     private var longDelay = 0.0
     private var oneWayReceiveDelay = 0.0
+
+    private let timestampRate: Double
+
+    init(timestampRate: UInt32 = Self.defaultHighPerformanceTimestampRate) {
+        precondition(timestampRate > 0)
+        self.timestampRate = Double(timestampRate)
+    }
 
     mutating func observe(_ observation: AppleVideoPacketObservation) {
         didReceiveVideo = true
@@ -109,6 +166,17 @@ struct AppleVideoRateControlEstimator: Sendable {
             feedbackDelayMilliseconds: feedbackDelay(at: time),
             echoTimestamp: AppleVideoRateControlInfo.echoTimestamp(at: time),
             oneWayReceiveDelay: oneWayReceiveDelay
+        )
+    }
+
+    var diagnostics: AppleVideoRateControlDiagnostics {
+        AppleVideoRateControlDiagnostics(
+            candidateBandwidthMegabitsPerSecond: lastCandidateBandwidth / 1_000_000,
+            probeDurationMilliseconds: lastProbeDuration * 1_000,
+            probeBytesAfterReference: lastProbeBytesAfterReference,
+            timestampDelta: lastTimestampDelta,
+            estimateState: estimateState.rawValue,
+            pendingSampleCount: pendingCount
         )
     }
 
@@ -137,6 +205,7 @@ struct AppleVideoRateControlEstimator: Sendable {
         guard delta < 0x7fff_ffff else { return }
 
         self.previousTimestamp = observation.rtpTimestamp
+        lastTimestampDelta = delta
         lastAcceptedTimestamp = observation.rtpTimestamp
         lastAcceptedPacketCount = totalPacketsReceived
         lastAcceptedArrival = observation.arrivalTime
@@ -180,6 +249,18 @@ struct AppleVideoRateControlEstimator: Sendable {
             Self.maximumBandwidth,
             Double(group.bytesAfterReference) * 8 / duration
         )
+        lastCandidateBandwidth = candidate
+        lastProbeDuration = duration
+        lastProbeBytesAfterReference = group.bytesAfterReference
+        if duration < Self.minimumProbeDuration {
+            consecutiveShortProbeCount += 1
+            guard consecutiveShortProbeCount >= Self.shortProbeConfirmationCount else {
+                clearPendingEstimate(state: .insufficientProbeWindow)
+                return
+            }
+        } else {
+            consecutiveShortProbeCount = 0
+        }
         apply(candidate: candidate)
     }
 
@@ -230,7 +311,7 @@ struct AppleVideoRateControlEstimator: Sendable {
         if let previous = delayPreviousTimestamp,
            timestamp < previous,
            previous &- timestamp > 0x7fff_ffff {
-            delayWrapOffset &+= UInt64(UInt32.max)
+            delayWrapOffset &+= UInt64(UInt32.max) &+ 1
         }
         delayPreviousTimestamp = timestamp
         let unwrappedTimestamp = delayWrapOffset &+ UInt64(timestamp)
@@ -240,7 +321,7 @@ struct AppleVideoRateControlEstimator: Sendable {
             return
         }
 
-        let sendRelative = Double(unwrappedTimestamp &- firstUnwrappedTimestamp) / Self.clockRate
+        let sendRelative = Double(unwrappedTimestamp &- firstUnwrappedTimestamp) / timestampRate
         let receiveRelative = arrivalTime - firstDelayArrival
         let lag = receiveRelative - sendRelative
         shortDelay = 0.1 * lag + 0.9 * shortDelay

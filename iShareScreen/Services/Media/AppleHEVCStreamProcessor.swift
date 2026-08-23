@@ -111,8 +111,12 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         )
     }
 
-    func drainMissingSequences() -> [UInt32: [UInt16]] {
-        lock.withStreamLock { sequenceTracker.drainMissingSequences() }
+    func missingSequencesDueForNACK(at time: TimeInterval) -> [UInt32: [UInt16]] {
+        lock.withStreamLock { sequenceTracker.missingSequencesDueForNACK(at: time) }
+    }
+
+    func markNACKsSent(_ sequences: [UInt32: [UInt16]], at time: TimeInterval) {
+        lock.withStreamLock { sequenceTracker.markNACKsSent(sequences, at: time) }
     }
 
     func receptionReport(for source: UInt32) -> AppleRTPReceptionReport? {
@@ -121,6 +125,10 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
 
     func rateControlFeedback(at time: TimeInterval) -> AppleVideoRateControlInfo? {
         lock.withStreamLock { rateControlEstimator.feedback(at: time) }
+    }
+
+    func rateControlDiagnostics() -> AppleVideoRateControlDiagnostics {
+        lock.withStreamLock { rateControlEstimator.diagnostics }
     }
 
     func currentParameterSets() -> AppleHEVCParameterSets {
@@ -221,6 +229,11 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
 }
 
 struct AppleRTPSequenceTracker: Sendable {
+    private struct MissingPacket: Sendable {
+        let firstDetectedAt: TimeInterval
+        var lastNACKAt: TimeInterval?
+    }
+
     private struct ReceptionState: Sendable {
         let baseExtendedSequence: UInt32
         var maximumExtendedSequence: UInt32
@@ -232,9 +245,12 @@ struct AppleRTPSequenceTracker: Sendable {
     }
 
     private static let clockRate = 90_000.0
+    private static let recentMissingPacketLimit = 17
+    private static let nackRetryInterval = 0.150
+    private static let missingPacketLifetime = 1.0
 
     private var maximumSequence = [UInt32: UInt16]()
-    private var missingSequences = [UInt32: Set<UInt16>]()
+    private var missingPackets = [UInt32: [UInt16: MissingPacket]]()
     private var receptionStates = [UInt32: ReceptionState]()
 
     mutating func observe(
@@ -251,20 +267,63 @@ struct AppleRTPSequenceTracker: Sendable {
         let difference = sequence &- previous
         if difference == 0 { return }
         if difference > 0x8000 {
-            missingSequences[source]?.remove(sequence)
+            missingPackets[source]?.removeValue(forKey: sequence)
+            if missingPackets[source]?.isEmpty == true {
+                missingPackets.removeValue(forKey: source)
+            }
             return
         }
         if difference > 1 {
-            for offset in 1..<min(Int(difference), 32) {
-                missingSequences[source, default: []].insert(previous &+ UInt16(offset))
+            let differenceCount = Int(difference)
+            let trackedCount = min(differenceCount - 1, Self.recentMissingPacketLimit)
+            let firstOffset = differenceCount - trackedCount
+            for offset in firstOffset..<differenceCount {
+                let missingSequence = previous &+ UInt16(offset)
+                if missingPackets[source]?[missingSequence] == nil {
+                    missingPackets[source, default: [:]][missingSequence] = MissingPacket(
+                        firstDetectedAt: arrivalTime,
+                        lastNACKAt: nil
+                    )
+                }
             }
         }
         maximumSequence[source] = sequence
     }
 
-    mutating func drainMissingSequences() -> [UInt32: [UInt16]] {
-        defer { missingSequences.removeAll(keepingCapacity: true) }
-        return missingSequences.mapValues { $0.sorted() }
+    mutating func missingSequencesDueForNACK(at time: TimeInterval) -> [UInt32: [UInt16]] {
+        var due = [UInt32: [UInt16]]()
+        for source in Array(missingPackets.keys) {
+            guard var packets = missingPackets[source] else { continue }
+            packets = packets.filter {
+                time - $0.value.firstDetectedAt <= Self.missingPacketLifetime
+            }
+            if packets.isEmpty {
+                missingPackets.removeValue(forKey: source)
+                continue
+            }
+            missingPackets[source] = packets
+            let sequences = packets.compactMap { sequence, packet -> UInt16? in
+                guard let lastNACKAt = packet.lastNACKAt else { return sequence }
+                return time - lastNACKAt > Self.nackRetryInterval ? sequence : nil
+            }.sorted()
+            if !sequences.isEmpty {
+                due[source] = sequences
+            }
+        }
+        return due
+    }
+
+    mutating func markNACKsSent(
+        _ sequencesBySource: [UInt32: [UInt16]],
+        at time: TimeInterval
+    ) {
+        for (source, sequences) in sequencesBySource {
+            guard var packets = missingPackets[source] else { continue }
+            for sequence in sequences where packets[sequence] != nil {
+                packets[sequence]?.lastNACKAt = time
+            }
+            missingPackets[source] = packets
+        }
     }
 
     mutating func receptionReport(for source: UInt32) -> AppleRTPReceptionReport? {

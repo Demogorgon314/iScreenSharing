@@ -24,7 +24,14 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         let pixelBuffer: CVPixelBuffer
     }
 
+    struct DecodeFailure: Equatable, Sendable {
+        let tileIndex: Int
+        let rtpTimestamp: UInt32
+        let status: OSStatus
+    }
+
     typealias FrameHandler = @Sendable (DecodedFrame) -> Void
+    typealias FailureHandler = @Sendable (DecodeFailure) -> Void
     typealias BackendHandler = @Sendable (Backend) -> Void
 
     static let nativePixelFormat = OSType(0x3434_3466) // '444f' (NV24)
@@ -60,6 +67,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     private let formatDescription: CMVideoFormatDescription
     private let tileCount: Int
     private let frameHandler: FrameHandler
+    private let failureHandler: FailureHandler
     private let backendHandler: BackendHandler
     private var session: Session?
     private var nextVideoProcessingTileOrder: UInt16 = 0
@@ -69,6 +77,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         parameterSets: AppleHEVCParameterSets,
         tileCount: Int = 1,
         backendHandler: @escaping BackendHandler = { _ in },
+        failureHandler: @escaping FailureHandler = { _ in },
         frameHandler: @escaping FrameHandler
     ) throws {
         guard parameterSets.isComplete else { throw AppleHEVCDecoderError.incompleteParameterSets }
@@ -76,6 +85,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         formatDescription = try Self.makeFormatDescription(parameterSets)
         self.tileCount = tileCount
         self.backendHandler = backendHandler
+        self.failureHandler = failureHandler
         self.frameHandler = frameHandler
         let session = try makeSession(allowsVideoProcessing: true)
         self.session = session
@@ -136,8 +146,17 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                     sampleBuffer: sampleBuffer,
                     flags: Self.decodeFlags,
                     infoFlagsOut: &decodeInfo
-                ) { [frameHandler] status, _, imageBuffer, _, _ in
-                    guard status == noErr, let imageBuffer else { return }
+                ) { [frameHandler, failureHandler] status, _, imageBuffer, _, _ in
+                    guard status == noErr, let imageBuffer else {
+                        if status != noErr {
+                            failureHandler(DecodeFailure(
+                                tileIndex: tileIndex,
+                                rtpTimestamp: rtpTimestamp,
+                                status: status
+                            ))
+                        }
+                        return
+                    }
                     frameHandler(DecodedFrame(
                         region: .tile(tileIndex),
                         decodingOrderNumber: decodingOrderNumber,
@@ -232,6 +251,13 @@ final class AppleHEVCDecoder: @unchecked Sendable {
             tileCount: tileCount,
             negotiationDetails: AppleMediaOffer.videoDecoderNegotiationDetails,
             nativePixelFormat: Self.nativePixelFormat,
+            failureHandler: { [weak self] metadata, status in
+                self?.failureHandler(DecodeFailure(
+                    tileIndex: metadata.tileIndex,
+                    rtpTimestamp: metadata.rtpTimestamp,
+                    status: status
+                ))
+            },
             frameHandler: { [weak self] metadata, pixelBuffer in
                 self?.publishFullCanvas(pixelBuffer, metadata: metadata)
             }

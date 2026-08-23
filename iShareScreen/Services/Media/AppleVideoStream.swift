@@ -34,6 +34,8 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private let mediaStreamIndex: Int
     private let processor: AppleHEVCStreamProcessor
     private let feedback: AppleVideoFeedbackController
+    private let rateControlMode: AppleVideoRateControlMode
+    private let qualityDiagnosticsEnabled: Bool
     private let queue = DispatchQueue(label: "com.isharescreen.video-stream", qos: .userInteractive)
     private let lifecycleLock = NSLock()
     private let countLock = NSLock()
@@ -71,6 +73,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         frames = AppleVideoFrameStore()
         performance = AppleVideoPerformanceMonitor(tileCount: video.canvas.tileCount)
         processor = try AppleHEVCStreamProcessor(keyBlob: video.serverKey)
+        let environment = ProcessInfo.processInfo.environment
+        rateControlMode = AppleVideoRateControlMode(
+            environmentValue: environment["ISHARESCREEN_RCTL_MODE"]
+        )
+        qualityDiagnosticsEnabled = environment["ISHARESCREEN_QUALITY_DIAGNOSTICS"] == "1"
         feedback = try AppleVideoFeedbackController(
             sender: AppleVideoFeedbackSender(receiver: receiver, mediaStreamIndex: video.mediaStreamIndex),
             keyBlob: video.viewerKey,
@@ -262,6 +269,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 tileCount: canvas.tileCount,
                 backendHandler: { [weak performance] backend in
                     performance?.setDecoderBackend(backend)
+                },
+                failureHandler: { [weak self] failure in
+                    self?.queue.async { [weak self] in
+                        self?.handleDecodeFailure(failure)
+                    }
                 }
             ) { [weak self] decodedFrame in
                 self?.performance.recordDecode(duration: decodedFrame.decodeDuration)
@@ -365,8 +377,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func feed(_ accessUnits: [AppleHEVCAccessUnit]) {
         let selectedUnits = accessUnits.filter { sourceToTile[$0.synchronizationSource] != nil }
-        let output = decodingOrderQueue.enqueue(selectedUnits)
-        for accessUnit in output.ready {
+        for accessUnit in decodingOrderQueue.enqueue(selectedUnits) {
             guard let tileIndex = sourceToTile[accessUnit.synchronizationSource] else { continue }
             guard accessUnit.nalUnits.contains(where: Self.isVideoSlice) else { continue }
             let presentationTime = playoutClock.presentationTime(
@@ -381,7 +392,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 presentationTime: presentationTime
             )
         }
-        if output.requiresRefresh { recoverDecodingOrder() }
     }
 
     private static func isVideoSlice(_ nalUnit: Data) -> Bool {
@@ -392,15 +402,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private func resetDecodingOrder() {
         decodingOrderQueue.reset()
         playoutClock.reset()
-    }
-
-    private func recoverDecodingOrder() {
-        do {
-            try decoder?.restart()
-            requestKeyFramesForAllTiles()
-        } catch {
-            fail(error)
-        }
     }
 
     private func decode(
@@ -425,11 +426,22 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
     }
 
+    private func handleDecodeFailure(_ failure: AppleHEVCDecoder.DecodeFailure) {
+        guard !isClosed else { return }
+        Self.logger.debug(
+            "Asynchronous video decode failed for tile \(failure.tileIndex, privacy: .public), status \(failure.status, privacy: .public); requesting refresh"
+        )
+        requestKeyFrame(for: failure.tileIndex)
+    }
+
     private func sendPendingNACKs() {
-        let missingSequences = processor.drainMissingSequences()
-        performance.recordNACK(count: missingSequences.values.reduce(0) { $0 + $1.count })
+        let currentTime = ProcessInfo.processInfo.systemUptime
+        let missingSequences = processor.missingSequencesDueForNACK(at: currentTime)
+        guard !missingSequences.isEmpty else { return }
         do {
             try feedback.sendNACKs(missingSequences)
+            processor.markNACKsSent(missingSequences, at: currentTime)
+            performance.recordNACK(count: missingSequences.values.reduce(0) { $0 + $1.count })
         } catch {
             Self.logger.debug("NACK send failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -462,7 +474,8 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     private func sendRateControlFeedbackIfNeeded() {
         let currentTime = ProcessInfo.processInfo.systemUptime
-        guard let info = processor.rateControlFeedback(at: currentTime) else { return }
+        guard let estimatedInfo = processor.rateControlFeedback(at: currentTime),
+              let info = rateControlMode.apply(to: estimatedInfo) else { return }
         let deadline = nextRateControlFeedbackTime ?? currentTime
         guard currentTime >= deadline else { return }
         let elapsedIntervals = floor(
@@ -472,6 +485,12 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             + (elapsedIntervals + 1) * Self.rateControlFeedbackInterval
         do {
             try feedback.sendRateControl(mediaControlInfo: info.serialized())
+            if qualityDiagnosticsEnabled {
+                let diagnostics = processor.rateControlDiagnostics()
+                Self.logger.notice(
+                    "[DEBUG-QUALITY-5C4E] mode=\(String(describing: self.rateControlMode), privacy: .public) wireBWE=\(Double(info.estimatedBandwidthKilobitsPerSecond) / 1_000, format: .fixed(precision: 3))Mbps estimatedBWE=\(Double(estimatedInfo.estimatedBandwidthKilobitsPerSecond) / 1_000, format: .fixed(precision: 3))Mbps candidate=\(diagnostics.candidateBandwidthMegabitsPerSecond, format: .fixed(precision: 3))Mbps probe=\(diagnostics.probeDurationMilliseconds, format: .fixed(precision: 3))ms/\(diagnostics.probeBytesAfterReference)B state=\(diagnostics.estimateState, privacy: .public) pending=\(diagnostics.pendingSampleCount) rtpDelta=\(diagnostics.timestampDelta) age=\(info.feedbackDelayMilliseconds)ms owrd=\(info.oneWayReceiveDelay * 1_000, format: .fixed(precision: 3))ms"
+                )
+            }
             performance.recordRateControlFeedback(
                 estimatedBandwidthKilobitsPerSecond:
                     info.estimatedBandwidthKilobitsPerSecond

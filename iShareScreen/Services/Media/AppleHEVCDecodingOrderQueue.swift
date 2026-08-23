@@ -1,11 +1,6 @@
 import Foundation
 
 struct AppleHEVCDecodingOrderQueue {
-    struct Output {
-        let ready: [AppleHEVCAccessUnit]
-        let requiresRefresh: Bool
-    }
-
     private let maximumPendingCount: Int
     private var expectedDecodingOrderNumber: UInt16?
     private var pending = [UInt16: AppleHEVCAccessUnit]()
@@ -15,7 +10,7 @@ struct AppleHEVCDecodingOrderQueue {
         self.maximumPendingCount = maximumPendingCount
     }
 
-    mutating func enqueue(_ accessUnits: [AppleHEVCAccessUnit]) -> Output {
+    mutating func enqueue(_ accessUnits: [AppleHEVCAccessUnit]) -> [AppleHEVCAccessUnit] {
         var ready = accessUnits.filter { $0.decodingOrderNumber == nil }
         let orderedUnits = accessUnits.filter { $0.decodingOrderNumber != nil }
 
@@ -28,11 +23,15 @@ struct AppleHEVCDecodingOrderQueue {
         }
 
         ready.append(contentsOf: drainReady())
-        guard pending.count <= maximumPendingCount else {
-            reset()
-            return Output(ready: ready.filter { $0.decodingOrderNumber == nil }, requiresRefresh: true)
+        if pending.count > maximumPendingCount,
+           let expectedDecodingOrderNumber,
+           let nextAvailable = pending.keys.min(by: {
+               $0 &- expectedDecodingOrderNumber < $1 &- expectedDecodingOrderNumber
+           }) {
+            self.expectedDecodingOrderNumber = nextAvailable
+            ready.append(contentsOf: drainReady())
         }
-        return Output(ready: ready, requiresRefresh: false)
+        return ready
     }
 
     mutating func reset() {

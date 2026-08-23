@@ -1,4 +1,5 @@
 import CoreMedia
+import VideoToolbox
 import XCTest
 @testable import iShareScreen
 
@@ -102,6 +103,51 @@ final class AppleHEVCDecoderTests: XCTestCase {
         nextOrder = .max
         XCTAssertEqual(AppleHEVCDecoder.takeVideoProcessingTileOrder(from: &nextOrder), .max)
         XCTAssertEqual(nextOrder, 0)
+    }
+
+    func testVideoProcessingReportsAsynchronousDecodeFailure() {
+        let metadata = AppleVCPDecompressionSession.FrameMetadata(
+            tileIndex: 2,
+            tileOrder: 10,
+            decodingOrderNumber: 20,
+            rtpTimestamp: 30,
+            presentationTime: 40,
+            decodeStartedAt: 39
+        )
+        var receivedMetadata: AppleVCPDecompressionSession.FrameMetadata?
+        var receivedStatus: OSStatus?
+
+        AppleVCPDecompressionSession.dispatchOutput(
+            metadata: metadata,
+            status: kVTVideoDecoderReferenceMissingErr,
+            imageBuffer: nil,
+            frameHandler: { _, _ in XCTFail("Decode failure must not publish a frame") },
+            failureHandler: {
+                receivedMetadata = $0
+                receivedStatus = $1
+            }
+        )
+
+        XCTAssertEqual(receivedMetadata?.tileIndex, 2)
+        XCTAssertEqual(receivedMetadata?.rtpTimestamp, 30)
+        XCTAssertEqual(receivedStatus, kVTVideoDecoderReferenceMissingErr)
+        XCTAssertEqual(
+            AppleVCPDecompressionSession.outputDisposition(
+                status: kVTVideoDecoderReferenceMissingErr,
+                hasImageBuffer: false
+            ),
+            .failure(kVTVideoDecoderReferenceMissingErr)
+        )
+    }
+
+    func testVideoProcessingKeepsIncompleteTileAssemblyPending() {
+        XCTAssertEqual(
+            AppleVCPDecompressionSession.outputDisposition(
+                status: noErr,
+                hasImageBuffer: false
+            ),
+            .pending
+        )
     }
 
     func testBuildsNativeCompressedSampleTimingFromPlayoutHostTime() {
