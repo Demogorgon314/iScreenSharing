@@ -200,6 +200,12 @@ final class AuthenticationCoordinator: ObservableObject {
                         },
                         receiveKeyboardInputSource: { state in
                             await keyboardInputSource.receive(state)
+                        },
+                        receiveDeviceInfo: {
+                            [connectionStore = self.connectionStore, endpoint = self.endpoint] info in
+                            await MainActor.run {
+                                connectionStore.record(endpoint, deviceInfo: info)
+                            }
                         }
                     )
                     session.install(

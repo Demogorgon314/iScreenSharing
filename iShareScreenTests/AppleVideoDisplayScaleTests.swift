@@ -11,6 +11,19 @@ final class AppleVideoDisplayScaleTests: XCTestCase {
         XCTAssertTrue(scale.scalesToFit)
     }
 
+    func testSetsScaleToFitIdempotently() {
+        var scale = AppleVideoDisplayScale(fixedScale: 1.5)
+
+        scale.setScalesToFit(true)
+        XCTAssertTrue(scale.scalesToFit)
+
+        scale.setScalesToFit(true)
+        XCTAssertTrue(scale.scalesToFit)
+
+        scale.setScalesToFit(false)
+        XCTAssertEqual(scale.fixedScale, 1)
+    }
+
     func testZoomStartsAtActualSizeAndClampsToBounds() {
         var scale = AppleVideoDisplayScale()
         scale.zoomIn()

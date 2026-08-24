@@ -69,7 +69,8 @@ final class SessionWindowCoordinatorTests: XCTestCase {
 
         XCTAssertFalse(window.toolbar?.isVisible == true)
         XCTAssertEqual(window.toolbar?.displayMode, .iconAndLabel)
-        XCTAssertFalse(window.toolbar?.allowsDisplayModeCustomization == true)
+        XCTAssertTrue(window.toolbar?.allowsDisplayModeCustomization == true)
+        XCTAssertTrue(window.toolbar?.autosavesConfiguration == true)
 
         SessionToolbarPreferences.apply(
             to: window,
@@ -89,6 +90,36 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         coordinator.configureSessionWindowChrome(window)
 
         XCTAssertEqual(window.tabbingMode, .disallowed)
+    }
+
+    func testMapsAppKitToolbarDisplayModesToSupportedPreferences() {
+        XCTAssertEqual(
+            SessionToolbarDisplayMode(appKitDisplayMode: .iconOnly),
+            .iconOnly
+        )
+        XCTAssertEqual(
+            SessionToolbarDisplayMode(appKitDisplayMode: .iconAndLabel),
+            .iconAndText
+        )
+        XCTAssertNil(SessionToolbarDisplayMode(appKitDisplayMode: .labelOnly))
+    }
+
+    func testPersistsFirstDisplayModeChosenFromToolbarContextMenu() {
+        let suiteName = "SessionWindowCoordinatorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let coordinator = SessionWindowCoordinator(
+            toolbarPreferencesDefaults: defaults
+        )
+        let window = makeWindow(toolbarIsVisible: true)
+
+        coordinator.configureSessionWindowChrome(window)
+        window.toolbar?.displayMode = .iconAndLabel
+
+        XCTAssertEqual(
+            SessionToolbarPreferences.storedDisplayMode(in: defaults),
+            .iconAndText
+        )
     }
 
     private func makeWindow(toolbarIsVisible: Bool) -> NSWindow {

@@ -25,4 +25,34 @@ final class BonjourBrowserTests: XCTestCase {
             )
         )
     }
+
+    func testParsesDeviceInfoTXTRecord() {
+        let data = txtRecord([
+            "model=Mac16,10",
+            "osxvers=25",
+            "icolor=1",
+            "unknown=value",
+        ])
+
+        XCTAssertEqual(
+            BonjourDeviceInfoTXT.parse(data),
+            AppleRemoteDeviceInfo(modelIdentifier: "Mac16,10", deviceColor: "1")
+        )
+    }
+
+    func testRejectsMalformedOrMissingDeviceModelTXTRecord() {
+        XCTAssertNil(BonjourDeviceInfoTXT.parse(txtRecord(["icolor=1"])))
+        XCTAssertNil(BonjourDeviceInfoTXT.parse(Data([5, 65, 66])))
+        XCTAssertNil(BonjourDeviceInfoTXT.parse(Data([2, 0xff, 0xff])))
+    }
+
+    private func txtRecord(_ entries: [String]) -> Data {
+        var data = Data()
+        for entry in entries {
+            let bytes = Data(entry.utf8)
+            data.append(UInt8(bytes.count))
+            data.append(bytes)
+        }
+        return data
+    }
 }

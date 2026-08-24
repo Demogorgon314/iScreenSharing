@@ -133,6 +133,58 @@ final class AppleFramebufferUpdateTests: XCTestCase {
         )
     }
 
+    func testParsesVersionTwoDeviceInfoEncoding() throws {
+        var payload = Data()
+        payload.appendUInt16BE(2)
+        payload.appendUInt32BE(1)
+        payload.append(contentsOf: [0x33, 0x22, 0x11, 0])
+        payload.appendUInt16BE(9)
+        payload.appendUInt16BE(2)
+        payload.appendUInt16BE(2)
+        payload.append(Data("Mac16,10\0".utf8))
+        payload.append(Data("0\0".utf8))
+        payload.append(Data("1\0".utf8))
+        payload.appendUInt32BE(7)
+
+        var message = Data([0, 0, 0, 1])
+        message.append(rectangleHeader(encoding: 1110))
+        message.appendUInt16BE(UInt16(payload.count))
+        message.append(payload)
+
+        XCTAssertEqual(
+            AppleFramebufferUpdate.contents(from: message).deviceInfos,
+            [AppleRemoteDeviceInfo(
+                modelIdentifier: "Mac16,10",
+                deviceColor: "0",
+                enclosureColor: "1",
+                enclosureRGBColorComponents: 0x0011_2233,
+                housingColor: 7,
+                flags: 1
+            )]
+        )
+    }
+
+    func testRejectsMalformedDeviceInfoEncoding() {
+        var missingTerminator = Data(repeating: 0, count: 16)
+        missingTerminator.writeUInt16BE(2, at: 0)
+        missingTerminator.writeUInt16BE(3, at: 10)
+        missingTerminator.writeUInt16BE(1, at: 12)
+        missingTerminator.writeUInt16BE(1, at: 14)
+        missingTerminator.append(Data("Mac".utf8))
+        missingTerminator.append(contentsOf: [0, 0, 0, 0, 0, 0])
+
+        var message = Data([0, 0, 0, 1])
+        message.append(rectangleHeader(encoding: 1110))
+        message.appendUInt16BE(UInt16(missingTerminator.count))
+        message.append(missingTerminator)
+
+        XCTAssertTrue(AppleFramebufferUpdate.contents(from: message).deviceInfos.isEmpty)
+
+        var truncated = message
+        truncated.removeLast(2)
+        XCTAssertTrue(AppleFramebufferUpdate.contents(from: truncated).deviceInfos.isEmpty)
+    }
+
     private func rectangleHeader(encoding: Int32) -> Data {
         var data = Data(repeating: 0, count: 8)
         data.appendInt32BE(encoding)

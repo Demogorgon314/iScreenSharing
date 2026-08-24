@@ -17,6 +17,11 @@ struct AppleVideoDisplayScale: Equatable {
         fixedScale = scalesToFit ? 1 : nil
     }
 
+    mutating func setScalesToFit(_ scalesToFit: Bool) {
+        guard self.scalesToFit != scalesToFit else { return }
+        toggleScaling()
+    }
+
     mutating func actualSize() {
         fixedScale = 1
     }

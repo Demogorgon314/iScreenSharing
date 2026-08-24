@@ -10,6 +10,7 @@ final class AppleControlMessageService: @unchecked Sendable {
     private let receiveCursorUpdate: @Sendable (AppleCursorUpdate) async -> Void
     private let receiveVendorKeySymbols: @Sendable (Set<UInt32>) async -> Void
     private let receiveKeyboardInputSource: @Sendable (AppleKeyboardInputSourceState) async -> Void
+    private let receiveDeviceInfo: @Sendable (AppleRemoteDeviceInfo) async -> Void
     private let countLock = NSLock()
     private var task: Task<Void, Never>?
     private var messageCount = 0
@@ -23,7 +24,8 @@ final class AppleControlMessageService: @unchecked Sendable {
         receiveMediaCanvas: @escaping @Sendable (AppleCanvas) async -> Void = { _ in },
         receiveCursorUpdate: @escaping @Sendable (AppleCursorUpdate) async -> Void = { _ in },
         receiveVendorKeySymbols: @escaping @Sendable (Set<UInt32>) async -> Void = { _ in },
-        receiveKeyboardInputSource: @escaping @Sendable (AppleKeyboardInputSourceState) async -> Void = { _ in }
+        receiveKeyboardInputSource: @escaping @Sendable (AppleKeyboardInputSourceState) async -> Void = { _ in },
+        receiveDeviceInfo: @escaping @Sendable (AppleRemoteDeviceInfo) async -> Void = { _ in }
     ) {
         self.session = session
         self.input = input
@@ -34,6 +36,7 @@ final class AppleControlMessageService: @unchecked Sendable {
         self.receiveCursorUpdate = receiveCursorUpdate
         self.receiveVendorKeySymbols = receiveVendorKeySymbols
         self.receiveKeyboardInputSource = receiveKeyboardInputSource
+        self.receiveDeviceInfo = receiveDeviceInfo
     }
 
     var receivedMessageCount: Int {
@@ -108,6 +111,9 @@ final class AppleControlMessageService: @unchecked Sendable {
             }
             for state in contents.keyboardInputSources {
                 await receiveKeyboardInputSource(state)
+            }
+            for info in contents.deviceInfos {
+                await receiveDeviceInfo(info)
             }
             return
         }

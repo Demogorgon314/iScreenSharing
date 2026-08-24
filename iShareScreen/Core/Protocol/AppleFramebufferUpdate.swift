@@ -6,6 +6,7 @@ enum AppleFramebufferUpdate {
         let cursorUpdates: [AppleCursorUpdate]
         let vendorKeySymbols: [Set<UInt32>]
         let keyboardInputSources: [AppleKeyboardInputSourceState]
+        let deviceInfos: [AppleRemoteDeviceInfo]
     }
 
     private static let lengthPrefixedEncodings: Set<Int32> = [
@@ -26,19 +27,22 @@ enum AppleFramebufferUpdate {
         var cursors = [AppleCursorUpdate]()
         var vendorKeySymbols = [Set<UInt32>]()
         var keyboardInputSources = [AppleKeyboardInputSourceState]()
+        var deviceInfos = [AppleRemoteDeviceInfo]()
         for event in events(from: message) {
             switch event {
             case .displayLayout(let layout): layouts.append(layout)
             case .cursor(let update): cursors.append(update)
             case .vendorKeySymbols(let symbols): vendorKeySymbols.append(symbols)
             case .keyboardInputSource(let state): keyboardInputSources.append(state)
+            case .deviceInfo(let info): deviceInfos.append(info)
             }
         }
         return Contents(
             displayLayouts: layouts,
             cursorUpdates: cursors,
             vendorKeySymbols: vendorKeySymbols,
-            keyboardInputSources: keyboardInputSources
+            keyboardInputSources: keyboardInputSources,
+            deviceInfos: deviceInfos
         )
     }
 
@@ -100,6 +104,11 @@ enum AppleFramebufferUpdate {
                           from: message.subdata(in: payloadStart..<payloadEnd)
                       ) {
                 events.append(.keyboardInputSource(state))
+            } else if encoding == 1110,
+                      let info = deviceInfo(
+                          from: message.subdata(in: payloadStart..<payloadEnd)
+                      ) {
+                events.append(.deviceInfo(info))
             }
             offset = payloadEnd
         }
@@ -112,6 +121,67 @@ enum AppleFramebufferUpdate {
               let count = try? Int(payload.uint16BE(at: 2)),
               count <= (payload.count - 4) / 4 else { return nil }
         return Set((0..<count).compactMap { try? payload.uint32BE(at: 4 + $0 * 4) })
+    }
+
+    private static func deviceInfo(from payload: Data) -> AppleRemoteDeviceInfo? {
+        guard payload.count >= 16,
+              let version = try? payload.uint16BE(at: 0),
+              let flags = try? payload.uint32BE(at: 2),
+              let modelLength = try? Int(payload.uint16BE(at: 10)),
+              let deviceColorLength = try? Int(payload.uint16BE(at: 12)),
+              let enclosureColorLength = try? Int(payload.uint16BE(at: 14)),
+              modelLength > 0,
+              deviceColorLength > 0,
+              enclosureColorLength > 0 else { return nil }
+
+        let stringBytes = modelLength + deviceColorLength + enclosureColorLength
+        let requiredSize = 16 + stringBytes + (version >= 2 ? 4 : 0)
+        guard requiredSize <= payload.count else { return nil }
+
+        var offset = 16
+        guard let modelIdentifier = nulTerminatedString(
+            in: payload,
+            at: &offset,
+            length: modelLength
+        ),
+        let deviceColor = nulTerminatedString(
+            in: payload,
+            at: &offset,
+            length: deviceColorLength
+        ),
+        let enclosureColor = nulTerminatedString(
+            in: payload,
+            at: &offset,
+            length: enclosureColorLength
+        ),
+        !modelIdentifier.isEmpty else { return nil }
+
+        let rgb = UInt32(payload[6])
+            | (UInt32(payload[7]) << 8)
+            | (UInt32(payload[8]) << 16)
+            | (UInt32(payload[9]) << 24)
+        let housingColor = version >= 2 ? try? payload.uint32BE(at: offset) : nil
+        return AppleRemoteDeviceInfo(
+            modelIdentifier: modelIdentifier,
+            deviceColor: deviceColor,
+            enclosureColor: enclosureColor,
+            enclosureRGBColorComponents: rgb == 0 ? nil : rgb,
+            housingColor: housingColor.flatMap { $0 == 0 ? nil : $0 },
+            flags: flags
+        )
+    }
+
+    private static func nulTerminatedString(
+        in data: Data,
+        at offset: inout Int,
+        length: Int
+    ) -> String? {
+        guard length > 0, offset <= data.count - length else { return nil }
+        let bytes = data[offset..<(offset + length)]
+        offset += length
+        guard bytes.last == 0,
+              !bytes.dropLast().contains(0) else { return nil }
+        return String(data: bytes.dropLast(), encoding: .utf8)
     }
 
     private static func cursorImage(
@@ -153,5 +223,6 @@ enum AppleFramebufferUpdate {
         case cursor(AppleCursorUpdate)
         case vendorKeySymbols(Set<UInt32>)
         case keyboardInputSource(AppleKeyboardInputSourceState)
+        case deviceInfo(AppleRemoteDeviceInfo)
     }
 }

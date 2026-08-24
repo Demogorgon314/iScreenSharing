@@ -39,6 +39,37 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(restored.recentConnections, store.recentConnections)
     }
 
+    func testPersistsDeviceInfoAndKeepsItWhenConnectionIsRecordedAgain() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let info = AppleRemoteDeviceInfo(
+            modelIdentifier: "Mac16,10",
+            deviceColor: "0",
+            flags: 1
+        )
+        let store = ConnectionStore(defaults: defaults)
+
+        store.record(endpoint, deviceInfo: info, at: Date(timeIntervalSince1970: 100))
+        store.record(endpoint, preferredUsername: "editor", at: Date(timeIntervalSince1970: 200))
+
+        XCTAssertEqual(store.connection(for: endpoint)?.deviceInfo, info)
+        XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: endpoint)?.deviceInfo, info)
+    }
+
+    func testUpdatesDeviceInfoOnlyForExistingConnections() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let unknownEndpoint = try ConnectionEndpoint("unknown.local")
+        let info = AppleRemoteDeviceInfo(modelIdentifier: "Mac15,6", deviceColor: "1")
+        let store = ConnectionStore(defaults: defaults)
+        store.record(endpoint)
+
+        store.updateDeviceInfo(info, for: endpoint)
+        store.updateDeviceInfo(info, for: unknownEndpoint)
+
+        XCTAssertEqual(store.connection(for: endpoint)?.deviceInfo, info)
+        XCTAssertNil(store.connection(for: unknownEndpoint))
+        XCTAssertEqual(store.connections.count, 1)
+    }
+
     func testDeleteRemovesPersistedConnection() throws {
         let store = ConnectionStore(defaults: defaults)
         store.record(try ConnectionEndpoint("example.local"))
@@ -146,6 +177,7 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(connection.preferredUsername, "")
         XCTAssertEqual(connection.sharingType, .highPerformance)
         XCTAssertEqual(connection.virtualDisplayCount, .one)
+        XCTAssertNil(connection.deviceInfo)
     }
 }
 

@@ -48,7 +48,7 @@ struct ConnectionsLibraryView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $sidebarSelection) {
-                Label("All Connections", systemImage: "rectangle.on.rectangle")
+                Label("All Connections", systemImage: "display.2")
                     .tag(SidebarItem.allConnections)
                 Label("Network", systemImage: "network")
                     .tag(SidebarItem.network)
@@ -113,6 +113,14 @@ struct ConnectionsLibraryView: View {
         .onOpenURL(perform: openConnection)
         .task(id: discoveryAttempt) {
             await discovery.browse()
+        }
+        .onChange(of: discovery.state) { _, state in
+            guard case .results(let services) = state else { return }
+            for service in services {
+                if let info = service.deviceInfo {
+                    store.updateDeviceInfo(info, for: service.endpoint)
+                }
+            }
         }
         .installsConnectionMenuTitle()
         .sheet(item: $editingConnection) { connection in
@@ -194,24 +202,27 @@ struct ConnectionsLibraryView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .results(let endpoints) where endpoints.isEmpty:
+            case .results(let services) where services.isEmpty:
                 ContentUnavailableView(
                     "No Macs Found",
                     systemImage: "network.slash",
                     description: Text("Macs advertising Screen Sharing on your local network will appear here.")
                 )
-            case .results(let endpoints):
-                List(endpoints, id: \.self) { endpoint in
-                    NetworkConnectionRow(endpoint: endpoint)
-                        .contentShape(Rectangle())
-                        .onTapGesture(count: 2) {
-                            openWindow(id: "authentication", value: endpoint)
+            case .results(let services):
+                List(services, id: \.self) { service in
+                    NetworkConnectionRow(
+                        endpoint: service.endpoint,
+                        deviceInfo: service.deviceInfo
+                    )
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        openWindow(id: "authentication", value: service.endpoint)
+                    }
+                    .contextMenu {
+                        Button("Connect") {
+                            openWindow(id: "authentication", value: service.endpoint)
                         }
-                        .contextMenu {
-                            Button("Connect") {
-                                openWindow(id: "authentication", value: endpoint)
-                            }
-                        }
+                    }
                 }
                 .listStyle(.inset)
                 .alternatingRowBackgrounds()
@@ -264,9 +275,7 @@ struct ConnectionsLibraryView: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 18)], spacing: 24) {
                 ForEach(filteredConnections) { connection in
                     VStack(spacing: 8) {
-                        Image(systemName: "desktopcomputer")
-                            .font(.system(size: 46, weight: .light))
-                            .symbolRenderingMode(.hierarchical)
+                        RemoteDeviceIcon(deviceInfo: connection.deviceInfo, size: 58)
                         Text(connection.name)
                             .lineLimit(1)
                         Text(connection.endpoint.displayName)
@@ -373,12 +382,11 @@ struct ConnectionsLibraryView: View {
 
 private struct NetworkConnectionRow: View {
     let endpoint: ConnectionEndpoint
+    let deviceInfo: AppleRemoteDeviceInfo?
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "desktopcomputer")
-                .font(.title2)
-                .foregroundStyle(.secondary)
+            RemoteDeviceIcon(deviceInfo: deviceInfo)
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -406,9 +414,7 @@ private struct ConnectionRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "desktopcomputer")
-                .font(.title2)
-                .foregroundStyle(.secondary)
+            RemoteDeviceIcon(deviceInfo: connection.deviceInfo)
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 2) {

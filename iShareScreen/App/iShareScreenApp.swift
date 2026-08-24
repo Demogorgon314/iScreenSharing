@@ -18,7 +18,10 @@ struct iShareScreenApp: App {
         .defaultSize(width: 715, height: 510)
         .windowToolbarStyle(.unified)
         .commands {
-            ScreenSharingCommands(store: store)
+            ScreenSharingCommands(
+                store: store,
+                sessionCommands: SessionWindowCoordinator.shared.commandRouter
+            )
         }
 
         Window("Screen Sharing", id: "new-connection") {

@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
     static let shared = SessionWindowCoordinator()
+    let commandRouter = ActiveSessionCommandRouter()
 
     private struct WindowKey: Hashable {
         let endpoint: ConnectionEndpoint
@@ -17,9 +18,17 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
     }
 
     private var windowControllers: [WindowKey: NSWindowController] = [:]
+    private var commandStates: [ConnectionEndpoint: SessionCommandState] = [:]
     private var layoutSubscriptions: [ConnectionEndpoint: AnyCancellable] = [:]
+    private var toolbarDisplayModeSubscriptions: [ObjectIdentifier: AnyCancellable] = [:]
     private var videoRenderers: [WindowKey: AppleVideoRenderer] = [:]
     private var fullScreenChromeStates: [ObjectIdentifier: FullScreenChromeState] = [:]
+    private let toolbarPreferencesDefaults: UserDefaults
+
+    init(toolbarPreferencesDefaults: UserDefaults = .standard) {
+        self.toolbarPreferencesDefaults = toolbarPreferencesDefaults
+        super.init()
+    }
 
     func show(endpoint: ConnectionEndpoint, sessions: SessionManager) {
         let primaryKey = WindowKey(endpoint: endpoint, displayIndex: 0)
@@ -52,10 +61,17 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
-        fullScreenChromeStates.removeValue(forKey: ObjectIdentifier(window))
+        let identifier = ObjectIdentifier(window)
+        fullScreenChromeStates.removeValue(forKey: identifier)
+        toolbarDisplayModeSubscriptions.removeValue(forKey: identifier)?.cancel()
         guard let key = key(for: window) else { return }
+        commandRouter.deactivate(window: window)
         window.saveFrame(usingName: frameAutosaveName(for: key))
         windowControllers.removeValue(forKey: key)
+
+        if !windowControllers.keys.contains(where: { $0.endpoint == key.endpoint }) {
+            commandStates.removeValue(forKey: key.endpoint)
+        }
 
         guard key.displayIndex == 0 else { return }
         layoutSubscriptions.removeValue(forKey: key.endpoint)?.cancel()
@@ -63,6 +79,19 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             .filter { $0.key.endpoint == key.endpoint }
             .compactMap(\.value.window)
         auxiliaryWindows.forEach { $0.close() }
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              let key = key(for: window),
+              let commandState = commandStates[key.endpoint] else { return }
+        commandRouter.activate(commandState, for: window)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              key(for: window) != nil else { return }
+        commandRouter.deactivate(window: window)
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -89,7 +118,11 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
     func configureSessionWindowChrome(_ window: NSWindow) {
         window.tabbingMode = .disallowed
-        SessionToolbarPreferences.applyStoredPreferences(to: window)
+        SessionToolbarPreferences.applyStoredPreferences(
+            to: window,
+            defaults: toolbarPreferencesDefaults
+        )
+        observeToolbarDisplayMode(in: window)
     }
 
     func windowWillEnterFullScreen(_ notification: Notification) {
@@ -117,6 +150,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             window.toolbar?.isVisible = toolbarWasVisible
         }
         window.titlebarSeparatorStyle = state.titlebarSeparatorStyle
+        observeToolbarDisplayMode(in: window)
     }
 
     private func observeDisplayLayout(
@@ -185,12 +219,22 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         controlState: AppleSessionControlState,
         disconnectsSessionOnDisappear: Bool
     ) {
+        guard let session = sessions.session(for: key.endpoint) else { return }
+        let commandState = commandStates[key.endpoint] ?? SessionCommandState(
+            endpoint: key.endpoint,
+            session: session,
+            displayLayout: displayLayout,
+            dynamicResolution: dynamicResolution,
+            controlState: controlState
+        )
+        commandStates[key.endpoint] = commandState
         let content = SessionView(
             endpoint: key.endpoint,
             sessions: sessions,
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
             controlState: controlState,
+            commandState: commandState,
             displayIndex: key.displayIndex,
             disconnectsSessionOnDisappear: disconnectsSessionOnDisappear,
             videoRenderer: videoRenderer(
@@ -231,7 +275,40 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         let controller = NSWindowController(window: window)
         windowControllers[key] = controller
         controller.showWindow(nil)
-        SessionToolbarPreferences.applyStoredPreferences(to: window)
+        SessionToolbarPreferences.applyStoredPreferences(
+            to: window,
+            defaults: toolbarPreferencesDefaults
+        )
+        observeToolbarDisplayMode(in: window)
+    }
+
+    private func observeToolbarDisplayMode(in window: NSWindow) {
+        guard let toolbar = window.toolbar else { return }
+        let identifier = ObjectIdentifier(window)
+        toolbarDisplayModeSubscriptions[identifier] = toolbar
+            .publisher(for: \.displayMode, options: [.initial, .new])
+            .dropFirst()
+            .compactMap(SessionToolbarDisplayMode.init(appKitDisplayMode:))
+            .removeDuplicates()
+            .sink { [weak self] displayMode in
+                self?.toolbarDisplayModeDidChange(displayMode)
+            }
+    }
+
+    private func toolbarDisplayModeDidChange(
+        _ displayMode: SessionToolbarDisplayMode
+    ) {
+        guard SessionToolbarPreferences.storedDisplayMode(
+            in: toolbarPreferencesDefaults
+        ) != displayMode else { return }
+        SessionToolbarPreferences.store(
+            displayMode: displayMode,
+            in: toolbarPreferencesDefaults
+        )
+        for window in windowControllers.values.compactMap(\.window) {
+            guard window.toolbar?.displayMode != displayMode.appKitDisplayMode else { continue }
+            window.toolbar?.displayMode = displayMode.appKitDisplayMode
+        }
     }
 
     func videoRenderer(

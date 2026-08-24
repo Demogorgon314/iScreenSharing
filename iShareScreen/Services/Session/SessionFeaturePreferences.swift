@@ -33,6 +33,18 @@ struct SessionFeaturePreferences {
         return scale >= 0 ? scale : nil
     }
 
+    var synchronizesVideoPresentation: Bool {
+        storedBool(forKey: Self.synchronizesVideoPresentationKey, defaultValue: true)
+    }
+
+    var showsVideoPerformanceOverlay: Bool {
+        storedBool(forKey: Self.showsVideoPerformanceOverlayKey, defaultValue: false)
+    }
+
+    var showsMetalPerformanceHUD: Bool {
+        storedBool(forKey: Self.showsMetalPerformanceHUDKey, defaultValue: false)
+    }
+
     func setSharesKeyboardInputSource(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.sharesKeyboardInputSourceKey)
     }
@@ -51,6 +63,18 @@ struct SessionFeaturePreferences {
         } else {
             defaults.removeObject(forKey: Self.fixedDisplayScaleKey)
         }
+    }
+
+    func setSynchronizesVideoPresentation(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.synchronizesVideoPresentationKey)
+    }
+
+    func setShowsVideoPerformanceOverlay(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.showsVideoPerformanceOverlayKey)
+    }
+
+    func setShowsMetalPerformanceHUD(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.showsMetalPerformanceHUDKey)
     }
 
     private func storedBool(forKey key: String, defaultValue: Bool) -> Bool {

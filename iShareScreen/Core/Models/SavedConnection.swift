@@ -8,6 +8,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
     var preferredUsername: String
     var sharingType: ScreenSharingType
     var virtualDisplayCount: VirtualDisplayCount
+    var deviceInfo: AppleRemoteDeviceInfo?
 
     init(
         id: UUID = UUID(),
@@ -16,7 +17,8 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         lastConnectedAt: Date = .now,
         preferredUsername: String = "",
         sharingType: ScreenSharingType = .highPerformance,
-        virtualDisplayCount: VirtualDisplayCount = .one
+        virtualDisplayCount: VirtualDisplayCount = .one,
+        deviceInfo: AppleRemoteDeviceInfo? = nil
     ) {
         self.id = id
         self.endpoint = endpoint
@@ -25,6 +27,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         self.preferredUsername = preferredUsername
         self.sharingType = sharingType
         self.virtualDisplayCount = virtualDisplayCount
+        self.deviceInfo = deviceInfo
     }
 
     init(from decoder: Decoder) throws {
@@ -38,6 +41,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
             ?? .highPerformance
         virtualDisplayCount = try container.decodeIfPresent(VirtualDisplayCount.self, forKey: .virtualDisplayCount)
             ?? .one
+        deviceInfo = try container.decodeIfPresent(AppleRemoteDeviceInfo.self, forKey: .deviceInfo)
     }
 }
 

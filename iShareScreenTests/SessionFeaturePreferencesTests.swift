@@ -25,6 +25,9 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         XCTAssertTrue(preferences.usesDynamicResolution)
         XCTAssertFalse(preferences.mutesAudio)
         XCTAssertNil(preferences.fixedDisplayScale)
+        XCTAssertTrue(preferences.synchronizesVideoPresentation)
+        XCTAssertFalse(preferences.showsVideoPerformanceOverlay)
+        XCTAssertFalse(preferences.showsMetalPerformanceHUD)
     }
 
     func testPersistsFeatureChoicesForTheNextSession() {
@@ -33,6 +36,9 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         preferences.setUsesDynamicResolution(false)
         preferences.setMutesAudio(true)
         preferences.setFixedDisplayScale(1.25)
+        preferences.setSynchronizesVideoPresentation(false)
+        preferences.setShowsVideoPerformanceOverlay(true)
+        preferences.setShowsMetalPerformanceHUD(true)
 
         let restored = SessionFeaturePreferences(defaults: defaults)
 
@@ -40,6 +46,9 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         XCTAssertFalse(restored.usesDynamicResolution)
         XCTAssertTrue(restored.mutesAudio)
         XCTAssertEqual(restored.fixedDisplayScale, 1.25)
+        XCTAssertFalse(restored.synchronizesVideoPresentation)
+        XCTAssertTrue(restored.showsVideoPerformanceOverlay)
+        XCTAssertTrue(restored.showsMetalPerformanceHUD)
     }
 
     @MainActor

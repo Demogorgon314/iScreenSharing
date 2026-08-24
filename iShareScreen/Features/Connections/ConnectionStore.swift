@@ -30,15 +30,23 @@ final class ConnectionStore: ObservableObject {
     func record(
         _ endpoint: ConnectionEndpoint,
         preferredUsername: String? = nil,
+        deviceInfo: AppleRemoteDeviceInfo? = nil,
         at date: Date = .now
     ) {
-        Self.record(endpoint, at: date, in: &connections)
-        Self.record(endpoint, at: date, in: &recentConnections)
+        Self.record(endpoint, deviceInfo: deviceInfo, at: date, in: &connections)
+        Self.record(endpoint, deviceInfo: deviceInfo, at: date, in: &recentConnections)
         if let preferredUsername,
            let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
             connections[index].preferredUsername = preferredUsername
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        persist()
+    }
+
+    func updateDeviceInfo(_ deviceInfo: AppleRemoteDeviceInfo, for endpoint: ConnectionEndpoint) {
+        let connectionUpdated = Self.updateDeviceInfo(deviceInfo, for: endpoint, in: &connections)
+        let recentUpdated = Self.updateDeviceInfo(deviceInfo, for: endpoint, in: &recentConnections)
+        guard connectionUpdated || recentUpdated else { return }
         persist()
     }
 
@@ -143,15 +151,34 @@ final class ConnectionStore: ObservableObject {
 
     private static func record(
         _ endpoint: ConnectionEndpoint,
+        deviceInfo: AppleRemoteDeviceInfo?,
         at date: Date,
         in connections: inout [SavedConnection]
     ) {
         if let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
             connections[index].lastConnectedAt = date
+            if let deviceInfo {
+                connections[index].deviceInfo = deviceInfo
+            }
         } else {
-            connections.append(SavedConnection(endpoint: endpoint, lastConnectedAt: date))
+            connections.append(SavedConnection(
+                endpoint: endpoint,
+                lastConnectedAt: date,
+                deviceInfo: deviceInfo
+            ))
         }
         connections.sort { $0.lastConnectedAt > $1.lastConnectedAt }
+    }
+
+    private static func updateDeviceInfo(
+        _ deviceInfo: AppleRemoteDeviceInfo,
+        for endpoint: ConnectionEndpoint,
+        in connections: inout [SavedConnection]
+    ) -> Bool {
+        guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
+              connections[index].deviceInfo != deviceInfo else { return false }
+        connections[index].deviceInfo = deviceInfo
+        return true
     }
 
     private static func load(defaults: UserDefaults, key: String) -> [SavedConnection] {

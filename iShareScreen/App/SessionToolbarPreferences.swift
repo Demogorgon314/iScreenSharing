@@ -13,10 +13,21 @@ enum SessionToolbarDisplayMode: String, CaseIterable, Identifiable {
         }
     }
 
-    fileprivate var appKitDisplayMode: NSToolbar.DisplayMode {
+    var appKitDisplayMode: NSToolbar.DisplayMode {
         switch self {
         case .iconOnly: .iconOnly
         case .iconAndText: .iconAndLabel
+        }
+    }
+
+    init?(appKitDisplayMode: NSToolbar.DisplayMode) {
+        switch appKitDisplayMode {
+        case .iconOnly:
+            self = .iconOnly
+        case .iconAndLabel:
+            self = .iconAndText
+        default:
+            return nil
         }
     }
 }
@@ -41,12 +52,22 @@ enum SessionToolbarPreferences {
         return displayMode
     }
 
-    static func applyStoredPreferences(to window: NSWindow) {
+    static func applyStoredPreferences(
+        to window: NSWindow,
+        defaults: UserDefaults = .standard
+    ) {
         apply(
             to: window,
-            isVisible: storedVisibility(),
-            displayMode: storedDisplayMode()
+            isVisible: storedVisibility(in: defaults),
+            displayMode: storedDisplayMode(in: defaults)
         )
+    }
+
+    static func store(
+        displayMode: SessionToolbarDisplayMode,
+        in defaults: UserDefaults = .standard
+    ) {
+        defaults.set(displayMode.rawValue, forKey: displayModeKey)
     }
 
     static func apply(
@@ -55,7 +76,8 @@ enum SessionToolbarPreferences {
         displayMode: SessionToolbarDisplayMode
     ) {
         guard let toolbar = window.toolbar else { return }
-        toolbar.allowsDisplayModeCustomization = false
+        toolbar.allowsDisplayModeCustomization = true
+        toolbar.autosavesConfiguration = true
         toolbar.displayMode = displayMode.appKitDisplayMode
         toolbar.isVisible = isVisible
     }
