@@ -58,6 +58,39 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         XCTAssertFalse(window.toolbar?.isVisible == true)
     }
 
+    func testAppliesSupportedSessionToolbarPresentationOptions() {
+        let window = makeWindow(toolbarIsVisible: true)
+
+        SessionToolbarPreferences.apply(
+            to: window,
+            isVisible: false,
+            displayMode: .iconAndText
+        )
+
+        XCTAssertFalse(window.toolbar?.isVisible == true)
+        XCTAssertEqual(window.toolbar?.displayMode, .iconAndLabel)
+        XCTAssertFalse(window.toolbar?.allowsDisplayModeCustomization == true)
+
+        SessionToolbarPreferences.apply(
+            to: window,
+            isVisible: true,
+            displayMode: .iconOnly
+        )
+
+        XCTAssertTrue(window.toolbar?.isVisible == true)
+        XCTAssertEqual(window.toolbar?.displayMode, .iconOnly)
+    }
+
+    func testConfiguresSessionWindowWithoutTabbing() {
+        let coordinator = SessionWindowCoordinator()
+        let window = makeWindow(toolbarIsVisible: true)
+        window.tabbingMode = .automatic
+
+        coordinator.configureSessionWindowChrome(window)
+
+        XCTAssertEqual(window.tabbingMode, .disallowed)
+    }
+
     private func makeWindow(toolbarIsVisible: Bool) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),

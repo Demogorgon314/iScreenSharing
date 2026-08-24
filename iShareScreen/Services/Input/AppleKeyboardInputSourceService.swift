@@ -12,25 +12,30 @@ final class AppleKeyboardInputSourceService: ObservableObject {
     private let currentIdentifier: () -> String?
     private let send: @Sendable (Data) async throws -> Void
     private let updateUsesSameInputSource: @Sendable (Bool) async -> Void
+    private let didChangeSharingEnabled: (Bool) -> Void
     private var notificationObserver: NSObjectProtocol?
     private var stateUpdateTask: Task<Void, Never>?
     private var isControlling = true
+    private var hasStarted = false
     private var isClosed = false
 
     init(
         isSharingEnabled: Bool = false,
         currentIdentifier: @escaping () -> String? = AppleKeyboardInputSource.currentIdentifier,
         send: @escaping @Sendable (Data) async throws -> Void,
-        updateUsesSameInputSource: @escaping @Sendable (Bool) async -> Void = { _ in }
+        updateUsesSameInputSource: @escaping @Sendable (Bool) async -> Void = { _ in },
+        didChangeSharingEnabled: @escaping (Bool) -> Void = { _ in }
     ) {
         self.isSharingEnabled = isSharingEnabled
         self.currentIdentifier = currentIdentifier
         self.send = send
         self.updateUsesSameInputSource = updateUsesSameInputSource
+        self.didChangeSharingEnabled = didChangeSharingEnabled
     }
 
     func start() {
-        guard notificationObserver == nil, !isClosed else { return }
+        guard !hasStarted, !isClosed else { return }
+        hasStarted = true
         let name = Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String)
         notificationObserver = DistributedNotificationCenter.default().addObserver(
             forName: name,
@@ -39,27 +44,30 @@ final class AppleKeyboardInputSourceService: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in self?.inputSourceDidChange() }
         }
-        scheduleStateUpdate(sendMessage: isSharingEnabled)
+        scheduleStateUpdate(sendMessage: isSharingEnabled && isSupported && isControlling)
     }
 
     func setSharingEnabled(_ enabled: Bool) {
         guard !isClosed, isControlling,
               (!enabled || isSupported), enabled != isSharingEnabled else { return }
         isSharingEnabled = enabled
+        didChangeSharingEnabled(enabled)
         scheduleStateUpdate(sendMessage: true)
     }
 
     func setControlling(_ controlling: Bool) {
         guard !isClosed, controlling != isControlling else { return }
         isControlling = controlling
-        scheduleStateUpdate(sendMessage: controlling && isSharingEnabled)
+        scheduleStateUpdate(sendMessage: controlling && isSharingEnabled && isSupported)
     }
 
     func receive(_ state: AppleKeyboardInputSourceState) {
         isSupported = true
         remoteIdentifier = state.identifier
         serverUsesSecureInput = state.isSecureInput
-        scheduleStateUpdate(sendMessage: false)
+        scheduleStateUpdate(
+            sendMessage: hasStarted && isControlling && isSharingEnabled
+        )
     }
 
     func close() {
@@ -74,7 +82,7 @@ final class AppleKeyboardInputSourceService: ObservableObject {
     }
 
     private func inputSourceDidChange() {
-        scheduleStateUpdate(sendMessage: isControlling && isSharingEnabled)
+        scheduleStateUpdate(sendMessage: isControlling && isSharingEnabled && isSupported)
     }
 
     private func scheduleStateUpdate(sendMessage: Bool) {

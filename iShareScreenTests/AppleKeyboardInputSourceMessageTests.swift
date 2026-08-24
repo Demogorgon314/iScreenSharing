@@ -65,6 +65,37 @@ final class AppleKeyboardInputSourceMessageTests: XCTestCase {
         XCTAssertEqual(lastRelationship, true)
         service.close()
     }
+
+    func testRestoredSharingWaitsForServerCapabilityBeforeSending() async throws {
+        let recorder = KeyboardSourceRecorder()
+        let service = AppleKeyboardInputSourceService(
+            isSharingEnabled: true,
+            currentIdentifier: { "com.apple.keylayout.US" },
+            send: { message in await recorder.record(message) }
+        )
+
+        service.start()
+        await Task.yield()
+        let messageCountBeforeCapability = await recorder.messageCount()
+        XCTAssertEqual(messageCountBeforeCapability, 0)
+
+        service.receive(AppleKeyboardInputSourceState(
+            field: 1,
+            isSecureInput: false,
+            identifier: "com.apple.keylayout.US"
+        ))
+        for _ in 0..<100 {
+            if await recorder.lastMessage() != nil { break }
+            await Task.yield()
+        }
+
+        let lastMessage = await recorder.lastMessage()
+        XCTAssertEqual(
+            lastMessage,
+            try AppleKeyboardInputSourceMessage.share(identifier: "com.apple.keylayout.US")
+        )
+        service.close()
+    }
 }
 
 private actor KeyboardSourceRecorder {

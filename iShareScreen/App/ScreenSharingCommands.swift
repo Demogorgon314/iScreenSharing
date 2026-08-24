@@ -12,11 +12,74 @@ struct ScreenSharingCommands: Commands {
     @FocusedValue(\.sessionEndpoint) private var sessionEndpoint
     @FocusedValue(\.connectionLibraryActions) private var connectionLibraryActions
     @FocusedValue(\.remoteSystemActions) private var remoteSystemActions
+    @FocusedValue(\.sessionToolbarActions) private var sessionToolbarActions
+    @AppStorage(SessionToolbarPreferences.isVisibleKey)
+    private var sessionToolbarIsVisible = true
+    @AppStorage(SessionToolbarPreferences.displayModeKey)
+    private var sessionToolbarDisplayMode = SessionToolbarDisplayMode.iconOnly
     private let documents = ConnectionDocumentService()
 
     var body: some Commands {
         connectionCommands
         viewCommands
+        toolbarCommands
+        replaceSystemToolbarCommands
+    }
+
+    private var toolbarCommands: some Commands {
+        CommandMenu("Toolbar") {
+            Toggle("Show Toolbar", isOn: sessionToolbarVisibilityBinding)
+                .disabled(sessionEndpoint == nil)
+            Divider()
+            Picker("Display Mode", selection: sessionToolbarDisplayModeBinding) {
+                ForEach(SessionToolbarDisplayMode.allCases) { displayMode in
+                    Text(displayMode.title).tag(displayMode)
+                }
+            }
+            .disabled(sessionEndpoint == nil || !sessionToolbarIsVisible)
+            Divider()
+            Button(displayScale?.scalesToFit != false ? "Turn Scaling Off" : "Turn Scaling On") {
+                displayScale?.toggleScaling()
+            }
+            .disabled(displayScale == nil)
+            Button("Send Clipboard") {
+                sessionToolbarActions?.sendClipboard()
+            }
+            .disabled(sessionToolbarActions?.canSendClipboard != true)
+            Toggle("Share Input Source", isOn: keyboardInputSourceBinding)
+                .disabled(sessionToolbarActions?.keyboardInputSource?.isEnabled != true)
+            Divider()
+            Button(sessionModeActions?.isObserving == true ? "Switch to Control Mode" : "Switch to Observe Mode") {
+                sessionModeActions?.toggle()
+            }
+            .disabled(sessionModeActions?.canToggle != true)
+            Toggle("Dynamic Resolution", isOn: dynamicResolutionBinding)
+                .disabled(dynamicResolutionActions?.canToggle != true)
+            Toggle("Synchronize Video", isOn: videoSyncBinding)
+                .disabled(synchronizesVideoPresentation == nil)
+            Toggle("Mute Audio", isOn: audioMutedBinding)
+                .disabled(sessionToolbarActions?.audioMuted?.isEnabled != true)
+            Divider()
+            Toggle("Video Performance", isOn: videoPerformanceBinding)
+                .disabled(sessionToolbarActions == nil)
+            Toggle("Metal Performance HUD", isOn: metalPerformanceHUDBinding)
+                .disabled(sessionToolbarActions == nil)
+            Divider()
+            ForEach(AppleRemoteSystemCommand.allCases, id: \.self) { command in
+                Button(command.title) { remoteSystemActions?.perform(command) }
+                    .disabled(remoteSystemActions?.canPerform(command) != true)
+            }
+        }
+    }
+
+    private var replaceSystemToolbarCommands: some Commands {
+        CommandGroup(replacing: .toolbar) {
+            Button(sessionToolbarIsVisible ? "Hide Toolbar" : "Show Toolbar") {
+                sessionToolbarVisibilityBinding.wrappedValue.toggle()
+            }
+            .keyboardShortcut("t", modifiers: [.command, .option])
+            .disabled(sessionEndpoint == nil)
+        }
     }
 
     @CommandsBuilder
@@ -111,13 +174,10 @@ struct ScreenSharingCommands: Commands {
                 .disabled(true)
             Divider()
             Button("Actual Size") { displayScale?.actualSize() }
-                .keyboardShortcut("0", modifiers: .command)
                 .disabled(displayScale == nil)
             Button("Zoom In") { displayScale?.zoomIn() }
-                .keyboardShortcut("+", modifiers: .command)
                 .disabled(displayScale == nil || displayScale?.fixedScale == AppleVideoDisplayScale.maximum)
             Button("Zoom Out") { displayScale?.zoomOut() }
-                .keyboardShortcut("-", modifiers: .command)
                 .disabled(displayScale == nil || displayScale?.fixedScale == AppleVideoDisplayScale.minimum)
             Divider()
             ForEach([
@@ -148,6 +208,58 @@ struct ScreenSharingCommands: Commands {
             }
         )
     }
+
+    private var keyboardInputSourceBinding: Binding<Bool> {
+        sessionToolbarActions?.keyboardInputSource?.isOn ?? .constant(false)
+    }
+
+    private var audioMutedBinding: Binding<Bool> {
+        sessionToolbarActions?.audioMuted?.isOn ?? .constant(false)
+    }
+
+    private var videoPerformanceBinding: Binding<Bool> {
+        sessionToolbarActions?.showsVideoPerformance ?? .constant(false)
+    }
+
+    private var metalPerformanceHUDBinding: Binding<Bool> {
+        sessionToolbarActions?.showsMetalPerformanceHUD ?? .constant(false)
+    }
+
+    private var sessionToolbarVisibilityBinding: Binding<Bool> {
+        Binding(
+            get: { sessionToolbarIsVisible },
+            set: { isVisible in
+                sessionToolbarIsVisible = isVisible
+                applySessionToolbarPreferences(
+                    isVisible: isVisible,
+                    displayMode: sessionToolbarDisplayMode
+                )
+            }
+        )
+    }
+
+    private var sessionToolbarDisplayModeBinding: Binding<SessionToolbarDisplayMode> {
+        Binding(
+            get: { sessionToolbarDisplayMode },
+            set: { displayMode in
+                sessionToolbarDisplayMode = displayMode
+                applySessionToolbarPreferences(
+                    isVisible: sessionToolbarIsVisible,
+                    displayMode: displayMode
+                )
+            }
+        )
+    }
+
+    private func applySessionToolbarPreferences(
+        isVisible: Bool,
+        displayMode: SessionToolbarDisplayMode
+    ) {
+        SessionWindowCoordinator.shared.applyToolbarPreferences(
+            isVisible: isVisible,
+            displayMode: displayMode
+        )
+    }
 }
 
 struct SessionModeActions {
@@ -169,6 +281,20 @@ struct ConnectionLibraryActions {
 struct RemoteSystemActions {
     let canPerform: (AppleRemoteSystemCommand) -> Bool
     let perform: (AppleRemoteSystemCommand) -> Void
+}
+
+struct SessionToggleActions {
+    let isEnabled: Bool
+    let isOn: Binding<Bool>
+}
+
+struct SessionToolbarActions {
+    let canSendClipboard: Bool
+    let sendClipboard: () -> Void
+    let keyboardInputSource: SessionToggleActions?
+    let showsVideoPerformance: Binding<Bool>
+    let showsMetalPerformanceHUD: Binding<Bool>
+    let audioMuted: SessionToggleActions?
 }
 
 extension FocusedValues {
@@ -207,10 +333,14 @@ extension FocusedValues {
         set { self[ConnectionLibraryActionsFocusedKey.self] = newValue }
     }
 
-
     var remoteSystemActions: RemoteSystemActions? {
         get { self[RemoteSystemActionsFocusedKey.self] }
         set { self[RemoteSystemActionsFocusedKey.self] = newValue }
+    }
+
+    var sessionToolbarActions: SessionToolbarActions? {
+        get { self[SessionToolbarActionsFocusedKey.self] }
+        set { self[SessionToolbarActionsFocusedKey.self] = newValue }
     }
 }
 
@@ -244,4 +374,8 @@ private struct ConnectionLibraryActionsFocusedKey: FocusedValueKey {
 
 private struct RemoteSystemActionsFocusedKey: FocusedValueKey {
     typealias Value = RemoteSystemActions
+}
+
+private struct SessionToolbarActionsFocusedKey: FocusedValueKey {
+    typealias Value = SessionToolbarActions
 }

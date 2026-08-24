@@ -5,7 +5,9 @@ import Foundation
 final class AppleDynamicResolutionModel: ObservableObject {
     @Published var isEnabled: Bool {
         didSet {
+            guard isEnabled != oldValue else { return }
             if !isEnabled { cancel() }
+            didChangeEnabled(isEnabled)
         }
     }
     @Published private(set) var errorMessage: String?
@@ -14,15 +16,21 @@ final class AppleDynamicResolutionModel: ObservableObject {
     private static let minimumRequestInterval: TimeInterval = 2.5
 
     private let displayCount: Int
+    private let didChangeEnabled: (Bool) -> Void
     private var task: Task<Void, Never>?
     private var viewportSizes = [Int: AppleDynamicResolutionSize]()
     private var lastRequestedSizes: [AppleDynamicResolutionSize]?
     private var pendingSizes: [AppleDynamicResolutionSize]?
     private var lastRequestTime: TimeInterval?
 
-    init(displayCount: Int = 1) {
+    init(
+        displayCount: Int = 1,
+        isEnabled: Bool = true,
+        didChangeEnabled: @escaping (Bool) -> Void = { _ in }
+    ) {
         self.displayCount = min(2, max(1, displayCount))
-        isEnabled = self.displayCount == 1
+        self.didChangeEnabled = didChangeEnabled
+        self.isEnabled = self.displayCount == 1 && isEnabled
     }
 
     func schedule(

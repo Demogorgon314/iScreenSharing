@@ -20,6 +20,7 @@ final class AuthenticationCoordinator: ObservableObject {
     private let credentialStore: any CredentialStoring
     private let connectionStore: ConnectionStore
     private let viewportStore: SessionViewportStore
+    private let sessionFeaturePreferences: SessionFeaturePreferences
     private let sessionManager: SessionManager
     private let onAuthenticated: @MainActor (ConnectionEndpoint) -> Void
     private var task: Task<Void, Never>?
@@ -33,6 +34,7 @@ final class AuthenticationCoordinator: ObservableObject {
         credentialStore: any CredentialStoring = KeychainCredentialStore(),
         connectionStore: ConnectionStore,
         viewportStore: SessionViewportStore = SessionViewportStore(),
+        sessionFeaturePreferences: SessionFeaturePreferences = SessionFeaturePreferences(),
         sessionManager: SessionManager,
         onAuthenticated: @escaping @MainActor (ConnectionEndpoint) -> Void = { _ in }
     ) {
@@ -44,6 +46,7 @@ final class AuthenticationCoordinator: ObservableObject {
         self.credentialStore = credentialStore
         self.connectionStore = connectionStore
         self.viewportStore = viewportStore
+        self.sessionFeaturePreferences = sessionFeaturePreferences
         self.sessionManager = sessionManager
         self.onAuthenticated = onAuthenticated
     }
@@ -139,13 +142,15 @@ final class AuthenticationCoordinator: ObservableObject {
                     let remoteSystemCapabilities = AppleRemoteSystemCapabilities()
                     session.install(remoteSystemCapabilities: remoteSystemCapabilities)
                     let keyboardInputSource = AppleKeyboardInputSourceService(
+                        isSharingEnabled: sessionFeaturePreferences.sharesKeyboardInputSource,
                         send: { [weak session] message in
                             guard let session else { return }
                             try await session.sendEncrypted(message)
                         },
                         updateUsesSameInputSource: { [weak input] usesSameInputSource in
                             await input?.setUsesSameInputSource(usesSameInputSource)
-                        }
+                        },
+                        didChangeSharingEnabled: sessionFeaturePreferences.setSharesKeyboardInputSource
                     )
                     session.install(keyboardInputSourceService: keyboardInputSource)
                     let displayLayoutModel = AppleDisplayLayoutModel(
@@ -160,7 +165,9 @@ final class AuthenticationCoordinator: ObservableObject {
                     }
                     session.install(displayLayoutModel: displayLayoutModel)
                     session.install(dynamicResolutionModel: AppleDynamicResolutionModel(
-                        displayCount: virtualDisplayCount.rawValue
+                        displayCount: virtualDisplayCount.rawValue,
+                        isEnabled: sessionFeaturePreferences.usesDynamicResolution,
+                        didChangeEnabled: sessionFeaturePreferences.setUsesDynamicResolution
                     ))
                     let controlMessages = AppleControlMessageService(
                         session: session,
@@ -204,7 +211,12 @@ final class AuthenticationCoordinator: ObservableObject {
                     clipboard.start()
                     keyboardInputSource.start()
                     if let receiver = session.mediaReceiver,
-                       let audio = try? AppleAudioStream(receiver: receiver, negotiation: negotiation) {
+                       let audio = try? AppleAudioStream(
+                           receiver: receiver,
+                           negotiation: negotiation,
+                           isMuted: sessionFeaturePreferences.mutesAudio,
+                           didChangeMuted: sessionFeaturePreferences.setMutesAudio
+                       ) {
                         session.install(audioStream: audio)
                         audio.start()
                     }

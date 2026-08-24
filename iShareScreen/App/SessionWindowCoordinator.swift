@@ -73,6 +73,25 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         saveFrame(from: notification)
     }
 
+    func applyToolbarPreferences(
+        isVisible: Bool,
+        displayMode: SessionToolbarDisplayMode
+    ) {
+        for window in windowControllers.values.compactMap(\.window) {
+            guard fullScreenChromeStates[ObjectIdentifier(window)] == nil else { continue }
+            SessionToolbarPreferences.apply(
+                to: window,
+                isVisible: isVisible,
+                displayMode: displayMode
+            )
+        }
+    }
+
+    func configureSessionWindowChrome(_ window: NSWindow) {
+        window.tabbingMode = .disallowed
+        SessionToolbarPreferences.applyStoredPreferences(to: window)
+    }
+
     func windowWillEnterFullScreen(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         let identifier = ObjectIdentifier(window)
@@ -207,10 +226,12 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             }
         }
         window.delegate = self
+        configureSessionWindowChrome(window)
 
         let controller = NSWindowController(window: window)
         windowControllers[key] = controller
         controller.showWindow(nil)
+        SessionToolbarPreferences.applyStoredPreferences(to: window)
     }
 
     func videoRenderer(

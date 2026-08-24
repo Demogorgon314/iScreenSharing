@@ -8,12 +8,16 @@ struct SessionView: View {
     @ObservedObject var controlState: AppleSessionControlState
     let displayIndex: Int
     let disconnectsSessionOnDisappear: Bool
-    @State private var displayScale = AppleVideoDisplayScale()
     @State private var viewportSize = CGSize.zero
     @State private var sessionWindowIdentifier = UUID()
-    @AppStorage("synchronizesVideoPresentation") private var synchronizesVideoPresentation = true
-    @AppStorage("showsVideoPerformanceOverlay") private var showsVideoPerformanceOverlay = false
-    @AppStorage("showsMetalPerformanceHUD") private var showsMetalPerformanceHUD = false
+    @AppStorage(SessionFeaturePreferences.fixedDisplayScaleKey)
+    private var storedFixedDisplayScale = -1.0
+    @AppStorage(SessionFeaturePreferences.synchronizesVideoPresentationKey)
+    private var synchronizesVideoPresentation = true
+    @AppStorage(SessionFeaturePreferences.showsVideoPerformanceOverlayKey)
+    private var showsVideoPerformanceOverlay = false
+    @AppStorage(SessionFeaturePreferences.showsMetalPerformanceHUDKey)
+    private var showsMetalPerformanceHUD = false
     let videoRenderer: AppleVideoRenderer
     private let viewportStore = SessionViewportStore()
 
@@ -70,7 +74,8 @@ struct SessionView: View {
             \.remoteSystemActions,
             remoteSystemActions
         )
-        .focusedSceneValue(\.sessionDisplayScale, $displayScale)
+        .focusedSceneValue(\.sessionToolbarActions, sessionToolbarActions)
+        .focusedSceneValue(\.sessionDisplayScale, displayScaleBinding)
         .focusedSceneValue(\.synchronizesVideoPresentation, $synchronizesVideoPresentation)
         .focusedSceneValue(
             \.dynamicResolutionActions,
@@ -90,11 +95,16 @@ struct SessionView: View {
         )
         .toolbar {
             ToolbarItemGroup {
-                Button { displayScale.toggleScaling() } label: {
-                    Image(systemName: displayScale.scalesToFit ? "rectangle.inset.filled" : "rectangle")
+                Button { toggleDisplayScaling() } label: {
+                    Label(
+                        displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On",
+                        systemImage: displayScale.scalesToFit ? "rectangle.inset.filled" : "rectangle"
+                    )
                 }
                     .help(displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On")
-                Button { sendClipboard() } label: { Image(systemName: "clipboard") }
+                Button { sendClipboard() } label: {
+                    Label("Send Clipboard", systemImage: "clipboard")
+                }
                     .help("Send Clipboard to Remote Mac")
                     .disabled(isObserving || isChangingMode)
                 if let capabilities = sessions.session(for: endpoint)?.remoteSystemCapabilities,
@@ -112,35 +122,34 @@ struct SessionView: View {
                     )
                 }
                 Button { toggleObservationMode() } label: {
-                    Image(systemName: isObserving ? "eye.fill" : "cursorarrow.rays")
+                    Label(
+                        isObserving ? "Control" : "Observe",
+                        systemImage: isObserving ? "eye.fill" : "cursorarrow.rays"
+                    )
                 }
                 .help(isObserving ? "Switch to Control Mode" : "Switch to Observe Mode")
                 .disabled(isChangingMode || sessions.session(for: endpoint) == nil)
                 Toggle(isOn: $dynamicResolution.isEnabled) {
-                    Image(systemName: "display")
+                    Label("Dynamic Resolution", systemImage: "display")
                 }
                 .toggleStyle(.button)
                 .help("Dynamic Resolution")
-                .accessibilityLabel("Dynamic Resolution")
                 .disabled(!canUseDynamicResolution)
                 Toggle(isOn: $synchronizesVideoPresentation) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
+                    Label("Synchronize Video", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .toggleStyle(.button)
                 .help("Synchronize Video")
-                .accessibilityLabel("Synchronize Video")
                 Toggle(isOn: $showsVideoPerformanceOverlay) {
-                    Image(systemName: "chart.xyaxis.line")
+                    Label("Video Performance", systemImage: "chart.xyaxis.line")
                 }
                 .toggleStyle(.button)
                 .help("Video Performance")
-                .accessibilityLabel("Video Performance")
                 Toggle(isOn: $showsMetalPerformanceHUD) {
-                    Image(systemName: "gauge.with.needle")
+                    Label("Metal Performance HUD", systemImage: "gauge.with.needle")
                 }
                 .toggleStyle(.button)
                 .help("Metal Performance HUD")
-                .accessibilityLabel("Metal Performance HUD")
                 if let audio = sessions.session(for: endpoint)?.audioStream {
                     AudioMuteButton(audio: audio)
                 }
@@ -179,10 +188,35 @@ struct SessionView: View {
     }
 
     private func sendClipboard() {
-        guard let session = sessions.session(for: endpoint),
+        guard !isObserving,
+              !isChangingMode,
+              let session = sessions.session(for: endpoint),
               let input = session.inputController,
               let archive = session.clipboardService?.localArchive() else { return }
         Task { try? await input.sendClipboard(archive) }
+    }
+
+    private var displayScale: AppleVideoDisplayScale {
+        AppleVideoDisplayScale(
+            fixedScale: storedFixedDisplayScale >= 0
+                ? CGFloat(storedFixedDisplayScale)
+                : nil
+        )
+    }
+
+    private var displayScaleBinding: Binding<AppleVideoDisplayScale> {
+        Binding(
+            get: { displayScale },
+            set: { scale in
+                storedFixedDisplayScale = scale.fixedScale.map(Double.init) ?? -1
+            }
+        )
+    }
+
+    private func toggleDisplayScaling() {
+        var scale = displayScale
+        scale.toggleScaling()
+        displayScaleBinding.wrappedValue = scale
     }
 
     private var modeErrorIsPresented: Binding<Bool> {
@@ -240,6 +274,42 @@ struct SessionView: View {
         )
     }
 
+    private var sessionToolbarActions: SessionToolbarActions? {
+        guard let session = sessions.session(for: endpoint) else { return nil }
+        let keyboardInputSource = session.keyboardInputSourceService.map { service in
+            SessionToggleActions(
+                isEnabled: !isObserving && !isChangingMode && service.isSupported,
+                isOn: Binding(
+                    get: { service.isSharingEnabled },
+                    set: { service.setSharingEnabled($0) }
+                )
+            )
+        }
+        let audioMuted = session.audioStream.map { audio in
+            SessionToggleActions(
+                isEnabled: true,
+                isOn: Binding(
+                    get: { audio.isMuted },
+                    set: { isMuted in
+                        guard audio.isMuted != isMuted else { return }
+                        audio.toggleMute()
+                    }
+                )
+            )
+        }
+        return SessionToolbarActions(
+            canSendClipboard: !isObserving
+                && !isChangingMode
+                && session.inputController != nil
+                && session.clipboardService != nil,
+            sendClipboard: sendClipboard,
+            keyboardInputSource: keyboardInputSource,
+            showsVideoPerformance: $showsVideoPerformanceOverlay,
+            showsMetalPerformanceHUD: $showsMetalPerformanceHUD,
+            audioMuted: audioMuted
+        )
+    }
+
     private func performRemoteSystemCommand(_ command: AppleRemoteSystemCommand) {
         guard !isObserving,
               !isChangingMode,
@@ -260,10 +330,9 @@ private struct RemoteSystemCommandButtons: View {
             Button {
                 perform(command)
             } label: {
-                Image(systemName: command.systemImage)
+                Label(command.title, systemImage: command.systemImage)
             }
             .help(command.title)
-            .accessibilityLabel(command.title)
             .disabled(isDisabled || !capabilities.supports(command))
         }
     }
@@ -280,11 +349,15 @@ private struct KeyboardInputSourceButton: View {
                 set: { service.setSharingEnabled($0) }
             )
         ) {
-            Image(systemName: service.serverUsesSecureInput ? "keyboard.badge.ellipsis" : "keyboard")
+            Label(
+                "Share Input Source",
+                systemImage: service.serverUsesSecureInput
+                    ? "keyboard.badge.ellipsis"
+                    : "keyboard"
+            )
         }
         .toggleStyle(.button)
         .help("Share Keyboard Input Source")
-        .accessibilityLabel("Share Keyboard Input Source")
         .disabled(isDisabled || !service.isSupported)
     }
 }
@@ -294,7 +367,10 @@ private struct AudioMuteButton: View {
 
     var body: some View {
         Button { audio.toggleMute() } label: {
-            Image(systemName: audio.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+            Label(
+                audio.isMuted ? "Unmute" : "Mute",
+                systemImage: audio.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+            )
         }
         .help(audio.isMuted ? "Unmute" : "Mute")
     }

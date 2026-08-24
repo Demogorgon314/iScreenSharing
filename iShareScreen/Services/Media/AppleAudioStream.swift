@@ -3,12 +3,13 @@ import Combine
 import Foundation
 
 final class AppleAudioStream: ObservableObject, @unchecked Sendable {
-    @Published private(set) var isMuted = false
+    @Published private(set) var isMuted: Bool
 
     private let receiver: AppleMediaReceiver
     private let decryptor: AppleSRTPDecryptor
     private let decoder: AppleAACELDDecoder
     private let player: any AppleAudioPlaying
+    private let didChangeMuted: @MainActor (Bool) -> Void
     private let queue = DispatchQueue(label: "com.isharescreen.audio-stream", qos: .userInteractive)
     private let lock = NSLock()
     private var timer: DispatchSourceTimer?
@@ -20,9 +21,14 @@ final class AppleAudioStream: ObservableObject, @unchecked Sendable {
     init(
         receiver: AppleMediaReceiver,
         negotiation: AppleMediaNegotiationResult,
-        player: (any AppleAudioPlaying)? = nil
+        player: (any AppleAudioPlaying)? = nil,
+        isMuted: Bool = false,
+        didChangeMuted: @escaping @MainActor (Bool) -> Void = { _ in }
     ) throws {
         self.receiver = receiver
+        self.isMuted = isMuted
+        self.didChangeMuted = didChangeMuted
+        mutedState = isMuted
         decryptor = try AppleSRTPDecryptor(keyBlob: negotiation.keys.audioServer)
         let decoder = try AppleAACELDDecoder()
         self.decoder = decoder
@@ -31,6 +37,7 @@ final class AppleAudioStream: ObservableObject, @unchecked Sendable {
         } else {
             self.player = try AppleAudioPlayer(format: decoder.outputFormat)
         }
+        self.player.setMuted(isMuted)
     }
 
     var receivedPacketCount: Int {
@@ -60,6 +67,7 @@ final class AppleAudioStream: ObservableObject, @unchecked Sendable {
         }
         isMuted = value
         player.setMuted(value)
+        didChangeMuted(value)
     }
 
     func close() {

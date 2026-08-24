@@ -58,6 +58,31 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
     }
 
+    func testSuccessfulSignInRestoresSessionFeaturePreferences() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = try makeSession(endpoint: endpoint)
+        let preferences = SessionFeaturePreferences(defaults: defaults)
+        preferences.setSharesKeyboardInputSource(true)
+        preferences.setUsesDynamicResolution(false)
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: MockAuthenticator(result: .success(session)),
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: MockCredentialStore(),
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionFeaturePreferences: preferences,
+            sessionManager: SessionManager()
+        )
+
+        coordinator.signIn(username: "user", password: "password", rememberPassword: false)
+        try await waitUntil { coordinator.state == .authenticated }
+
+        XCTAssertTrue(session.keyboardInputSourceService?.isSharingEnabled == true)
+        XCTAssertFalse(session.dynamicResolutionModel?.isEnabled == true)
+    }
+
     func testAutomaticallySignsInWithSavedCredentials() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let session = try makeSession(endpoint: endpoint)

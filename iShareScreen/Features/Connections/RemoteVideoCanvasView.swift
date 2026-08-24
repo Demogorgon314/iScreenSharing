@@ -48,6 +48,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
         view.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         view.inputDisplayID = inputDisplayID
         view.onWindowKeyChange = onWindowKeyChange
+        view.updateInput(input)
     }
 
     static func dismantleNSView(_ view: RemoteVideoCanvasNSView, coordinator: ()) {
@@ -142,7 +143,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private(set) var canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
     private let performance: AppleVideoPerformanceMonitor?
-    private let input: AppleInputController?
+    private var input: AppleInputController?
     private let cursors: AppleCursorStore?
     private let displayLayer: CALayer
     private var observer: UUID?
@@ -311,6 +312,10 @@ final class RemoteVideoCanvasNSView: NSView {
         schedulePresentation()
     }
 
+    func updateInput(_ input: AppleInputController?) {
+        self.input = input
+    }
+
     fileprivate func prepareForDismantle() {
         displayLink?.invalidate()
         displayLink = nil
@@ -438,6 +443,14 @@ final class RemoteVideoCanvasNSView: NSView {
                 keyboardType: keyboardType
             )
         }
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard input != nil, event.type == .keyDown else {
+            return super.performKeyEquivalent(with: event)
+        }
+        keyDown(with: event)
+        return true
     }
 
     override func keyDown(with event: NSEvent) {
