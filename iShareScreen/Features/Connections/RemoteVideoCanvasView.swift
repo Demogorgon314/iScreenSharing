@@ -148,6 +148,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private var decodedFullCanvasSize: CGSize?
     private var trackingArea: NSTrackingArea?
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
+    private var windowDidChangeScreenObserver: NSObjectProtocol?
     private var buttonMask: UInt8 = 0
     private var lastRemotePoint: (x: Int, y: Int)?
     private var activeModifiers = [UInt16: ActiveModifier]()
@@ -214,20 +215,15 @@ final class RemoteVideoCanvasNSView: NSView {
     deinit {
         displayLink?.invalidate()
         inputTask?.cancel()
-        if let windowDidBecomeKeyObserver {
-            NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
-        }
+        removeWindowObservers()
         if let observer { frames.removeObserver(observer) }
         if let cursorObserver { cursors?.removeObserver(cursorObserver) }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        removeWindowObservers()
         configureDisplayLink()
-        if let windowDidBecomeKeyObserver {
-            NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
-            self.windowDidBecomeKeyObserver = nil
-        }
         guard let window else { return }
         windowDidBecomeKeyObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
@@ -236,10 +232,21 @@ final class RemoteVideoCanvasNSView: NSView {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.selectInputDisplay() }
         }
+        windowDidChangeScreenObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshDisplayEnvironment(resetCadence: true) }
+        }
         if window.isKeyWindow { selectInputDisplay() }
-        let scale = window.backingScaleFactor
-        displayLayer.contentsScale = scale
+        refreshDisplayEnvironment(resetCadence: true)
         enqueueForPresentation(currentFrames())
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        refreshDisplayEnvironment(resetCadence: false)
     }
 
     override func layout() {
@@ -288,6 +295,7 @@ final class RemoteVideoCanvasNSView: NSView {
         displayLink = nil
         displayLinkTarget = nil
         displayScheduler.reset()
+        removeWindowObservers()
         if let observer {
             frames.removeObserver(observer)
             self.observer = nil
@@ -652,20 +660,46 @@ final class RemoteVideoCanvasNSView: NSView {
             target: target,
             selector: #selector(RemoteVideoCanvasDisplayLinkTarget.displayLinkDidFire(_:))
         )
-        let frameRate = Float(
-            window.screen?.maximumFramesPerSecond
+        displayLink.add(to: .main, forMode: .common)
+        metalLayer.usesExplicitPresentationTiming = true
+        displayLinkTarget = target
+        self.displayLink = displayLink
+        updateDisplayLinkFrameRate()
+    }
+
+    private func refreshDisplayEnvironment(resetCadence: Bool) {
+        guard let window else { return }
+        updateDisplayLinkFrameRate()
+        displayLayer.contentsScale = window.backingScaleFactor
+        if resetCadence { performance?.resetDisplayCadence() }
+        needsLayout = true
+        schedulePresentation()
+    }
+
+    private func updateDisplayLinkFrameRate() {
+        guard let displayLink else { return }
+        let frameRate = Float(max(
+            1,
+            window?.screen?.maximumFramesPerSecond
                 ?? NSScreen.main?.maximumFramesPerSecond
                 ?? 60
-        )
+        ))
         displayLink.preferredFrameRateRange = CAFrameRateRange(
             minimum: frameRate,
             maximum: frameRate,
             preferred: frameRate
         )
-        displayLink.add(to: .main, forMode: .common)
-        metalLayer.usesExplicitPresentationTiming = true
-        displayLinkTarget = target
-        self.displayLink = displayLink
+    }
+
+    private func removeWindowObservers() {
+        if let windowDidBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
+            self.windowDidBecomeKeyObserver = nil
+        }
+        if let windowDidChangeScreenObserver {
+            NotificationCenter.default.removeObserver(windowDidChangeScreenObserver)
+            self.windowDidChangeScreenObserver = nil
+        }
     }
 
     private func schedulePresentation() {

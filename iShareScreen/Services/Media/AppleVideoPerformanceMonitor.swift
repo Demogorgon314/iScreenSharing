@@ -215,6 +215,16 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         }
     }
 
+    func resetDisplayCadence() {
+        lock.withPerformanceLock {
+            lastDisplayedTime = nil
+            recentDisplayFrameTimes.removeAll(keepingCapacity: true)
+            accumulator.displayLinkLead = 0
+            accumulator.displayLinkPeriod = 0
+            accumulator.displayLinkSamples = 0
+        }
+    }
+
     func recordNACK(count: Int) {
         lock.withPerformanceLock { accumulator.nackCount += count }
     }

@@ -124,6 +124,28 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         XCTAssertEqual(snapshot.recentDisplayFrameMilliseconds[1], 17, accuracy: 0.001)
     }
 
+    func testResetDisplayCadenceStartsASeparateRefreshRateHistory() {
+        let monitor = AppleVideoPerformanceMonitor(
+            tileCount: 1,
+            clock: { 0 },
+            automaticallyPublishes: false
+        )
+        monitor.recordDisplay(duration: 0.003, presentedAt: 1.000)
+        monitor.recordDisplay(duration: 0.003, presentedAt: 1.007)
+        monitor.recordDisplayLink(lead: 0.006, period: 1.0 / 144.0)
+
+        monitor.resetDisplayCadence()
+        monitor.recordDisplay(duration: 0.003, presentedAt: 2.000)
+        monitor.recordDisplay(duration: 0.003, presentedAt: 2.008)
+        monitor.recordDisplayLink(lead: 0.007, period: 1.0 / 120.0)
+
+        let snapshot = monitor.sample(at: 1)
+
+        XCTAssertEqual(snapshot.recentDisplayFrameMilliseconds.count, 1)
+        XCTAssertEqual(snapshot.recentDisplayFrameMilliseconds[0], 8, accuracy: 0.001)
+        XCTAssertEqual(snapshot.averageDisplayLinkPeriodMilliseconds, 1000.0 / 120.0, accuracy: 0.001)
+    }
+
     func testCountsSparseTileUpdatesAsSourceFrames() {
         let monitor = AppleVideoPerformanceMonitor(
             tileCount: 4,

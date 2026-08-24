@@ -270,4 +270,47 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertFalse(metalLayer.usesExplicitPresentationTiming)
         XCTAssertFalse(metalLayer.displaySyncEnabled)
     }
+
+    func testChangingWindowScreenResetsCadenceWithoutReplacingMetalLayer() throws {
+        let renderer = AppleVideoRenderer()
+        let performance = AppleVideoPerformanceMonitor(
+            tileCount: 4,
+            clock: { 0 },
+            automaticallyPublishes: false
+        )
+        let view = RemoteVideoCanvasNSView(
+            renderer: renderer,
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            frames: AppleVideoFrameStore(),
+            input: nil,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil,
+            performance: performance
+        )
+        let originalLayer = try XCTUnwrap(
+            view.layer?.sublayers?.compactMap { $0 as? AppleNV24MetalLayer }.first
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 360),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = view
+        performance.recordDisplay(duration: 0.003, presentedAt: 1.000)
+        performance.recordDisplay(duration: 0.003, presentedAt: 1.007)
+
+        NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: window)
+
+        let retainedLayer = try XCTUnwrap(
+            view.layer?.sublayers?.compactMap { $0 as? AppleNV24MetalLayer }.first
+        )
+        XCTAssertTrue(originalLayer === retainedLayer)
+        XCTAssertTrue(performance.sample(at: 1).recentDisplayFrameMilliseconds.isEmpty)
+    }
 }
