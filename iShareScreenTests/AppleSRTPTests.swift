@@ -54,9 +54,11 @@ final class AppleSRTPTests: XCTestCase {
     }
 
     func testReadsLongTermReferenceMarkerFromAppleRTPHeaderExtension() {
-        var ltrHeader = Data(repeating: 0, count: 16)
-        ltrHeader[0] = 0x90
-        ltrHeader[12] = 0x81
+        let ltrHeader = Data([
+            0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x93, 0x11, 0, 1,
+            0x00, 0x25, 0x16, 0x82,
+        ])
         let ltrPacket = AppleRTPPacket(
             header: ltrHeader,
             payload: Data(),
@@ -68,7 +70,7 @@ final class AppleSRTPTests: XCTestCase {
         )
 
         var ordinaryHeader = ltrHeader
-        ordinaryHeader[12] = 0x80
+        ordinaryHeader[13] = 0x01
         let ordinaryPacket = AppleRTPPacket(
             header: ordinaryHeader,
             payload: Data(),
@@ -83,37 +85,43 @@ final class AppleSRTPTests: XCTestCase {
         XCTAssertFalse(ordinaryPacket.isLongTermReferenceFrame)
     }
 
-    func testReadsFramePacketInfoFromAppleRTPHeaderExtension() {
+    func testRefreshBitDoesNotRequestLongTermReferenceAcknowledgement() {
+        let refreshPacket = rtpPacket(header: Data([
+            0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+            0x93, 0x21, 0, 1,
+            0x00, 0x25, 0x16, 0x82,
+        ]))
+
+        XCTAssertFalse(refreshPacket.isLongTermReferenceFrame)
+    }
+
+    func testReadsNativeFramePacketInfoWithInlineLongTermReferenceMarker() {
         let packet = rtpPacket(header: Data([
             0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-            0x80, 0x01, 0, 1,
-            0x01, 0x23, 0x45, 0x67,
+            0x93, 0x11, 0, 1,
+            0x00, 0x25, 0x16, 0x82,
         ]))
 
         XCTAssertEqual(packet.framePacketInfo, AppleRTPFramePacketInfo(
-            totalPacketsPerFrame: 0x0123,
-            frameSequenceNumber: 0x4567
+            totalPacketsPerFrame: 0x0025,
+            frameSequenceNumber: 0x1682
         ))
     }
 
-    func testReadsFramePacketInfoAfterOptionalMediaControlWord() {
+    func testDoesNotReadFramePacketInfoWithoutInfoSixPresenceBit() {
         let packet = rtpPacket(header: Data([
             0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-            0x80, 0x03, 0, 2,
-            0xde, 0xad, 0xbe, 0xef,
-            0, 9, 0, 7,
+            0x93, 0x10, 0, 1,
+            0x00, 0x25, 0x16, 0x82,
         ]))
 
-        XCTAssertEqual(packet.framePacketInfo, AppleRTPFramePacketInfo(
-            totalPacketsPerFrame: 9,
-            frameSequenceNumber: 7
-        ))
+        XCTAssertNil(packet.framePacketInfo)
     }
 
     func testRejectsTruncatedFramePacketInfo() {
         let packet = rtpPacket(header: Data([
             0x90, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-            0x80, 0x01, 0, 1,
+            0x93, 0x01, 0, 1,
         ]))
 
         XCTAssertNil(packet.framePacketInfo)

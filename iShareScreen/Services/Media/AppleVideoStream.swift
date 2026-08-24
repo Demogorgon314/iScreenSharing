@@ -56,7 +56,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var sourceToTile = [UInt32: Int]()
     private var abandonedSources = Set<UInt32>()
     private var cachedUnits = [UInt32: [AppleHEVCAccessUnit]]()
-    private var pendingLongTermReferenceTimestamps = Set<UInt32>()
     private var isClosed = false
     private var mediaGeneration: UInt64 = 0
     private var frameCount = 0
@@ -161,7 +160,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 self.sourceToTile.removeAll(keepingCapacity: false)
                 self.abandonedSources.removeAll(keepingCapacity: false)
                 self.cachedUnits.removeAll(keepingCapacity: false)
-                self.pendingLongTermReferenceTimestamps.removeAll(keepingCapacity: false)
                 self.countLock.withVideoStreamLock {
                     self.firstPacketTime = nil
                     self.lastDecodedFrameTime = 0
@@ -303,9 +301,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
         guard isCurrentGeneration else { return }
         let accessUnits = [accessUnit]
-        if accessUnit.isLongTermReferenceFrame {
-            pendingLongTermReferenceTimestamps.insert(accessUnit.timestamp)
-        }
         performance.recordAccessUnits(1)
         performance.recordAccessUnitBytes(
             accessUnit.encodedByteCount,
@@ -402,6 +397,17 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                         presentationTime: decodedFrame.presentationTime
                     )
                 },
+                longTermReferenceHandler: { [weak self] decodingOrderNumber in
+                    do {
+                        try self?.feedback.acknowledgeLongTermReference(
+                            decodingOrderNumber: decodingOrderNumber
+                        )
+                    } catch {
+                        Self.logger.debug(
+                            "LTR acknowledgement failed: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
+                },
                 refreshHandler: { [weak self] timestamp in
                     self?.scheduleKeyFramesForAllTiles(timestamp: timestamp)
                 },
@@ -432,7 +438,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
         abandonedSources.formUnion(sourceToTile.keys)
         sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
-        pendingLongTermReferenceTimestamps.removeAll(keepingCapacity: false)
         decodePipeline?.close()
         decodePipeline = nil
         decoderParameterSets = nil
@@ -489,7 +494,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         tileCount: Int,
         performanceMonitor: AppleVideoPerformanceMonitor
     ) -> AppleHEVCDecodePipeline.DecoderFactory {
-        { failureHandler, frameHandler in
+        { failureHandler, frameHandler, longTermReferenceHandler in
             try AppleHEVCDecoder(
                 parameterSets: parameterSets,
                 tileCount: tileCount,
@@ -497,6 +502,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                     performanceMonitor.setDecoderBackend(backend)
                 },
                 failureHandler: failureHandler,
+                longTermReferenceHandler: longTermReferenceHandler,
                 frameHandler: frameHandler
             )
         }
@@ -643,18 +649,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         performance.recordDecodedFrame(rtpTimestamp: rtpTimestamp)
         countLock.withVideoStreamLock {
             self.lastDecodedFrameTime = decodedAt
-        }
-        if region == .fullCanvas,
-           pendingLongTermReferenceTimestamps.remove(rtpTimestamp) != nil,
-           let mediaSource = sourceToTile.first(where: { $0.value == 0 })?.key {
-            do {
-                try feedback.acknowledgeLongTermReference(
-                    rtpTimestamp: rtpTimestamp,
-                    mediaSource: mediaSource
-                )
-            } catch {
-                Self.logger.debug("LTR acknowledgement failed: \(error.localizedDescription, privacy: .public)")
-            }
         }
         let becameReady = countLock.withVideoStreamLock {
             frameCount += 1

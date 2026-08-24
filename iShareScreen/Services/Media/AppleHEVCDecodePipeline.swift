@@ -9,6 +9,7 @@ protocol AppleHEVCDecodeSubmitting: AnyObject {
         _ nalUnits: [Data],
         tileIndex: Int,
         decodingOrderNumber: UInt16?,
+        isLongTermReferenceFrame: Bool,
         rtpTimestamp: UInt32,
         presentationTime: TimeInterval
     ) throws -> Bool
@@ -28,10 +29,12 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
 
     typealias DecoderFactory = (
         @escaping AppleHEVCDecoder.FailureHandler,
-        @escaping AppleHEVCDecoder.FrameHandler
+        @escaping AppleHEVCDecoder.FrameHandler,
+        @escaping AppleHEVCDecoder.LongTermReferenceHandler
     ) throws -> any AppleHEVCDecodeSubmitting
 
     typealias FrameHandler = @Sendable (AppleHEVCDecoder.DecodedFrame) -> Void
+    typealias LongTermReferenceHandler = @Sendable (UInt16) -> Void
     typealias RefreshHandler = @Sendable (UInt32) -> Void
     typealias ErrorHandler = @Sendable (Error) -> Void
 
@@ -39,14 +42,17 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         private let lock = NSLock()
         private var frameHandler: AppleHEVCDecoder.FrameHandler?
         private var failureHandler: AppleHEVCDecoder.FailureHandler?
+        private var longTermReferenceHandler: AppleHEVCDecoder.LongTermReferenceHandler?
 
         func install(
             frameHandler: @escaping AppleHEVCDecoder.FrameHandler,
-            failureHandler: @escaping AppleHEVCDecoder.FailureHandler
+            failureHandler: @escaping AppleHEVCDecoder.FailureHandler,
+            longTermReferenceHandler: @escaping AppleHEVCDecoder.LongTermReferenceHandler
         ) {
             lock.lock()
             self.frameHandler = frameHandler
             self.failureHandler = failureHandler
+            self.longTermReferenceHandler = longTermReferenceHandler
             lock.unlock()
         }
 
@@ -60,10 +66,16 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
             handler?(failure)
         }
 
+        func emitLongTermReference(_ decodingOrderNumber: UInt16) {
+            let handler = locked { longTermReferenceHandler }
+            handler?(decodingOrderNumber)
+        }
+
         func clear() {
             lock.lock()
             frameHandler = nil
             failureHandler = nil
+            longTermReferenceHandler = nil
             lock.unlock()
         }
 
@@ -77,6 +89,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
     private let sourceToTile: [UInt32: Int]
     private let callbackQueue: DispatchQueue
     private let frameHandler: FrameHandler
+    private let longTermReferenceHandler: LongTermReferenceHandler
     private let refreshHandler: RefreshHandler
     private let errorHandler: ErrorHandler
     private let callbackBridge: CallbackBridge
@@ -95,6 +108,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         callbackQueue: DispatchQueue,
         decoderFactory: DecoderFactory,
         frameHandler: @escaping FrameHandler,
+        longTermReferenceHandler: @escaping LongTermReferenceHandler = { _ in },
         refreshHandler: @escaping RefreshHandler,
         errorHandler: @escaping ErrorHandler
     ) throws {
@@ -103,6 +117,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         self.sourceToTile = sourceToTile
         self.callbackQueue = callbackQueue
         self.frameHandler = frameHandler
+        self.longTermReferenceHandler = longTermReferenceHandler
         self.refreshHandler = refreshHandler
         self.errorHandler = errorHandler
         callbackBridge = CallbackBridge()
@@ -118,6 +133,11 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
             failureHandler: { [weak self, callbackQueue] failure in
                 callbackQueue.async { [weak self] in
                     self?.handleDecodeFailure(failure)
+                }
+            },
+            longTermReferenceHandler: { [weak self, callbackQueue] decodingOrderNumber in
+                callbackQueue.async { [weak self] in
+                    self?.handleLongTermReference(decodingOrderNumber)
                 }
             }
         )
@@ -142,6 +162,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                     accessUnit.nalUnits,
                     tileIndex: tileIndex,
                     decodingOrderNumber: accessUnit.decodingOrderNumber,
+                    isLongTermReferenceFrame: accessUnit.isLongTermReferenceFrame,
                     rtpTimestamp: accessUnit.timestamp,
                     presentationTime: presentationTime
                 )
@@ -211,6 +232,9 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
             },
             { [callbackBridge] frame in
                 callbackBridge.emit(frame)
+            },
+            { [callbackBridge] decodingOrderNumber in
+                callbackBridge.emitLongTermReference(decodingOrderNumber)
             }
         )
     }
@@ -218,6 +242,11 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
     private func handleDecodedFrame(_ frame: AppleHEVCDecoder.DecodedFrame) {
         guard !isClosed else { return }
         frameHandler(frame)
+    }
+
+    private func handleLongTermReference(_ decodingOrderNumber: UInt16) {
+        guard !isClosed else { return }
+        longTermReferenceHandler(decodingOrderNumber)
     }
 
     private func requestRefreshIfNeeded(for timestamp: UInt32) {

@@ -15,31 +15,21 @@ struct AppleRTPPacket: Equatable, Sendable {
     let payloadType: UInt8
     let marker: Bool
 
-    /// Apple carries the FaceTime-video media-control header in the RTP
-    /// extension header itself. Bit zero of its first byte marks an LTR frame.
+    /// Apple inlines MCI Info ID 4 in the high nibble of the second extension
+    /// header byte. Bit zero of that value requests acknowledgement of an LTR.
     var isLongTermReferenceFrame: Bool {
-        guard header.count >= 12, header[0] & 0x10 != 0 else { return false }
-        let extensionOffset = 12 + Int(header[0] & 0x0f) * 4
-        guard extensionOffset + 4 <= header.count else { return false }
-        return header[extensionOffset] & 0x01 != 0
+        guard let mediaControlExtension else { return false }
+        return mediaControlExtension.controlByte & 0x10 != 0
     }
 
     /// Apple MCI Info ID 6 carries the sender-declared packet count for this
-    /// encoded frame. Its four bytes follow the Apple RTP extension header and
-    /// the optional Info ID 4 word, when present.
+    /// encoded frame. Info ID 4 is inline, so the Info ID 6 value is the first
+    /// four-byte word after the Apple RTP extension header.
     var framePacketInfo: AppleRTPFramePacketInfo? {
-        guard header.count >= 12, header[0] & 0x10 != 0 else { return nil }
-        let extensionOffset = 12 + Int(header[0] & 0x0f) * 4
-        guard extensionOffset + 4 <= header.count,
-              header[extensionOffset] >> 6 == 2,
-              let wordCount = try? Int(header.uint16BE(at: extensionOffset + 2)) else {
-            return nil
-        }
-        let extensionEnd = extensionOffset + 4 + wordCount * 4
-        let flags = header[extensionOffset + 1]
-        guard extensionEnd <= header.count, flags & 0x01 != 0 else { return nil }
-        let infoOffset = extensionOffset + 4 + (flags & 0x02 == 0 ? 0 : 4)
-        guard infoOffset + 4 <= extensionEnd,
+        guard let mediaControlExtension,
+              mediaControlExtension.controlByte & 0x01 != 0 else { return nil }
+        let infoOffset = mediaControlExtension.infoOffset
+        guard infoOffset + 4 <= mediaControlExtension.endOffset,
               let totalPacketsPerFrame = try? header.uint16BE(at: infoOffset),
               let frameSequenceNumber = try? header.uint16BE(at: infoOffset + 2) else {
             return nil
@@ -47,6 +37,27 @@ struct AppleRTPPacket: Equatable, Sendable {
         return AppleRTPFramePacketInfo(
             totalPacketsPerFrame: totalPacketsPerFrame,
             frameSequenceNumber: frameSequenceNumber
+        )
+    }
+
+    private var mediaControlExtension: (
+        controlByte: UInt8,
+        infoOffset: Int,
+        endOffset: Int
+    )? {
+        guard header.count >= 12, header[0] & 0x10 != 0 else { return nil }
+        let extensionOffset = 12 + Int(header[0] & 0x0f) * 4
+        guard extensionOffset + 4 <= header.count,
+              header[extensionOffset] >> 6 == 2,
+              let wordCount = try? Int(header.uint16BE(at: extensionOffset + 2)) else {
+            return nil
+        }
+        let endOffset = extensionOffset + 4 + wordCount * 4
+        guard endOffset <= header.count else { return nil }
+        return (
+            controlByte: header[extensionOffset + 1],
+            infoOffset: extensionOffset + 4,
+            endOffset: endOffset
         )
     }
 }

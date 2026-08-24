@@ -7,7 +7,6 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
     private let encryptor: AppleSRTCPEncryptor
     private let synchronizationSource: UInt32
     private var feedbackSequence: UInt8 = 0
-    private var lastAcknowledgedLongTermReferenceTimestamp: UInt32?
 
     init(
         sender: AppleMediaControlSending,
@@ -82,20 +81,12 @@ final class AppleVideoFeedbackController: @unchecked Sendable {
     }
 
     func acknowledgeLongTermReference(
-        rtpTimestamp: UInt32,
-        mediaSource: UInt32
+        decodingOrderNumber: UInt16
     ) throws {
-        let packet = lock.withFeedbackLock { () -> Data? in
-            guard lastAcknowledgedLongTermReferenceTimestamp != rtpTimestamp else { return nil }
-            lastAcknowledgedLongTermReferenceTimestamp = rtpTimestamp
-            return AppleRTCP.longTermReferenceAcknowledgement(
-                sender: synchronizationSource,
-                mediaSource: mediaSource,
-                rtpTimestamp: rtpTimestamp
-            )
-        }
-        guard let packet else { return }
-        try send(packet: packet)
+        try send(packet: AppleRTCP.longTermReferenceAcknowledgement(
+            sender: synchronizationSource,
+            decodingOrderNumber: decodingOrderNumber
+        ))
     }
 
     private func send(feedback: Data) throws {

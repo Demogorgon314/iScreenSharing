@@ -97,11 +97,11 @@ enum AppleRFBMessages {
     static func autoFramebufferUpdate(
         width: UInt16 = .max,
         height: UInt16 = .max,
-        selectedScreen: UInt32 = .max
+        intervalMilliseconds: UInt32 = 0
     ) -> Data {
         var message = Data([0x09, 0x00])
         message.appendUInt16BE(1)
-        message.appendUInt32BE(selectedScreen)
+        message.appendUInt32BE(intervalMilliseconds)
         message.appendUInt16BE(0)
         message.appendUInt16BE(0)
         message.appendUInt16BE(width)

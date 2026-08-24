@@ -110,12 +110,14 @@ final class AppleHEVCDecoderTests: XCTestCase {
             tileIndex: 2,
             tileOrder: 10,
             decodingOrderNumber: 20,
+            isLongTermReferenceFrame: true,
             rtpTimestamp: 30,
             presentationTime: 40,
             decodeStartedAt: 39
         )
         var receivedMetadata: AppleVCPDecompressionSession.FrameMetadata?
         var receivedStatus: OSStatus?
+        var successfulDecodeCount = 0
 
         AppleVCPDecompressionSession.dispatchOutput(
             metadata: metadata,
@@ -125,12 +127,15 @@ final class AppleHEVCDecoderTests: XCTestCase {
             failureHandler: {
                 receivedMetadata = $0
                 receivedStatus = $1
-            }
+            },
+            successfulDecodeHandler: { _ in successfulDecodeCount += 1 }
         )
 
         XCTAssertEqual(receivedMetadata?.tileIndex, 2)
+        XCTAssertEqual(receivedMetadata?.isLongTermReferenceFrame, true)
         XCTAssertEqual(receivedMetadata?.rtpTimestamp, 30)
         XCTAssertEqual(receivedStatus, kVTVideoDecoderReferenceMissingErr)
+        XCTAssertEqual(successfulDecodeCount, 0)
         XCTAssertEqual(
             AppleVCPDecompressionSession.outputDisposition(
                 status: kVTVideoDecoderReferenceMissingErr,
@@ -141,6 +146,27 @@ final class AppleHEVCDecoderTests: XCTestCase {
     }
 
     func testVideoProcessingKeepsIncompleteTileAssemblyPending() {
+        let metadata = AppleVCPDecompressionSession.FrameMetadata(
+            tileIndex: 2,
+            tileOrder: 10,
+            decodingOrderNumber: 20,
+            isLongTermReferenceFrame: true,
+            rtpTimestamp: 30,
+            presentationTime: 40,
+            decodeStartedAt: 39
+        )
+        var successfulMetadata: AppleVCPDecompressionSession.FrameMetadata?
+
+        AppleVCPDecompressionSession.dispatchOutput(
+            metadata: metadata,
+            status: noErr,
+            imageBuffer: nil,
+            frameHandler: { _, _ in XCTFail("Pending tile must not publish a frame") },
+            failureHandler: { _, _ in XCTFail("Pending tile must not report a failure") },
+            successfulDecodeHandler: { successfulMetadata = $0 }
+        )
+
+        XCTAssertEqual(successfulMetadata?.decodingOrderNumber, 20)
         XCTAssertEqual(
             AppleVCPDecompressionSession.outputDisposition(
                 status: noErr,

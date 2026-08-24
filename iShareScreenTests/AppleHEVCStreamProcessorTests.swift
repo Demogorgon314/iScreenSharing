@@ -76,6 +76,26 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertTrue(unit.isLongTermReferenceFrame)
     }
 
+    func testFirstPacketOwnsLongTermReferenceMarkerForAccessUnit() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+        let payload = Data([0x02, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(packet(
+            sequence: 10,
+            marker: false,
+            payload: payload,
+            mediaControlBits: 0
+        )))
+        let unit = try XCTUnwrap(processor.process(packet(
+            sequence: 11,
+            marker: true,
+            payload: payload,
+            mediaControlBits: 1
+        )))
+
+        XCTAssertFalse(unit.isLongTermReferenceFrame)
+    }
+
     func testDeduplicatesRetransmittedSequenceNumbers() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         let payload = Data([0x42, 0x01, 0, 1, 0xaa])
@@ -603,11 +623,13 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         totalPacketsPerFrame: UInt16? = nil,
         frameSequenceNumber: UInt16 = 0
     ) -> AppleRTPPacket {
-        let header: Data
+        var header = Data()
         if let totalPacketsPerFrame {
             header = Data([
                 0x90, 0x60, 0, 0, 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44,
-                0x80 | (mediaControlBits ?? 0), 0x01, 0, 1,
+                0x93, ((mediaControlBits ?? 0) << 4) | 0x01, 0, 1,
+            ])
+            header.append(contentsOf: [
                 UInt8(truncatingIfNeeded: totalPacketsPerFrame >> 8),
                 UInt8(truncatingIfNeeded: totalPacketsPerFrame),
                 UInt8(truncatingIfNeeded: frameSequenceNumber >> 8),
@@ -616,10 +638,8 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         } else if let mediaControlBits {
             header = Data([
                 0x90, 0x60, 0, 0, 0, 0, 0, 0, 0x11, 0x22, 0x33, 0x44,
-                0x80 | (mediaControlBits & 0x3f), 0x10, 0, 0,
+                0x93, mediaControlBits << 4, 0, 0,
             ])
-        } else {
-            header = Data()
         }
         return AppleRTPPacket(
             header: header,

@@ -27,6 +27,50 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         XCTAssertFalse(harness.decoder.isClosed)
     }
 
+    func testForwardsLongTermReferenceMetadataWithDecodingOrderNumber() throws {
+        let harness = try makeHarness()
+
+        harness.pipeline.submit([
+            accessUnit(
+                source: 100,
+                timestamp: 1,
+                order: 0xabcd,
+                isLongTermReferenceFrame: true
+            ),
+        ])
+
+        XCTAssertEqual(harness.decoder.submissions.count, 1)
+        XCTAssertEqual(harness.decoder.submissions[0].order, 0xabcd)
+        XCTAssertTrue(harness.decoder.submissions[0].isLongTermReferenceFrame)
+    }
+
+    func testForwardsLongTermReferenceCompletionWithoutAFrame() throws {
+        let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.ltr")
+        let decoder = FakeDecoder()
+        var acknowledgements = [UInt16]()
+        let pipeline = try AppleHEVCDecodePipeline(
+            tileCount: sources.count,
+            sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
+            callbackQueue: callbackQueue,
+            decoderFactory: { failure, frame, longTermReference in
+                decoder.failureHandler = failure
+                decoder.frameHandler = frame
+                decoder.longTermReferenceHandler = longTermReference
+                return decoder
+            },
+            frameHandler: { _ in XCTFail("LTR completion must not publish a frame") },
+            longTermReferenceHandler: { acknowledgements.append($0) },
+            refreshHandler: { _ in },
+            errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
+        )
+
+        decoder.emitLongTermReference(0xabcd)
+        callbackQueue.sync {}
+
+        XCTAssertEqual(acknowledgements, [0xabcd])
+        pipeline.close()
+    }
+
     func testSynchronousDecodeFailureKeepsSubmittingWithoutReplacingDecoder() throws {
         let harness = try makeHarness()
         harness.decoder.nextError = AppleHEVCDecoderError.decodeFailed(-12909)
@@ -198,8 +242,9 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
             tileCount: sources.count,
             sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
             callbackQueue: callbackQueue,
-            decoderFactory: { failure, frame in
+            decoderFactory: { failure, frame, longTermReference in
                 callbacks.install(failureHandler: failure, frameHandler: frame)
+                decoder.longTermReferenceHandler = longTermReference
                 return decoder
             },
             frameHandler: { _ in },
@@ -220,10 +265,11 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         decoder: FakeDecoder,
         callbacks: CallbackStore
     ) -> AppleHEVCDecodePipeline.DecoderFactory {
-        { failure, frame in
+        { failure, frame, longTermReference in
             callbacks.install(failureHandler: failure, frameHandler: frame)
             decoder.failureHandler = { callbacks.emitFailure($0) }
             decoder.frameHandler = { callbacks.emitFrame($0) }
+            decoder.longTermReferenceHandler = longTermReference
             return decoder
         }
     }
@@ -232,13 +278,15 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         source: UInt32,
         timestamp: UInt32,
         order: UInt16,
-        isRefresh: Bool = false
+        isRefresh: Bool = false,
+        isLongTermReferenceFrame: Bool = false
     ) -> AppleHEVCAccessUnit {
         AppleHEVCAccessUnit(
             synchronizationSource: source,
             timestamp: timestamp,
             decodingOrderNumber: order,
-            nalUnits: [Data([isRefresh ? 0x26 : 0x02, 0x01])]
+            nalUnits: [Data([isRefresh ? 0x26 : 0x02, 0x01])],
+            isLongTermReferenceFrame: isLongTermReferenceFrame
         )
     }
 }
@@ -320,6 +368,7 @@ private extension AppleHEVCDecodePipelineTests {
     final class FakeDecoder: AppleHEVCDecodeSubmitting {
         struct Submission {
             let order: UInt16?
+            let isLongTermReferenceFrame: Bool
             let timestamp: UInt32
         }
 
@@ -328,15 +377,21 @@ private extension AppleHEVCDecodePipelineTests {
         var isClosed = false
         var failureHandler: AppleHEVCDecoder.FailureHandler?
         var frameHandler: AppleHEVCDecoder.FrameHandler?
+        var longTermReferenceHandler: AppleHEVCDecoder.LongTermReferenceHandler?
 
         func decode(
             _ nalUnits: [Data],
             tileIndex: Int,
             decodingOrderNumber: UInt16?,
+            isLongTermReferenceFrame: Bool,
             rtpTimestamp: UInt32,
             presentationTime: TimeInterval
         ) throws -> Bool {
-            submissions.append(Submission(order: decodingOrderNumber, timestamp: rtpTimestamp))
+            submissions.append(Submission(
+                order: decodingOrderNumber,
+                isLongTermReferenceFrame: isLongTermReferenceFrame,
+                timestamp: rtpTimestamp
+            ))
             if let nextError {
                 self.nextError = nil
                 throw nextError
@@ -354,6 +409,10 @@ private extension AppleHEVCDecodePipelineTests {
                 rtpTimestamp: timestamp,
                 status: status
             ))
+        }
+
+        func emitLongTermReference(_ decodingOrderNumber: UInt16) {
+            longTermReferenceHandler?(decodingOrderNumber)
         }
 
         func emitFrame(

@@ -140,7 +140,7 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
         XCTAssertEqual(indexes, Array(UInt32(0)..<UInt32(100)))
     }
 
-    func testAcknowledgesEachLongTermReferenceOnce() throws {
+    func testAcknowledgesEveryDecodedLongTermReferenceCallback() throws {
         let sender = FeedbackSenderSpy()
         let controller = try AppleVideoFeedbackController(
             sender: sender,
@@ -148,11 +148,12 @@ final class AppleVideoFeedbackControllerTests: XCTestCase {
             synchronizationSource: 0x1122_3344
         )
 
-        try controller.acknowledgeLongTermReference(rtpTimestamp: 7, mediaSource: 2)
-        try controller.acknowledgeLongTermReference(rtpTimestamp: 7, mediaSource: 2)
-        try controller.acknowledgeLongTermReference(rtpTimestamp: 8, mediaSource: 2)
+        try controller.acknowledgeLongTermReference(decodingOrderNumber: 7)
+        try controller.acknowledgeLongTermReference(decodingOrderNumber: 7)
+        try controller.acknowledgeLongTermReference(decodingOrderNumber: 8)
 
-        XCTAssertEqual(sender.datagrams.count, 2)
+        XCTAssertEqual(sender.datagrams.count, 3)
+        XCTAssertTrue(sender.datagrams.allSatisfy { $0.count == 30 })
     }
 }
 

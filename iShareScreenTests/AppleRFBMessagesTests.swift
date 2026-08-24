@@ -14,9 +14,21 @@ final class AppleRFBMessagesTests: XCTestCase {
             AppleRFBMessages.autoFramebufferUpdate(width: 3840, height: 1080),
             Data([
                 0x09, 0x00, 0x00, 0x01,
-                0xff, 0xff, 0xff, 0xff,
+                0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00,
                 0x0f, 0x00, 0x04, 0x38,
+            ])
+        )
+    }
+
+    func testBuildsDisabledAutoFramebufferUpdateWithNativePauseSentinel() {
+        XCTAssertEqual(
+            AppleRFBMessages.autoFramebufferUpdate(intervalMilliseconds: .max),
+            Data([
+                0x09, 0x00, 0x00, 0x01,
+                0xff, 0xff, 0xff, 0xff,
+                0x00, 0x00, 0x00, 0x00,
+                0xff, 0xff, 0xff, 0xff,
             ])
         )
     }

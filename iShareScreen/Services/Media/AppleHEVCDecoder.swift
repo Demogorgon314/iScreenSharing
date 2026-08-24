@@ -33,6 +33,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     typealias FrameHandler = @Sendable (DecodedFrame) -> Void
     typealias FailureHandler = @Sendable (DecodeFailure) -> Void
     typealias BackendHandler = @Sendable (Backend) -> Void
+    typealias LongTermReferenceHandler = @Sendable (UInt16) -> Void
 
     static let nativePixelFormat = OSType(0x3434_3466) // '444f' (NV24)
     static let decodeFlags: VTDecodeFrameFlags = [._EnableAsynchronousDecompression]
@@ -69,6 +70,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     private let frameHandler: FrameHandler
     private let failureHandler: FailureHandler
     private let backendHandler: BackendHandler
+    private let longTermReferenceHandler: LongTermReferenceHandler
     private var session: Session?
     private var nextVideoProcessingTileOrder: UInt16 = 0
     private var warnedPixelFormats = Set<OSType>()
@@ -78,6 +80,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         tileCount: Int = 1,
         backendHandler: @escaping BackendHandler = { _ in },
         failureHandler: @escaping FailureHandler = { _ in },
+        longTermReferenceHandler: @escaping LongTermReferenceHandler = { _ in },
         frameHandler: @escaping FrameHandler
     ) throws {
         guard parameterSets.isComplete else { throw AppleHEVCDecoderError.incompleteParameterSets }
@@ -86,6 +89,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         self.tileCount = tileCount
         self.backendHandler = backendHandler
         self.failureHandler = failureHandler
+        self.longTermReferenceHandler = longTermReferenceHandler
         self.frameHandler = frameHandler
         let session = try makeSession(allowsVideoProcessing: true)
         self.session = session
@@ -97,6 +101,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         _ nalUnits: [Data],
         tileIndex: Int,
         decodingOrderNumber: UInt16?,
+        isLongTermReferenceFrame: Bool,
         rtpTimestamp: UInt32,
         presentationTime: TimeInterval
     ) throws -> Bool {
@@ -130,6 +135,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                             tileIndex: tileIndex,
                             tileOrder: tileOrder,
                             decodingOrderNumber: decodingOrderNumber,
+                            isLongTermReferenceFrame: isLongTermReferenceFrame,
                             rtpTimestamp: rtpTimestamp,
                             presentationTime: presentationTime,
                             decodeStartedAt: decodeStartedAt
@@ -152,7 +158,13 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                     sampleBuffer: sampleBuffer,
                     flags: Self.decodeFlags,
                     infoFlagsOut: &decodeInfo
-                ) { [frameHandler, failureHandler] status, _, imageBuffer, _, _ in
+                ) { [frameHandler, failureHandler, longTermReferenceHandler] status, _, imageBuffer, _, _ in
+                    if status == noErr,
+                       isLongTermReferenceFrame,
+                       let decodingOrderNumber,
+                       decodingOrderNumber != 0 {
+                        longTermReferenceHandler(decodingOrderNumber)
+                    }
                     guard status == noErr, let imageBuffer else {
                         if status != noErr {
                             failureHandler(DecodeFailure(
@@ -241,6 +253,9 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                     status: status
                 ))
             },
+            successfulDecodeHandler: { [weak self] metadata in
+                self?.acknowledgeLongTermReferenceIfNeeded(metadata)
+            },
             frameHandler: { [weak self] metadata, pixelBuffer in
                 self?.publishFullCanvas(pixelBuffer, metadata: metadata)
             }
@@ -279,6 +294,15 @@ final class AppleHEVCDecoder: @unchecked Sendable {
             decodeDuration: ProcessInfo.processInfo.systemUptime - metadata.decodeStartedAt,
             pixelBuffer: pixelBuffer
         ))
+    }
+
+    private func acknowledgeLongTermReferenceIfNeeded(
+        _ metadata: AppleVCPDecompressionSession.FrameMetadata
+    ) {
+        guard metadata.isLongTermReferenceFrame,
+              let decodingOrderNumber = metadata.decodingOrderNumber,
+              decodingOrderNumber != 0 else { return }
+        longTermReferenceHandler(decodingOrderNumber)
     }
 
     private static func makeFormatDescription(

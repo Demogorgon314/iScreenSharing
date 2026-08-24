@@ -82,10 +82,9 @@ final class AppleRTCPTests: XCTestCase {
         XCTAssertEqual(
             AppleRTCP.longTermReferenceAcknowledgement(
                 sender: 0x1122_3344,
-                mediaSource: 0x5566_7788,
-                rtpTimestamp: 0xaabb_ccdd
+                decodingOrderNumber: 0xabcd
             ).hex,
-            "8fce0004112233445566778800000005aabbccdd"
+            "80cc000311223344000000050000abcd"
         )
     }
 

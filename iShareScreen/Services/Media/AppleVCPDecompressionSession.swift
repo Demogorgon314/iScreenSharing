@@ -18,6 +18,7 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
         let tileIndex: Int
         let tileOrder: UInt16
         let decodingOrderNumber: UInt16?
+        let isLongTermReferenceFrame: Bool
         let rtpTimestamp: UInt32
         let presentationTime: TimeInterval
         let decodeStartedAt: TimeInterval
@@ -25,17 +26,21 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
 
     typealias FrameHandler = @Sendable (FrameMetadata, CVPixelBuffer) -> Void
     typealias FailureHandler = @Sendable (FrameMetadata, OSStatus) -> Void
+    typealias SuccessfulDecodeHandler = @Sendable (FrameMetadata) -> Void
 
     private final class CallbackContext: @unchecked Sendable {
         let frameHandler: FrameHandler
         let failureHandler: FailureHandler
+        let successfulDecodeHandler: SuccessfulDecodeHandler
 
         init(
             frameHandler: @escaping FrameHandler,
-            failureHandler: @escaping FailureHandler
+            failureHandler: @escaping FailureHandler,
+            successfulDecodeHandler: @escaping SuccessfulDecodeHandler
         ) {
             self.frameHandler = frameHandler
             self.failureHandler = failureHandler
+            self.successfulDecodeHandler = successfulDecodeHandler
         }
     }
 
@@ -71,6 +76,7 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
         negotiationDetails: String,
         nativePixelFormat: OSType,
         failureHandler: @escaping FailureHandler = { _, _ in },
+        successfulDecodeHandler: @escaping SuccessfulDecodeHandler = { _ in },
         frameHandler: @escaping FrameHandler
     ) {
         guard tileCount > 1,
@@ -80,7 +86,8 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
         self.functions = functions
         callbackContext = CallbackContext(
             frameHandler: frameHandler,
-            failureHandler: failureHandler
+            failureHandler: failureHandler,
+            successfulDecodeHandler: successfulDecodeHandler
         )
 
         let decoderSpecification = Self.decoderSpecification(
@@ -187,7 +194,8 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
             status: status,
             imageBuffer: imageBuffer,
             frameHandler: callback.frameHandler,
-            failureHandler: callback.failureHandler
+            failureHandler: callback.failureHandler,
+            successfulDecodeHandler: callback.successfulDecodeHandler
         )
     }
 
@@ -196,8 +204,12 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
         status: OSStatus,
         imageBuffer: CVPixelBuffer?,
         frameHandler: FrameHandler,
-        failureHandler: FailureHandler
+        failureHandler: FailureHandler,
+        successfulDecodeHandler: SuccessfulDecodeHandler = { _ in }
     ) {
+        if status == noErr {
+            successfulDecodeHandler(metadata)
+        }
         switch outputDisposition(status: status, hasImageBuffer: imageBuffer != nil) {
         case .pending:
             return

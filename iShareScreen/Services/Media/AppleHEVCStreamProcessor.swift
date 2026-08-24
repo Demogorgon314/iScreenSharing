@@ -68,6 +68,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         var firstSeenAt: TimeInterval?
         var decodingOrderNumber: UInt16?
         var framePacketInfo: AppleRTPFramePacketInfo?
+        var isLongTermReferenceFrame = false
         var packets = [AppleRTPPacket]()
     }
 
@@ -171,6 +172,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         var group = groups[key, default: PendingAccessUnit()]
         if group.firstSeenAt == nil {
             group.firstSeenAt = arrivalTime
+            group.isLongTermReferenceFrame = packet.isLongTermReferenceFrame
         }
         if let existing = group.decodingOrderNumber,
            let packetDecodingOrderNumber,
@@ -218,7 +220,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             timestamp: key.timestamp,
             decodingOrderNumber: group.decodingOrderNumber,
             nalUnits: units,
-            isLongTermReferenceFrame: ordered.contains(where: \.isLongTermReferenceFrame)
+            isLongTermReferenceFrame: group.isLongTermReferenceFrame
         )
     }
 

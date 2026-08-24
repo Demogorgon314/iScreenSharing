@@ -90,14 +90,12 @@ enum AppleRTCP {
 
     static func longTermReferenceAcknowledgement(
         sender: UInt32,
-        mediaSource: UInt32,
-        rtpTimestamp: UInt32
+        decodingOrderNumber: UInt16
     ) -> Data {
-        var packet = Data([0x8f, 206, 0, 4])
+        var packet = Data([0x80, 204, 0, 3])
         packet.appendUInt32BE(sender)
-        packet.appendUInt32BE(mediaSource)
         packet.appendUInt32BE(5)
-        packet.appendUInt32BE(rtpTimestamp)
+        packet.appendUInt32BE(UInt32(decodingOrderNumber))
         return packet
     }
 
