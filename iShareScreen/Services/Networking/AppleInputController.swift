@@ -1,3 +1,4 @@
+import Carbon
 import Foundation
 
 struct AppleInputDisplaySelection {
@@ -35,6 +36,9 @@ actor AppleInputController {
     private var inputTimestamp = AppleInputTimestamp()
     private let microseconds: @Sendable () -> UInt64
     private var isClosed = false
+    private var nextClipboardSessionID: UInt32 = 1
+    private var keyboardEventSubtype: UInt8 = 1
+    private var isControlling = true
     private(set) var sentEventCount = 0
 
     init(
@@ -56,7 +60,7 @@ actor AppleInputController {
         displayID: UInt32? = nil,
         clickCount: Int = 0
     ) async {
-        guard let session, let recordLayer = session.recordLayer, !isClosed else { return }
+        guard isControlling, let session, let recordLayer = session.recordLayer, !isClosed else { return }
         let point = Self.clampedPoint(
             x: x,
             y: y,
@@ -115,7 +119,7 @@ actor AppleInputController {
         y: Int,
         displayID: UInt32? = nil
     ) async {
-        guard let session, !isClosed else { return }
+        guard isControlling, let session, !isClosed else { return }
         let point = Self.clampedPoint(
             x: x,
             y: y,
@@ -148,7 +152,7 @@ actor AppleInputController {
     }
 
     func selectDisplay(_ displayID: UInt32?) async {
-        guard let session, !isClosed,
+        guard isControlling, let session, !isClosed,
               let message = displaySelection.message(for: displayID) else { return }
         do {
             try await session.sendEncrypted(message)
@@ -165,7 +169,8 @@ actor AppleInputController {
         keyCode: UInt16 = 0,
         keyboardType: UInt16 = 0
     ) async {
-        guard symbol != 0, let session, let recordLayer = session.recordLayer, !isClosed else { return }
+        guard isControlling, symbol != 0,
+              let session, let recordLayer = session.recordLayer, !isClosed else { return }
         do {
             let message = try AppleRFBMessages.encryptedKeyEvent(
                 isDown: isDown,
@@ -173,6 +178,7 @@ actor AppleInputController {
                 timestampDelta: inputTimestamp.next(at: microseconds()),
                 keyboardType: keyboardType,
                 keyCode: keyCode,
+                subtype: keyboardEventSubtype,
                 contentKey: recordLayer.contentKey
             )
             try await session.sendEncrypted(message)
@@ -182,19 +188,67 @@ actor AppleInputController {
         }
     }
 
+    func perform(_ command: AppleRemoteSystemCommand) async {
+        guard isControlling else { return }
+        await key(
+            isDown: true,
+            symbol: command.rawValue,
+            keyCode: UInt16(truncatingIfNeeded: command.rawValue),
+            keyboardType: UInt16(LMGetKbdType())
+        )
+    }
+
+    func setUsesSameInputSource(_ usesSameInputSource: Bool) {
+        keyboardEventSubtype = usesSameInputSource ? 3 : 1
+    }
+
+    func setControlling(_ controlling: Bool) {
+        isControlling = controlling
+    }
+
     func enableClipboard() async {
+        guard isControlling else { return }
         await send(AppleClipboardMessage.enable)
     }
 
     func fetchClipboard() async {
-        await send(AppleClipboardMessage.fetch)
+        _ = try? await requestClipboard(promises: false)
     }
 
-    func sendClipboard(_ text: String) async throws {
-        let message = try AppleClipboardMessage.send(text: text)
+    @discardableResult
+    func requestClipboard(promises: Bool) async throws -> UInt32 {
+        guard isControlling else { throw AppleInputControllerError.notControlling }
+        let sessionID = nextClipboardSessionID
+        nextClipboardSessionID &+= 1
+        if nextClipboardSessionID == 0 { nextClipboardSessionID = 1 }
+        try await sendThrowing(
+            AppleClipboardMessage.request(promises: promises, sessionID: sessionID)
+        )
+        return sessionID
+    }
+
+    func sendClipboard(
+        _ archive: AppleClipboardArchive,
+        promises: Bool = false,
+        sessionID: UInt32 = 0
+    ) async throws {
+        guard isControlling else { throw AppleInputControllerError.notControlling }
+        let message = try AppleClipboardMessage.send(
+            archive: archive,
+            promises: promises,
+            sessionID: sessionID
+        )
         for fragment in AppleClipboardMessage.fragments(of: message) {
             try await sendThrowing(fragment)
         }
+    }
+
+    func sendClipboard(_ text: String) async throws {
+        try await sendClipboard(.text(text))
+    }
+
+    func disableClipboard() async {
+        await send(AppleClipboardMessage.disable)
     }
 
     func close() {
@@ -224,5 +278,13 @@ actor AppleInputController {
             UInt16(min(max(x, 0), maximumX)),
             UInt16(min(max(y, 0), maximumY))
         )
+    }
+}
+
+enum AppleInputControllerError: LocalizedError, Equatable {
+    case notControlling
+
+    var errorDescription: String? {
+        "Remote input is unavailable while observing the shared Mac."
     }
 }

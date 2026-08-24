@@ -5,18 +5,20 @@ struct SessionView: View {
     @ObservedObject var sessions: SessionManager
     @ObservedObject var displayLayout: AppleDisplayLayoutModel
     @ObservedObject var dynamicResolution: AppleDynamicResolutionModel
+    @ObservedObject var controlState: AppleSessionControlState
     let displayIndex: Int
     let disconnectsSessionOnDisappear: Bool
     @State private var displayScale = AppleVideoDisplayScale()
-    @State private var isObserving = false
-    @State private var isChangingMode = false
-    @State private var modeError: String?
     @State private var viewportSize = CGSize.zero
+    @State private var sessionWindowIdentifier = UUID()
     @AppStorage("synchronizesVideoPresentation") private var synchronizesVideoPresentation = true
     @AppStorage("showsVideoPerformanceOverlay") private var showsVideoPerformanceOverlay = false
     @AppStorage("showsMetalPerformanceHUD") private var showsMetalPerformanceHUD = false
     let videoRenderer: AppleVideoRenderer
     private let viewportStore = SessionViewportStore()
+
+    private var isObserving: Bool { controlState.isObserving }
+    private var isChangingMode: Bool { controlState.isChangingMode }
 
     var body: some View {
         Group {
@@ -41,6 +43,12 @@ struct SessionView: View {
                     ),
                     inputCoordinatesAreDisplayLocal: usesIndependentVideoStreams,
                     inputDisplayID: nil,
+                    onWindowKeyChange: { isKey in
+                        session.clipboardService?.setSessionWindow(
+                            sessionWindowIdentifier,
+                            isKey: isKey
+                        )
+                    },
                     onViewportChange: viewportChanged
                 )
                 .onChange(of: stream.state) { _, state in
@@ -58,6 +66,10 @@ struct SessionView: View {
         }
         .navigationTitle(endpoint.displayName)
         .focusedSceneValue(\.sessionEndpoint, endpoint)
+        .focusedSceneValue(
+            \.remoteSystemActions,
+            remoteSystemActions
+        )
         .focusedSceneValue(\.sessionDisplayScale, $displayScale)
         .focusedSceneValue(\.synchronizesVideoPresentation, $synchronizesVideoPresentation)
         .focusedSceneValue(
@@ -84,7 +96,21 @@ struct SessionView: View {
                     .help(displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On")
                 Button { sendClipboard() } label: { Image(systemName: "clipboard") }
                     .help("Send Clipboard to Remote Mac")
-                    .disabled(isObserving)
+                    .disabled(isObserving || isChangingMode)
+                if let capabilities = sessions.session(for: endpoint)?.remoteSystemCapabilities,
+                   sessions.session(for: endpoint)?.inputController != nil {
+                    RemoteSystemCommandButtons(
+                        capabilities: capabilities,
+                        isDisabled: isObserving || isChangingMode,
+                        perform: performRemoteSystemCommand
+                    )
+                }
+                if let keyboardInputSource = sessions.session(for: endpoint)?.keyboardInputSourceService {
+                    KeyboardInputSourceButton(
+                        service: keyboardInputSource,
+                        isDisabled: isObserving || isChangingMode
+                    )
+                }
                 Button { toggleObservationMode() } label: {
                     Image(systemName: isObserving ? "eye.fill" : "cursorarrow.rays")
                 }
@@ -121,9 +147,9 @@ struct SessionView: View {
             }
         }
         .alert("Unable to Change Mode", isPresented: modeErrorIsPresented) {
-            Button("OK") { modeError = nil }
+            Button("OK") { controlState.clearError() }
         } message: {
-            Text(modeError ?? "The Screen Sharing mode could not be changed.")
+            Text(controlState.errorMessage ?? "The Screen Sharing mode could not be changed.")
         }
         .alert("Unable to Change Resolution", isPresented: resolutionErrorIsPresented) {
             Button("OK") { dynamicResolution.clearError() }
@@ -155,14 +181,14 @@ struct SessionView: View {
     private func sendClipboard() {
         guard let session = sessions.session(for: endpoint),
               let input = session.inputController,
-              let text = session.clipboardService?.localText() else { return }
-        Task { try? await input.sendClipboard(text) }
+              let archive = session.clipboardService?.localArchive() else { return }
+        Task { try? await input.sendClipboard(archive) }
     }
 
     private var modeErrorIsPresented: Binding<Bool> {
         Binding(
-            get: { modeError != nil },
-            set: { if !$0 { modeError = nil } }
+            get: { controlState.errorMessage != nil },
+            set: { if !$0 { controlState.clearError() } }
         )
     }
 
@@ -199,23 +225,67 @@ struct SessionView: View {
     }
 
     private func toggleObservationMode() {
-        guard !isChangingMode, let session = sessions.session(for: endpoint) else { return }
-        let newValue = !isObserving
-        isChangingMode = true
-        Task {
-            do {
-                try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: newValue))
-                await MainActor.run {
-                    isObserving = newValue
-                    isChangingMode = false
-                }
-            } catch {
-                await MainActor.run {
-                    modeError = error.localizedDescription
-                    isChangingMode = false
-                }
+        controlState.toggleMode()
+    }
+
+    private var remoteSystemActions: RemoteSystemActions? {
+        guard let session = sessions.session(for: endpoint),
+              session.inputController != nil,
+              let capabilities = session.remoteSystemCapabilities else { return nil }
+        return RemoteSystemActions(
+            canPerform: { command in
+                !isObserving && !isChangingMode && capabilities.supports(command)
+            },
+            perform: performRemoteSystemCommand
+        )
+    }
+
+    private func performRemoteSystemCommand(_ command: AppleRemoteSystemCommand) {
+        guard !isObserving,
+              !isChangingMode,
+              let session = sessions.session(for: endpoint),
+              session.remoteSystemCapabilities?.supports(command) == true,
+              let input = session.inputController else { return }
+        Task { await input.perform(command) }
+    }
+}
+
+private struct RemoteSystemCommandButtons: View {
+    @ObservedObject var capabilities: AppleRemoteSystemCapabilities
+    let isDisabled: Bool
+    let perform: (AppleRemoteSystemCommand) -> Void
+
+    var body: some View {
+        ForEach(AppleRemoteSystemCommand.allCases, id: \.self) { command in
+            Button {
+                perform(command)
+            } label: {
+                Image(systemName: command.systemImage)
             }
+            .help(command.title)
+            .accessibilityLabel(command.title)
+            .disabled(isDisabled || !capabilities.supports(command))
         }
+    }
+}
+
+private struct KeyboardInputSourceButton: View {
+    @ObservedObject var service: AppleKeyboardInputSourceService
+    let isDisabled: Bool
+
+    var body: some View {
+        Toggle(
+            isOn: Binding(
+                get: { service.isSharingEnabled },
+                set: { service.setSharingEnabled($0) }
+            )
+        ) {
+            Image(systemName: service.serverUsesSecureInput ? "keyboard.badge.ellipsis" : "keyboard")
+        }
+        .toggleStyle(.button)
+        .help("Share Keyboard Input Source")
+        .accessibilityLabel("Share Keyboard Input Source")
+        .disabled(isDisabled || !service.isSupported)
     }
 }
 
@@ -243,6 +313,7 @@ private struct ActiveVideoSessionView: View {
     let inputMapping: AppleDisplayInputMapping?
     let inputCoordinatesAreDisplayLocal: Bool
     let inputDisplayID: UInt32?
+    let onWindowKeyChange: (Bool) -> Void
     let onViewportChange: (CGSize) -> Void
 
     var body: some View {
@@ -261,7 +332,8 @@ private struct ActiveVideoSessionView: View {
                 sourceRect: sourceRect,
                 inputMapping: inputMapping,
                 inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
-                inputDisplayID: inputDisplayID
+                inputDisplayID: inputDisplayID,
+                onWindowKeyChange: onWindowKeyChange
             )
             if showsPerformanceOverlay {
                 AppleVideoPerformanceOverlay(performance: stream.performance)

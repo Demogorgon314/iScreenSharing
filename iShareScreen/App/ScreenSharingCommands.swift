@@ -11,6 +11,7 @@ struct ScreenSharingCommands: Commands {
     @FocusedValue(\.sessionModeActions) private var sessionModeActions
     @FocusedValue(\.sessionEndpoint) private var sessionEndpoint
     @FocusedValue(\.connectionLibraryActions) private var connectionLibraryActions
+    @FocusedValue(\.remoteSystemActions) private var remoteSystemActions
     private let documents = ConnectionDocumentService()
 
     var body: some Commands {
@@ -119,14 +120,15 @@ struct ScreenSharingCommands: Commands {
                 .keyboardShortcut("-", modifiers: .command)
                 .disabled(displayScale == nil || displayScale?.fixedScale == AppleVideoDisplayScale.minimum)
             Divider()
-            Button("Mission Control") { }
-                .disabled(true)
-            Button("App Windows") { }
-                .disabled(true)
-            Button("Desktop") { }
-                .disabled(true)
-            Button("Launchpad") { }
-                .disabled(true)
+            ForEach([
+                AppleRemoteSystemCommand.missionControl,
+                .appWindows,
+                .desktop,
+                .launchpad,
+            ], id: \.self) { command in
+                Button(command.title) { remoteSystemActions?.perform(command) }
+                    .disabled(remoteSystemActions?.canPerform(command) != true)
+            }
         }
     }
 
@@ -164,6 +166,11 @@ struct ConnectionLibraryActions {
     let focusSearch: () -> Void
 }
 
+struct RemoteSystemActions {
+    let canPerform: (AppleRemoteSystemCommand) -> Bool
+    let perform: (AppleRemoteSystemCommand) -> Void
+}
+
 extension FocusedValues {
     var connectionLibraryLayout: Binding<ConnectionLibraryLayout>? {
         get { self[ConnectionLibraryLayoutFocusedKey.self] }
@@ -199,6 +206,12 @@ extension FocusedValues {
         get { self[ConnectionLibraryActionsFocusedKey.self] }
         set { self[ConnectionLibraryActionsFocusedKey.self] = newValue }
     }
+
+
+    var remoteSystemActions: RemoteSystemActions? {
+        get { self[RemoteSystemActionsFocusedKey.self] }
+        set { self[RemoteSystemActionsFocusedKey.self] = newValue }
+    }
 }
 
 private struct SessionDisplayScaleFocusedKey: FocusedValueKey {
@@ -227,4 +240,8 @@ private struct SessionEndpointFocusedKey: FocusedValueKey {
 
 private struct ConnectionLibraryActionsFocusedKey: FocusedValueKey {
     typealias Value = ConnectionLibraryActions
+}
+
+private struct RemoteSystemActionsFocusedKey: FocusedValueKey {
+    typealias Value = RemoteSystemActions
 }

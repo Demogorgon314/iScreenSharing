@@ -214,7 +214,15 @@ private func lumaRange(of pixelBuffer: CVPixelBuffer) -> ClosedRange<UInt8>? {
 
 @MainActor
 private final class IntegrationClipboardReceiver: AppleClipboardReceiving {
-    func receive(_ text: String) { }
+    var allowsRemoteSynchronization: Bool { true }
+    func localArchive() -> AppleClipboardArchive? { nil }
+    func archiveForRemoteRequest() -> AppleClipboardArchive? { nil }
+    func receive(_ archive: AppleClipboardArchive) { }
+    func synchronizationLease() -> UInt64? { 0 }
+    func isSynchronizationLeaseValid(_ lease: UInt64) -> Bool { lease == 0 }
+    func receiveIfEligible(_ archive: AppleClipboardArchive, lease: UInt64) -> Bool {
+        lease == 0
+    }
 }
 
 private final class IntegrationAudioPlayer: AppleAudioPlaying, @unchecked Sendable {

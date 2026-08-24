@@ -2,12 +2,17 @@ import Compression
 import Foundation
 
 enum ZlibCodec {
-    private static let maximumOutputLength = 16 * 1_024 * 1_024
+    static let defaultMaximumOutputLength = 16 * 1_024 * 1_024
 
-    static func compress(_ input: Data) throws -> Data {
+    static func compress(
+        _ input: Data,
+        maximumOutputLength: Int = defaultMaximumOutputLength
+    ) throws -> Data {
+        guard maximumOutputLength >= 6 else { throw ZlibCodecError.outputTooLarge }
         let deflate = try transform(
             input,
-            initialCapacity: max(256, input.count * 2),
+            initialCapacity: min(maximumOutputLength - 6, max(256, input.count)),
+            maximumOutputLength: maximumOutputLength - 6,
             function: compression_encode_buffer
         )
         var output = Data([0x78, 0x9c])
@@ -24,6 +29,7 @@ enum ZlibCodec {
         let output = try transform(
             deflate,
             initialCapacity: max(4_096, input.count * 4),
+            maximumOutputLength: defaultMaximumOutputLength,
             function: compression_decode_buffer
         )
         guard adler32(output) == (try input.uint32BE(at: input.count - 4)) else {
@@ -32,7 +38,11 @@ enum ZlibCodec {
         return output
     }
 
-    static func decompressSyncFlush(_ input: Data, expectedSize: Int) throws -> Data {
+    static func decompressSyncFlush(
+        _ input: Data,
+        expectedSize: Int,
+        maximumOutputLength: Int = defaultMaximumOutputLength
+    ) throws -> Data {
         guard input.count >= 2, hasValidHeader(input), input[1] & 0x20 == 0,
               expectedSize >= 0, expectedSize <= maximumOutputLength else {
             throw ZlibCodecError.invalidStream
@@ -81,10 +91,11 @@ enum ZlibCodec {
     private static func transform(
         _ input: Data,
         initialCapacity: Int,
+        maximumOutputLength: Int,
         function: (UnsafeMutablePointer<UInt8>, Int, UnsafePointer<UInt8>, Int, UnsafeMutableRawPointer?, compression_algorithm) -> Int
     ) throws -> Data {
         guard !input.isEmpty else { throw ZlibCodecError.invalidStream }
-        var capacity = initialCapacity
+        var capacity = max(1, initialCapacity)
         while capacity <= maximumOutputLength {
             let output = UnsafeMutablePointer<UInt8>.allocate(capacity: capacity)
             defer { output.deallocate() }
@@ -99,7 +110,8 @@ enum ZlibCodec {
                 )
             }
             if count > 0, count < capacity { return Data(bytes: output, count: count) }
-            capacity *= 2
+            guard capacity < maximumOutputLength else { break }
+            capacity = min(maximumOutputLength, capacity * 2)
         }
         throw ZlibCodecError.outputTooLarge
     }

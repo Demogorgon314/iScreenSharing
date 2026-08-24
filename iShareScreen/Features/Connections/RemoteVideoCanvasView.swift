@@ -17,6 +17,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let inputMapping: AppleDisplayInputMapping?
     let inputCoordinatesAreDisplayLocal: Bool
     let inputDisplayID: UInt32?
+    let onWindowKeyChange: (Bool) -> Void
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
@@ -32,6 +33,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             inputMapping: inputMapping,
             inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
             inputDisplayID: inputDisplayID,
+            onWindowKeyChange: onWindowKeyChange,
             performance: performance
         )
     }
@@ -45,6 +47,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
         view.inputMapping = inputMapping
         view.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         view.inputDisplayID = inputDisplayID
+        view.onWindowKeyChange = onWindowKeyChange
     }
 
     static func dismantleNSView(_ view: RemoteVideoCanvasNSView, coordinator: ()) {
@@ -134,6 +137,7 @@ final class RemoteVideoCanvasNSView: NSView {
     var inputMapping: AppleDisplayInputMapping?
     var inputCoordinatesAreDisplayLocal: Bool
     var inputDisplayID: UInt32?
+    var onWindowKeyChange: (Bool) -> Void
 
     private(set) var canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
@@ -148,7 +152,9 @@ final class RemoteVideoCanvasNSView: NSView {
     private var decodedFullCanvasSize: CGSize?
     private var trackingArea: NSTrackingArea?
     private var windowDidBecomeKeyObserver: NSObjectProtocol?
+    private var windowDidResignKeyObserver: NSObjectProtocol?
     private var windowDidChangeScreenObserver: NSObjectProtocol?
+    private var reportedWindowIsKey = false
     private var buttonMask: UInt8 = 0
     private var lastRemotePoint: (x: Int, y: Int)?
     private var activeModifiers = [UInt16: ActiveModifier]()
@@ -172,6 +178,7 @@ final class RemoteVideoCanvasNSView: NSView {
         inputMapping: AppleDisplayInputMapping?,
         inputCoordinatesAreDisplayLocal: Bool,
         inputDisplayID: UInt32?,
+        onWindowKeyChange: @escaping (Bool) -> Void = { _ in },
         performance: AppleVideoPerformanceMonitor? = nil
     ) {
         self.canvas = canvas
@@ -186,6 +193,7 @@ final class RemoteVideoCanvasNSView: NSView {
         self.inputMapping = inputMapping
         self.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         self.inputDisplayID = inputDisplayID
+        self.onWindowKeyChange = onWindowKeyChange
         decodedTileHeights = Array(repeating: nil, count: canvas.tileCount)
         displayLayer = (renderer ?? AppleVideoRenderer()).displayLayer(
             synchronizesPresentation: synchronizesPresentation,
@@ -215,6 +223,7 @@ final class RemoteVideoCanvasNSView: NSView {
     deinit {
         displayLink?.invalidate()
         inputTask?.cancel()
+        reportWindowIsKey(false)
         removeWindowObservers()
         if let observer { frames.removeObserver(observer) }
         if let cursorObserver { cursors?.removeObserver(cursorObserver) }
@@ -224,13 +233,24 @@ final class RemoteVideoCanvasNSView: NSView {
         super.viewDidMoveToWindow()
         removeWindowObservers()
         configureDisplayLink()
+        reportWindowIsKey(window?.isKeyWindow == true)
         guard let window else { return }
         windowDidBecomeKeyObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification,
             object: window,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.selectInputDisplay() }
+            MainActor.assumeIsolated {
+                self?.reportWindowIsKey(true)
+                self?.selectInputDisplay()
+            }
+        }
+        windowDidResignKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reportWindowIsKey(false) }
         }
         windowDidChangeScreenObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeScreenNotification,
@@ -239,6 +259,7 @@ final class RemoteVideoCanvasNSView: NSView {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshDisplayEnvironment(resetCadence: true) }
         }
+        reportWindowIsKey(window.isKeyWindow)
         if window.isKeyWindow { selectInputDisplay() }
         refreshDisplayEnvironment(resetCadence: true)
         enqueueForPresentation(currentFrames())
@@ -295,6 +316,7 @@ final class RemoteVideoCanvasNSView: NSView {
         displayLink = nil
         displayLinkTarget = nil
         displayScheduler.reset()
+        reportWindowIsKey(false)
         removeWindowObservers()
         if let observer {
             frames.removeObserver(observer)
@@ -696,10 +718,20 @@ final class RemoteVideoCanvasNSView: NSView {
             NotificationCenter.default.removeObserver(windowDidBecomeKeyObserver)
             self.windowDidBecomeKeyObserver = nil
         }
+        if let windowDidResignKeyObserver {
+            NotificationCenter.default.removeObserver(windowDidResignKeyObserver)
+            self.windowDidResignKeyObserver = nil
+        }
         if let windowDidChangeScreenObserver {
             NotificationCenter.default.removeObserver(windowDidChangeScreenObserver)
             self.windowDidChangeScreenObserver = nil
         }
+    }
+
+    private func reportWindowIsKey(_ isKey: Bool) {
+        guard reportedWindowIsKey != isKey else { return }
+        reportedWindowIsKey = isKey
+        onWindowKeyChange(isKey)
     }
 
     private func schedulePresentation() {

@@ -29,13 +29,15 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         }
         guard let session = sessions.session(for: endpoint),
               let displayLayout = session.displayLayoutModel,
-              let dynamicResolution = session.dynamicResolutionModel else { return }
+              let dynamicResolution = session.dynamicResolutionModel,
+              let controlState = session.controlState else { return }
 
         showWindow(
             key: primaryKey,
             sessions: sessions,
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
+            controlState: controlState,
             disconnectsSessionOnDisappear: true
         )
         observeDisplayLayout(
@@ -125,6 +127,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         layout: AppleDisplayLayout?,
         sessions: SessionManager
     ) {
+        guard let controlState = sessions.session(for: endpoint)?.controlState else { return }
         let displayCount = max(1, layout?.displays.count ?? 1)
         if displayCount > 1 {
             for displayIndex in 1..<displayCount {
@@ -135,6 +138,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
                     sessions: sessions,
                     displayLayout: displayLayout,
                     dynamicResolution: dynamicResolution,
+                    controlState: controlState,
                     disconnectsSessionOnDisappear: false
                 )
             }
@@ -159,6 +163,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         sessions: SessionManager,
         displayLayout: AppleDisplayLayoutModel,
         dynamicResolution: AppleDynamicResolutionModel,
+        controlState: AppleSessionControlState,
         disconnectsSessionOnDisappear: Bool
     ) {
         let content = SessionView(
@@ -166,6 +171,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             sessions: sessions,
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
+            controlState: controlState,
             displayIndex: key.displayIndex,
             disconnectsSessionOnDisappear: disconnectsSessionOnDisappear,
             videoRenderer: videoRenderer(

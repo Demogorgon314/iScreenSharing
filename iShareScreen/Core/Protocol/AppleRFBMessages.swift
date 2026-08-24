@@ -166,6 +166,7 @@ enum AppleRFBMessages {
         timestampDelta: UInt32,
         keyboardType: UInt16,
         keyCode: UInt16,
+        subtype: UInt8 = 1,
         contentKey: Data
     ) throws -> Data {
         var plaintext = Data([0xff, isDown ? 1 : 0])
@@ -174,7 +175,7 @@ enum AppleRFBMessages {
         plaintext.appendUInt16BE(0)
         plaintext.appendUInt16BE(keyboardType)
         plaintext.appendUInt16BE(keyCode)
-        return Data([0x10, 0x01]) + (try Cryptography.encryptAESECB(plaintext, key: contentKey))
+        return Data([0x10, subtype]) + (try Cryptography.encryptAESECB(plaintext, key: contentKey))
     }
 }
 

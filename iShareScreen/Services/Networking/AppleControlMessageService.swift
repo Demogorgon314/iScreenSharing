@@ -8,6 +8,8 @@ final class AppleControlMessageService: @unchecked Sendable {
     private let receiveDisplayLayout: @Sendable (AppleDisplayLayout) async -> Void
     private let receiveMediaCanvas: @Sendable (AppleCanvas) async -> Void
     private let receiveCursorUpdate: @Sendable (AppleCursorUpdate) async -> Void
+    private let receiveVendorKeySymbols: @Sendable (Set<UInt32>) async -> Void
+    private let receiveKeyboardInputSource: @Sendable (AppleKeyboardInputSourceState) async -> Void
     private let countLock = NSLock()
     private var task: Task<Void, Never>?
     private var messageCount = 0
@@ -19,7 +21,9 @@ final class AppleControlMessageService: @unchecked Sendable {
         pendingMessages: [Data],
         receiveDisplayLayout: @escaping @Sendable (AppleDisplayLayout) async -> Void = { _ in },
         receiveMediaCanvas: @escaping @Sendable (AppleCanvas) async -> Void = { _ in },
-        receiveCursorUpdate: @escaping @Sendable (AppleCursorUpdate) async -> Void = { _ in }
+        receiveCursorUpdate: @escaping @Sendable (AppleCursorUpdate) async -> Void = { _ in },
+        receiveVendorKeySymbols: @escaping @Sendable (Set<UInt32>) async -> Void = { _ in },
+        receiveKeyboardInputSource: @escaping @Sendable (AppleKeyboardInputSourceState) async -> Void = { _ in }
     ) {
         self.session = session
         self.input = input
@@ -28,6 +32,8 @@ final class AppleControlMessageService: @unchecked Sendable {
         self.receiveDisplayLayout = receiveDisplayLayout
         self.receiveMediaCanvas = receiveMediaCanvas
         self.receiveCursorUpdate = receiveCursorUpdate
+        self.receiveVendorKeySymbols = receiveVendorKeySymbols
+        self.receiveKeyboardInputSource = receiveKeyboardInputSource
     }
 
     var receivedMessageCount: Int {
@@ -50,16 +56,24 @@ final class AppleControlMessageService: @unchecked Sendable {
 
     private func run() async {
         var reassembler = AppleClipboardReassembler()
-        for message in pendingMessages {
-            await process(message, reassembler: &reassembler)
-        }
+        var clipboardRequest = ClipboardRequestState.idle
         await input.enableClipboard()
-        await input.fetchClipboard()
+        for message in pendingMessages {
+            await process(
+                message,
+                reassembler: &reassembler,
+                clipboardRequest: &clipboardRequest
+            )
+        }
 
         while !Task.isCancelled, let session {
             do {
                 let message = try await session.receiveEncrypted()
-                await process(message, reassembler: &reassembler)
+                await process(
+                    message,
+                    reassembler: &reassembler,
+                    clipboardRequest: &clipboardRequest
+                )
             } catch {
                 return
             }
@@ -68,9 +82,15 @@ final class AppleControlMessageService: @unchecked Sendable {
 
     private func process(
         _ message: Data,
-        reassembler: inout AppleClipboardReassembler
+        reassembler: inout AppleClipboardReassembler,
+        clipboardRequest: inout ClipboardRequestState
     ) async {
         guard !message.isEmpty else { return }
+        if let lease = clipboardRequest.lease,
+           !(await clipboard.isSynchronizationLeaseValid(lease)) {
+            clipboardRequest = .idle
+            reassembler = AppleClipboardReassembler()
+        }
         countLock.withControlMessageLock { messageCount += 1 }
         if message[0] == 0 {
             if let canvas = AppleMediaConfiguration.canvas(from: message) {
@@ -83,23 +103,82 @@ final class AppleControlMessageService: @unchecked Sendable {
             for update in contents.cursorUpdates {
                 await receiveCursorUpdate(update)
             }
+            for symbols in contents.vendorKeySymbols {
+                await receiveVendorKeySymbols(symbols)
+            }
+            for state in contents.keyboardInputSources {
+                await receiveKeyboardInputSource(state)
+            }
             return
         }
         if reassembler.isInProgress || message[0] == 0x1f {
             do {
-                if let complete = try reassembler.process(message),
-                   let text = try AppleClipboardMessage.text(from: complete) {
-                    await clipboard.receive(text)
+                if let complete = try reassembler.process(message) {
+                    let envelope = try AppleClipboardMessage.envelope(from: complete)
+                    switch clipboardRequest {
+                    case .awaitingPromises(let sessionID, let lease)
+                        where envelope.sessionID == sessionID && envelope.containsPromises:
+                        guard await clipboard.isSynchronizationLeaseValid(lease) else {
+                            clipboardRequest = .idle
+                            return
+                        }
+                        do {
+                            let fullSessionID = try await input.requestClipboard(promises: false)
+                            guard await clipboard.isSynchronizationLeaseValid(lease) else {
+                                clipboardRequest = .idle
+                                return
+                            }
+                            clipboardRequest = .awaitingFull(id: fullSessionID, lease: lease)
+                        } catch {
+                            clipboardRequest = .idle
+                        }
+                    case .awaitingFull(let sessionID, let lease)
+                        where envelope.sessionID == sessionID && !envelope.containsPromises:
+                        _ = await clipboard.receiveIfEligible(envelope.archive, lease: lease)
+                        clipboardRequest = .idle
+                    default:
+                        return
+                    }
                 }
             } catch {
                 reassembler = AppleClipboardReassembler()
             }
             return
         }
+        if let request = AppleClipboardMessage.request(from: message),
+           let archive = await clipboard.archiveForRemoteRequest() {
+            try? await input.sendClipboard(
+                archive,
+                promises: request.requestsPromises,
+                sessionID: request.sessionID
+            )
+            return
+        }
         if message[0] == 0x14,
            message.count >= 8,
-           (try? message.uint16BE(at: 6)) == 2 {
-            await input.fetchClipboard()
+           (try? message.uint16BE(at: 6)) == 2,
+           case .idle = clipboardRequest,
+           let lease = await clipboard.synchronizationLease() {
+            do {
+                let sessionID = try await input.requestClipboard(promises: true)
+                guard await clipboard.isSynchronizationLeaseValid(lease) else { return }
+                clipboardRequest = .awaitingPromises(id: sessionID, lease: lease)
+            } catch {
+                clipboardRequest = .idle
+            }
+        }
+    }
+}
+
+private enum ClipboardRequestState {
+    case idle
+    case awaitingPromises(id: UInt32, lease: UInt64)
+    case awaitingFull(id: UInt32, lease: UInt64)
+
+    var lease: UInt64? {
+        switch self {
+        case .idle: nil
+        case .awaitingPromises(_, let lease), .awaitingFull(_, let lease): lease
         }
     }
 }

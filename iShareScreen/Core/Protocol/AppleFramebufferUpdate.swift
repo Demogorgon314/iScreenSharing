@@ -4,6 +4,8 @@ enum AppleFramebufferUpdate {
     struct Contents: Equatable {
         let displayLayouts: [AppleDisplayLayout]
         let cursorUpdates: [AppleCursorUpdate]
+        let vendorKeySymbols: [Set<UInt32>]
+        let keyboardInputSources: [AppleKeyboardInputSourceState]
     }
 
     private static let lengthPrefixedEncodings: Set<Int32> = [
@@ -22,13 +24,22 @@ enum AppleFramebufferUpdate {
     static func contents(from message: Data) -> Contents {
         var layouts = [AppleDisplayLayout]()
         var cursors = [AppleCursorUpdate]()
+        var vendorKeySymbols = [Set<UInt32>]()
+        var keyboardInputSources = [AppleKeyboardInputSourceState]()
         for event in events(from: message) {
             switch event {
             case .displayLayout(let layout): layouts.append(layout)
             case .cursor(let update): cursors.append(update)
+            case .vendorKeySymbols(let symbols): vendorKeySymbols.append(symbols)
+            case .keyboardInputSource(let state): keyboardInputSources.append(state)
             }
         }
-        return Contents(displayLayouts: layouts, cursorUpdates: cursors)
+        return Contents(
+            displayLayouts: layouts,
+            cursorUpdates: cursors,
+            vendorKeySymbols: vendorKeySymbols,
+            keyboardInputSources: keyboardInputSources
+        )
     }
 
     private static func events(from message: Data) -> [Event] {
@@ -79,10 +90,28 @@ enum AppleFramebufferUpdate {
                    from: message.subdata(in: payloadStart..<payloadEnd)
                ) {
                 events.append(.displayLayout(layout))
+            } else if encoding == 1107,
+                      let symbols = vendorKeySymbols(
+                          from: message.subdata(in: payloadStart..<payloadEnd)
+                      ) {
+                events.append(.vendorKeySymbols(symbols))
+            } else if encoding == 1109,
+                      let state = AppleKeyboardInputSourceMessage.state(
+                          from: message.subdata(in: payloadStart..<payloadEnd)
+                      ) {
+                events.append(.keyboardInputSource(state))
             }
             offset = payloadEnd
         }
         return events
+    }
+
+    private static func vendorKeySymbols(from payload: Data) -> Set<UInt32>? {
+        guard payload.count >= 4,
+              (try? payload.uint16BE(at: 0)) == 1,
+              let count = try? Int(payload.uint16BE(at: 2)),
+              count <= (payload.count - 4) / 4 else { return nil }
+        return Set((0..<count).compactMap { try? payload.uint32BE(at: 4 + $0 * 4) })
     }
 
     private static func cursorImage(
@@ -122,5 +151,7 @@ enum AppleFramebufferUpdate {
     private enum Event {
         case displayLayout(AppleDisplayLayout)
         case cursor(AppleCursorUpdate)
+        case vendorKeySymbols(Set<UInt32>)
+        case keyboardInputSource(AppleKeyboardInputSourceState)
     }
 }

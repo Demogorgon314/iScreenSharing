@@ -105,7 +105,12 @@ final class AuthenticationCoordinator: ObservableObject {
                     )
                     let input = AppleInputController(session: session, canvas: negotiation.canvas)
                     session.install(inputController: input)
-                    let clipboard = AppleClipboardService()
+                    let clipboard = AppleClipboardService(
+                        advertise: { [weak input] archive in
+                            guard let input else { throw CancellationError() }
+                            try await input.sendClipboard(archive, promises: true)
+                        }
+                    )
                     try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
                     let dynamicResolutionController: AppleDynamicResolutionController?
                     if virtualDisplayCount == .one, let stream = session.videoStream {
@@ -131,6 +136,18 @@ final class AuthenticationCoordinator: ObservableObject {
                     }
                     let cursorStore = AppleCursorStore()
                     session.install(cursorStore: cursorStore)
+                    let remoteSystemCapabilities = AppleRemoteSystemCapabilities()
+                    session.install(remoteSystemCapabilities: remoteSystemCapabilities)
+                    let keyboardInputSource = AppleKeyboardInputSourceService(
+                        send: { [weak session] message in
+                            guard let session else { return }
+                            try await session.sendEncrypted(message)
+                        },
+                        updateUsesSameInputSource: { [weak input] usesSameInputSource in
+                            await input?.setUsesSameInputSource(usesSameInputSource)
+                        }
+                    )
+                    session.install(keyboardInputSourceService: keyboardInputSource)
                     let displayLayoutModel = AppleDisplayLayoutModel(
                         expectedDisplayCount: virtualDisplayCount.rawValue
                     )
@@ -170,13 +187,22 @@ final class AuthenticationCoordinator: ObservableObject {
                         },
                         receiveCursorUpdate: { update in
                             cursorStore.apply(update)
+                        },
+                        receiveVendorKeySymbols: { symbols in
+                            await remoteSystemCapabilities.receive(keySymbols: symbols)
+                        },
+                        receiveKeyboardInputSource: { state in
+                            await keyboardInputSource.receive(state)
                         }
                     )
                     session.install(
                         controlMessageService: controlMessages,
                         clipboardService: clipboard
                     )
+                    session.install(controlState: AppleSessionControlState(session: session))
                     controlMessages.start()
+                    clipboard.start()
+                    keyboardInputSource.start()
                     if let receiver = session.mediaReceiver,
                        let audio = try? AppleAudioStream(receiver: receiver, negotiation: negotiation) {
                         session.install(audioStream: audio)

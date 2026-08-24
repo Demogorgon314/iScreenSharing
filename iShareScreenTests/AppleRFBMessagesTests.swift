@@ -136,6 +136,20 @@ final class AppleRFBMessagesTests: XCTestCase {
         )
     }
 
+    func testKeyboardEventUsesSharedInputSourceSubtype() throws {
+        let message = try AppleRFBMessages.encryptedKeyEvent(
+            isDown: true,
+            keySymbol: 0x71,
+            timestampDelta: 0,
+            keyboardType: 40,
+            keyCode: 12,
+            subtype: 3,
+            contentKey: Data(repeating: 0, count: 16)
+        )
+
+        XCTAssertEqual(message.prefix(2), Data([0x10, 0x03]))
+    }
+
     func testBuildsNativeHighPrecisionScrollWheelEvent() {
         let event = AppleScrollWheelEvent(
             deltaX: -1,

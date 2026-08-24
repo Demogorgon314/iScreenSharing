@@ -89,6 +89,50 @@ final class AppleFramebufferUpdateTests: XCTestCase {
         XCTAssertEqual(AppleFramebufferUpdate.cursorUpdates(from: message), [.select(id: 7)])
     }
 
+    func testParsesVersionOneVendorKeySymbolCapabilities() {
+        var message = Data([0, 0, 0, 1])
+        message.append(rectangleHeader(encoding: 1107))
+        message.appendUInt16BE(20)
+        message.appendUInt16BE(1)
+        message.appendUInt16BE(4)
+        AppleRemoteSystemCommand.allCases.forEach { message.appendUInt32BE($0.rawValue) }
+
+        XCTAssertEqual(
+            AppleFramebufferUpdate.contents(from: message).vendorKeySymbols,
+            [Set(AppleRemoteSystemCommand.allCases.map(\.rawValue))]
+        )
+    }
+
+    func testRejectsUnsupportedOrTruncatedVendorKeySymbolCapabilities() {
+        var unsupported = Data([0, 0, 0, 1])
+        unsupported.append(rectangleHeader(encoding: 1107))
+        unsupported.appendUInt16BE(4)
+        unsupported.appendUInt16BE(2)
+        unsupported.appendUInt16BE(0)
+        XCTAssertTrue(AppleFramebufferUpdate.contents(from: unsupported).vendorKeySymbols.isEmpty)
+
+        var truncated = Data([0, 0, 0, 1])
+        truncated.append(rectangleHeader(encoding: 1107))
+        truncated.appendUInt16BE(8)
+        truncated.appendUInt16BE(1)
+        truncated.appendUInt16BE(2)
+        truncated.appendUInt32BE(AppleRemoteSystemCommand.desktop.rawValue)
+        XCTAssertTrue(AppleFramebufferUpdate.contents(from: truncated).vendorKeySymbols.isEmpty)
+    }
+
+    func testParsesKeyboardInputSourceEncoding() {
+        var message = Data([0, 0, 0, 1])
+        message.append(rectangleHeader(encoding: 1109))
+        message.appendUInt16BE(10)
+        message.append(contentsOf: [0, 1, 0, 0, 0, 1, 0, 2])
+        message.append(Data("US".utf8))
+
+        XCTAssertEqual(
+            AppleFramebufferUpdate.contents(from: message).keyboardInputSources,
+            [AppleKeyboardInputSourceState(field: 1, isSecureInput: true, identifier: "US")]
+        )
+    }
+
     private func rectangleHeader(encoding: Int32) -> Data {
         var data = Data(repeating: 0, count: 8)
         data.appendInt32BE(encoding)

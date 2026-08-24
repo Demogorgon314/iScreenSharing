@@ -23,8 +23,14 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var cursorStore: AppleCursorStore?
     private(set) var displayLayoutModel: AppleDisplayLayoutModel?
     private(set) var dynamicResolutionModel: AppleDynamicResolutionModel?
+    private(set) var remoteSystemCapabilities: AppleRemoteSystemCapabilities?
+    private(set) var keyboardInputSourceService: AppleKeyboardInputSourceService?
+    private(set) var controlState: AppleSessionControlState?
 
     private let transport: NWConnectionTransport
+    private let encryptedWriter: AppleEncryptedRecordWriter
+    private let closeLock = NSLock()
+    private var hasClosed = false
 
     init(
         endpoint: ConnectionEndpoint,
@@ -42,15 +48,42 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.masterKey = masterKey
         self.serverInfo = serverInfo
         self.transport = transport
+        encryptedWriter = AppleEncryptedRecordWriter { data in
+            try await transport.send(data)
+        }
     }
 
     func close() {
+        closeLock.lock()
+        guard !hasClosed else {
+            closeLock.unlock()
+            return
+        }
+        hasClosed = true
+        closeLock.unlock()
+
         controlMessageService?.close()
         audioStream?.close()
-        if let inputController { Task { await inputController.close() } }
         videoStreams.forEach { $0.close() }
         mediaReceiver?.close()
-        transport.cancel()
+        let clipboardService = clipboardService
+        let keyboardInputSourceService = keyboardInputSourceService
+        let inputController = inputController
+        let recordLayer = recordLayer
+        let encryptedWriter = encryptedWriter
+        let transport = transport
+        Task { @MainActor in
+            clipboardService?.close()
+            keyboardInputSourceService?.close()
+            if let recordLayer {
+                try? await encryptedWriter.send(
+                    [AppleClipboardMessage.disable],
+                    using: recordLayer
+                )
+            }
+            await inputController?.close()
+            transport.cancel()
+        }
     }
 
     func send(_ data: Data) async throws {
@@ -72,7 +105,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     func sendEncrypted(_ messages: [Data]) async throws {
         guard let recordLayer else { throw RFBSessionError.encryptionNotEnabled }
-        try await send(try recordLayer.encrypt(messages))
+        try await encryptedWriter.send(messages, using: recordLayer)
     }
 
     func receiveEncrypted() async throws -> Data {
@@ -144,13 +177,75 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.dynamicResolutionModel = dynamicResolutionModel
     }
 
+    @MainActor
+    func install(remoteSystemCapabilities: AppleRemoteSystemCapabilities) {
+        self.remoteSystemCapabilities = remoteSystemCapabilities
+    }
+
+    @MainActor
+    func install(keyboardInputSourceService: AppleKeyboardInputSourceService) {
+        self.keyboardInputSourceService?.close()
+        self.keyboardInputSourceService = keyboardInputSourceService
+    }
+
+    @MainActor
+    func install(controlState: AppleSessionControlState) {
+        self.controlState = controlState
+    }
+
     deinit {
-        controlMessageService?.close()
-        audioStream?.close()
-        if let inputController { Task { await inputController.close() } }
-        videoStreams.forEach { $0.close() }
-        mediaReceiver?.close()
-        transport.cancel()
+        close()
+    }
+}
+
+actor AppleEncryptedRecordWriter {
+    typealias Send = @Sendable (Data) async throws -> Void
+
+    private let sendRecord: Send
+    private var tail = Task<Void, Never> {}
+    private var hasTerminalFailure = false
+
+    init(send: @escaping Send) {
+        sendRecord = send
+    }
+
+    func send(_ messages: [Data], using recordLayer: AppleEncryptedRecordLayer) async throws {
+        let predecessor = tail
+        let request = Task { [weak self] in
+            await predecessor.value
+            guard let self else { throw AppleEncryptedRecordWriterError.closed }
+            try await self.encryptAndSend(messages, using: recordLayer)
+        }
+        tail = Task { _ = await request.result }
+        try await request.value
+    }
+
+    private func encryptAndSend(
+        _ messages: [Data],
+        using recordLayer: AppleEncryptedRecordLayer
+    ) async throws {
+        guard !hasTerminalFailure else {
+            throw AppleEncryptedRecordWriterError.transportFailed
+        }
+        let record = try recordLayer.encrypt(messages)
+        do {
+            try await sendRecord(record)
+        } catch {
+            hasTerminalFailure = true
+            throw error
+        }
+    }
+}
+
+enum AppleEncryptedRecordWriterError: LocalizedError, Equatable {
+    case closed
+    case transportFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .closed: "The encrypted Screen Sharing writer is closed."
+        case .transportFailed: "The encrypted Screen Sharing connection can no longer send data."
+        }
     }
 }
 
