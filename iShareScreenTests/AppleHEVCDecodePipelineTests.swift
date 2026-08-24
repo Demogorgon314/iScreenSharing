@@ -161,6 +161,35 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         XCTAssertFalse(harness.decoder.isClosed)
     }
 
+    func testFormatChangeReplacesOnlyDecoderAndPreservesAdmissionState() throws {
+        let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.format-change")
+        let callbacks = CallbackStore()
+        let firstDecoder = FakeDecoder()
+        let replacementDecoder = FakeDecoder()
+        let pipeline = try AppleHEVCDecodePipeline(
+            tileCount: sources.count,
+            sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
+            callbackQueue: callbackQueue,
+            decoderFactory: makeFactory(decoder: firstDecoder, callbacks: callbacks),
+            frameHandler: { _ in },
+            refreshHandler: { _ in },
+            errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
+        )
+
+        pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 10)])
+        try pipeline.replaceDecoder(
+            using: makeFactory(decoder: replacementDecoder, callbacks: callbacks)
+        )
+        pipeline.submit([accessUnit(source: 200, timestamp: 2, order: 9)])
+        pipeline.submit([accessUnit(source: 200, timestamp: 3, order: 11)])
+
+        XCTAssertTrue(firstDecoder.isClosed)
+        XCTAssertFalse(replacementDecoder.isClosed)
+        XCTAssertEqual(firstDecoder.submissions.map(\.order), [10])
+        XCTAssertEqual(replacementDecoder.submissions.map(\.order), [11])
+        XCTAssertEqual(callbacks.decoderFactoryCount, 2)
+    }
+
     private func makeHarness() throws -> Harness {
         let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.callback")
         let decoder = FakeDecoder()
@@ -185,6 +214,18 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
             callbackQueue: callbackQueue,
             callbacks: callbacks
         )
+    }
+
+    private func makeFactory(
+        decoder: FakeDecoder,
+        callbacks: CallbackStore
+    ) -> AppleHEVCDecodePipeline.DecoderFactory {
+        { failure, frame in
+            callbacks.install(failureHandler: failure, frameHandler: frame)
+            decoder.failureHandler = { callbacks.emitFailure($0) }
+            decoder.frameHandler = { callbacks.emitFrame($0) }
+            return decoder
+        }
     }
 
     private func accessUnit(

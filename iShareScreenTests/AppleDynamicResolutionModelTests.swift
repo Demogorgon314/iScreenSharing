@@ -36,9 +36,10 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         let recorder = DynamicResolutionMessageRecorder()
         let controller = AppleDynamicResolutionController(
             initialCanvas: AppleCanvas(width: 2000, height: 1400, tileCount: 4),
-            mediaConfiguration: Data([0x1c]),
+            mediaConfiguration: Data([0x1c, 0, 0, 0]),
             sendMessage: { message in await recorder.append(message) },
-            applyCanvas: { _ in }
+            applyCanvas: { _ in },
+            prepareMediaRestart: { }
         )
         let model = AppleDynamicResolutionModel()
 
@@ -63,9 +64,10 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         let recorder = DynamicResolutionMessageRecorder()
         let controller = AppleDynamicResolutionController(
             initialCanvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
-            mediaConfiguration: Data([0x1c]),
+            mediaConfiguration: Data([0x1c, 0, 0, 0]),
             sendMessage: { message in await recorder.append(message) },
-            applyCanvas: { _ in }
+            applyCanvas: { _ in },
+            prepareMediaRestart: { }
         )
         let model = AppleDynamicResolutionModel()
         model.isEnabled = true
@@ -73,13 +75,13 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
 
         try await Task.sleep(for: .milliseconds(650))
         let sentCount = await recorder.count()
-        XCTAssertEqual(sentCount, 2)
+        XCTAssertEqual(sentCount, 1)
 
         model.schedule(viewport: CGSize(width: 1200, height: 800), controller: controller)
         model.cancel()
         try await Task.sleep(for: .milliseconds(600))
         let finalCount = await recorder.count()
-        XCTAssertEqual(finalCount, 2)
+        XCTAssertEqual(finalCount, 1)
     }
 
     @MainActor
@@ -87,9 +89,10 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         let recorder = DynamicResolutionMessageRecorder()
         let controller = AppleDynamicResolutionController(
             initialCanvas: AppleCanvas(width: 3840, height: 1080, tileCount: 4),
-            mediaConfiguration: Data([0x1c]),
+            mediaConfiguration: Data([0x1c, 0, 0, 0]),
             sendMessage: { message in await recorder.append(message) },
-            applyCanvas: { _ in }
+            applyCanvas: { _ in },
+            prepareMediaRestart: { }
         )
         let model = AppleDynamicResolutionModel(displayCount: 2)
 

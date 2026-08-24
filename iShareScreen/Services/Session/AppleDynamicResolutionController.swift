@@ -3,12 +3,14 @@ import Foundation
 actor AppleDynamicResolutionController {
     typealias SendMessage = @Sendable (Data) async throws -> Void
     typealias ApplyCanvas = @Sendable (AppleCanvas) async -> Void
+    typealias PrepareMediaRestart = @Sendable () async -> Void
 
     private var canvas: AppleCanvas
     private let mediaConfiguration: Data
     private let sendMessage: SendMessage
     private let applyCanvas: ApplyCanvas
-    private var mediaReofferPending = false
+    private let prepareMediaRestart: PrepareMediaRestart
+    private var mediaRestartPending = false
     private var hasReceivedInitialLayout = false
     private var combinedDisplaySelectionPending = false
 
@@ -16,12 +18,14 @@ actor AppleDynamicResolutionController {
         initialCanvas: AppleCanvas,
         mediaConfiguration: Data,
         sendMessage: @escaping SendMessage,
-        applyCanvas: @escaping ApplyCanvas
+        applyCanvas: @escaping ApplyCanvas,
+        prepareMediaRestart: @escaping PrepareMediaRestart
     ) {
         canvas = initialCanvas
         self.mediaConfiguration = mediaConfiguration
         self.sendMessage = sendMessage
         self.applyCanvas = applyCanvas
+        self.prepareMediaRestart = prepareMediaRestart
     }
 
     func request(width: Int, height: Int, backingScale: Double = 2, hdr: Bool = false) async throws {
@@ -44,10 +48,10 @@ actor AppleDynamicResolutionController {
         )
         combinedDisplaySelectionPending = displaySizes.count > 1
         try await sendMessage(configuration)
-        try await sendMessage(AppleRFBMessages.framebufferUpdateRequest())
     }
 
     func receive(_ layout: AppleDisplayLayout) async throws {
+        let receivedCanvas = layout.canvas(tileCount: canvas.tileCount)
         if combinedDisplaySelectionPending, layout.displays.count > 1 {
             try await sendMessage(AppleRFBMessages.selectCombinedDisplays)
             combinedDisplaySelectionPending = false
@@ -57,21 +61,22 @@ actor AppleDynamicResolutionController {
             hasReceivedInitialLayout = true
             return
         }
-        let updatedCanvas = layout.canvas(tileCount: canvas.tileCount)
+        let updatedCanvas = receivedCanvas
         if updatedCanvas != canvas {
             canvas = updatedCanvas
             await applyCanvas(updatedCanvas)
-            mediaReofferPending = true
+            await prepareMediaRestart()
+            mediaRestartPending = true
         }
-        guard mediaReofferPending else { return }
+        guard mediaRestartPending else { return }
         try await sendMessage(mediaConfiguration)
-        mediaReofferPending = false
+        mediaRestartPending = false
     }
 
     func receiveMediaCanvas(_ updatedCanvas: AppleCanvas) async {
         guard updatedCanvas.isUsable, updatedCanvas != canvas else { return }
         canvas = updatedCanvas
-        mediaReofferPending = false
+        mediaRestartPending = false
         await applyCanvas(updatedCanvas)
     }
 }

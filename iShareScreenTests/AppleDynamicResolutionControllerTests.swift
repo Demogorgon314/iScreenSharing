@@ -2,16 +2,17 @@ import XCTest
 @testable import iShareScreen
 
 final class AppleDynamicResolutionControllerTests: XCTestCase {
-    func testRequestsDisplayConfigurationAndFramebufferRefresh() async throws {
+    private let mediaConfiguration = Data([0x1c, 0, 0, 0])
+
+    func testRequestsOnlyNativeDisplayConfiguration() async throws {
         let recorder = MessageRecorder()
         let controller = makeController(recorder: recorder)
 
         try await controller.request(width: 1440, height: 900)
 
         let messages = await recorder.messages
-        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(messages[0].first, 0x1d)
-        XCTAssertEqual(messages[1], AppleRFBMessages.framebufferUpdateRequest())
     }
 
     func testRequestsDifferentResolutionForEachDisplay() async throws {
@@ -24,13 +25,13 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         ])
 
         let messages = await recorder.messages
+        XCTAssertEqual(messages.count, 1)
         XCTAssertEqual(try messages[0].uint16BE(at: 6), 2)
         XCTAssertEqual(try messages[0].uint32BE(at: 12 + 0x9c), 2880)
         XCTAssertEqual(try messages[0].uint32BE(at: 308 + 0x9c), 2400)
-        XCTAssertEqual(messages[1], AppleRFBMessages.framebufferUpdateRequest())
     }
 
-    func testReselectsCombinedCanvasBeforeMultiDisplayMediaReoffer() async throws {
+    func testReselectsCombinedCanvasAndRestartsMediaAfterLayout() async throws {
         let recorder = MessageRecorder()
         let controller = makeController(recorder: recorder)
 
@@ -49,14 +50,20 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         ))
 
         let messages = await recorder.messages
-        XCTAssertEqual(messages.map(\.first), [0x03, 0x1d, 0x03, 0x0d, 0x03, 0x1c])
-        XCTAssertEqual(messages[3], AppleRFBMessages.selectCombinedDisplays)
+        XCTAssertEqual(messages.map(\.first), [0x03, 0x1d, 0x0d, 0x03, 0x1c])
+        XCTAssertEqual(messages[2], AppleRFBMessages.selectCombinedDisplays)
+        XCTAssertEqual(messages[4], mediaConfiguration)
     }
 
-    func testChangedLayoutAppliesCanvasAndReoffersMedia() async throws {
+    func testChangedLayoutAppliesCanvasAndRestartsMedia() async throws {
         let recorder = MessageRecorder()
         let applied = CanvasRecorder()
-        let controller = makeController(recorder: recorder, applied: applied)
+        let restarts = MediaRestartRecorder()
+        let controller = makeController(
+            recorder: recorder,
+            applied: applied,
+            restarts: restarts
+        )
         let layout = makeLayout(width: 2880, height: 1800)
 
         try await controller.receive(makeLayout(width: 1920, height: 1080))
@@ -64,11 +71,14 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
 
         let messages = await recorder.messages
         let canvases = await applied.canvases
+        let restartCount = await restarts.count
         XCTAssertEqual(messages, [
             AppleRFBMessages.framebufferUpdateRequest(),
-            AppleRFBMessages.framebufferUpdateRequest(), Data([0x1c, 0xaa]),
+            AppleRFBMessages.framebufferUpdateRequest(),
+            mediaConfiguration,
         ])
         XCTAssertEqual(canvases, [AppleCanvas(width: 2880, height: 1800, tileCount: 4)])
+        XCTAssertEqual(restartCount, 1)
     }
 
     func testInitialLayoutOnlyRearmsFramebufferUpdatesEvenWhenItDiffers() async throws {
@@ -96,28 +106,32 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         XCTAssertEqual(appliedCanvas, canvas)
     }
 
-    func testRetriesMediaReofferAfterTransientFailure() async throws {
+    func testRetriesMediaRestartAfterTransientSendFailure() async throws {
         let sender = FailingMediaSender()
         let applied = CanvasRecorder()
+        let restarts = MediaRestartRecorder()
         let controller = AppleDynamicResolutionController(
             initialCanvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
-            mediaConfiguration: Data([0x1c, 0xaa]),
+            mediaConfiguration: mediaConfiguration,
             sendMessage: { message in try await sender.send(message) },
-            applyCanvas: { canvas in await applied.append(canvas) }
+            applyCanvas: { canvas in await applied.append(canvas) },
+            prepareMediaRestart: { await restarts.record() }
         )
         let layout = makeLayout(width: 2880, height: 1800)
 
         try await controller.receive(makeLayout(width: 1920, height: 1080))
         do {
             try await controller.receive(layout)
-            XCTFail("Expected the first media reoffer to fail")
+            XCTFail("Expected the first media restart to fail")
         } catch { }
         try await controller.receive(layout)
 
-        let attempts = await sender.mediaAttempts()
+        let attemptCount = await sender.mediaAttempts
         let applyCount = await applied.count()
-        XCTAssertEqual(attempts, 2)
+        let restartCount = await restarts.count
+        XCTAssertEqual(attemptCount, 2)
         XCTAssertEqual(applyCount, 1)
+        XCTAssertEqual(restartCount, 1)
     }
 
     func testRejectsInvalidRequestBeforeSending() async {
@@ -136,13 +150,15 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
 
     private func makeController(
         recorder: MessageRecorder,
-        applied: CanvasRecorder = CanvasRecorder()
+        applied: CanvasRecorder = CanvasRecorder(),
+        restarts: MediaRestartRecorder = MediaRestartRecorder()
     ) -> AppleDynamicResolutionController {
         AppleDynamicResolutionController(
             initialCanvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
-            mediaConfiguration: Data([0x1c, 0xaa]),
+            mediaConfiguration: mediaConfiguration,
             sendMessage: { message in await recorder.append(message) },
-            applyCanvas: { canvas in await applied.append(canvas) }
+            applyCanvas: { canvas in await applied.append(canvas) },
+            prepareMediaRestart: { await restarts.record() }
         )
     }
 
@@ -182,16 +198,22 @@ private actor CanvasRecorder {
     func count() -> Int { canvases.count }
 }
 
+private actor MediaRestartRecorder {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
+    }
+}
+
 private actor FailingMediaSender {
-    private var attempts = 0
+    private(set) var mediaAttempts = 0
 
     func send(_ message: Data) throws {
         guard message.first == 0x1c else { return }
-        attempts += 1
-        if attempts == 1 { throw Failure.expected }
+        mediaAttempts += 1
+        if mediaAttempts == 1 { throw Failure.expected }
     }
-
-    func mediaAttempts() -> Int { attempts }
 
     enum Failure: Error {
         case expected

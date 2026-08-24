@@ -102,7 +102,9 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         countLock.withVideoStreamLock { frameCount }
     }
 
-    func reconfigure(canvas: AppleCanvas) async {
+    /// Updates presentation geometry without disturbing the active media
+    /// generation or the last frame retained by the renderer.
+    func updateCanvas(_ canvas: AppleCanvas) async {
         let isOpen = lifecycleLock.withVideoStreamLock { !isClosed }
         guard isOpen else { return }
         await withCheckedContinuation { continuation in
@@ -116,45 +118,63 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                     continuation.resume()
                     return
                 }
-                // Keep the receive queue stopped until every generation-owned
-                // packet, decoder, and presentation state has been replaced.
-                // Datagrams that arrive during this barrier remain in the
-                // socket buffer and are consumed by the new generation.
+                self.networkQueue.sync {
+                    self.mediaCanvas = canvas
+                }
+                DispatchQueue.main.async { [weak self] in
+                    self?.canvas = canvas
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Starts a fresh receive/decode generation while leaving the last decoded
+    /// frame visible. The current server requires a media configuration replay
+    /// after changing its virtual display, which restarts the RTP stream even
+    /// though the connection and rendering surface remain the same.
+    func prepareForMediaRestart() async {
+        let isOpen = lifecycleLock.withVideoStreamLock { !isClosed }
+        guard isOpen else { return }
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self else {
+                    continuation.resume()
+                    return
+                }
+                let isOpen = self.lifecycleLock.withVideoStreamLock { !self.isClosed }
+                guard isOpen else {
+                    continuation.resume()
+                    return
+                }
+
                 self.networkQueue.sync {
                     self.lifecycleLock.withVideoStreamLock {
                         self.mediaGeneration &+= 1
                     }
                     self.processor.reset()
                     self.lastReceiverReportTime = 0
-                    self.decodePipeline?.close()
-                    self.decodePipeline = nil
-                    self.mediaCanvas = canvas
-                    self.decoderParameterSets = nil
-                    self.sourceToTile.removeAll(keepingCapacity: false)
-                    self.abandonedSources.removeAll(keepingCapacity: false)
-                    self.cachedUnits.removeAll(keepingCapacity: false)
-                    self.pendingLongTermReferenceTimestamps.removeAll(keepingCapacity: false)
-                    self.frames.removeAllFrames()
-                    self.countLock.withVideoStreamLock {
-                        self.frameCount = 0
-                        self.decodedTiles.removeAll(keepingCapacity: true)
-                        self.firstPacketTime = nil
-                        self.lastDecodedFrameTime = 0
-                        self.lastVideoPacketTime = 0
-                        self.latestReceiveQueueDelayMilliseconds = 0
-                    }
-                    self.initialBurstReadyTime = nil
-                    self.initialPacketCountBaseline.removeAll(keepingCapacity: false)
-                    self.lastInitialKeyFrameRequestTime = 0
-                    self.lastStallKeyFrameRequestTime = 0
-                    self.playbackWatchdogStartTime = 0
-                    self.refreshScheduler.reset()
                 }
-                DispatchQueue.main.async { [weak self] in
-                    self?.canvas = canvas
-                    self?.state = .preparing
-                    continuation.resume()
+                self.decodePipeline?.close()
+                self.decodePipeline = nil
+                self.decoderParameterSets = nil
+                self.sourceToTile.removeAll(keepingCapacity: false)
+                self.abandonedSources.removeAll(keepingCapacity: false)
+                self.cachedUnits.removeAll(keepingCapacity: false)
+                self.pendingLongTermReferenceTimestamps.removeAll(keepingCapacity: false)
+                self.countLock.withVideoStreamLock {
+                    self.firstPacketTime = nil
+                    self.lastDecodedFrameTime = 0
+                    self.lastVideoPacketTime = 0
+                    self.latestReceiveQueueDelayMilliseconds = 0
                 }
+                self.initialBurstReadyTime = nil
+                self.initialPacketCountBaseline.removeAll(keepingCapacity: false)
+                self.lastInitialKeyFrameRequestTime = 0
+                self.lastStallKeyFrameRequestTime = 0
+                self.playbackWatchdogStartTime = 0
+                self.refreshScheduler.reset()
+                continuation.resume()
             }
         }
     }
@@ -367,17 +387,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 tileCount: tileCount,
                 sourceToTile: sourceToTile,
                 callbackQueue: queue,
-                decoderFactory: { failureHandler, frameHandler in
-                    try AppleHEVCDecoder(
-                        parameterSets: parameterSets,
-                        tileCount: tileCount,
-                        backendHandler: { backend in
-                            performanceMonitor.setDecoderBackend(backend)
-                        },
-                        failureHandler: failureHandler,
-                        frameHandler: frameHandler
-                    )
-                },
+                decoderFactory: makeDecoderFactory(
+                    parameterSets: parameterSets,
+                    tileCount: tileCount,
+                    performanceMonitor: performanceMonitor
+                ),
                 frameHandler: { [weak self] decodedFrame in
                     self?.performance.recordDecode(duration: decodedFrame.decodeDuration)
                     self?.publish(
@@ -451,18 +465,41 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     }
 
     private func replaceDecoderForChangedParameterSetsIfNeeded() {
-        guard decodePipeline != nil,
+        guard let decodePipeline,
               let decoderParameterSets,
               AppleHEVCDecoder.requiresReplacement(
                   configured: decoderParameterSets,
                   current: processor.currentParameterSets()
               ) else { return }
-        let sources = sourceToTile.sorted(by: { $0.value < $1.value }).map(\.key)
-        pendingLongTermReferenceTimestamps.removeAll(keepingCapacity: false)
-        decodePipeline?.close()
-        decodePipeline = nil
-        self.decoderParameterSets = nil
-        prepareDecoder(for: sources)
+        let parameterSets = processor.currentParameterSets()
+        do {
+            try decodePipeline.replaceDecoder(using: makeDecoderFactory(
+                parameterSets: parameterSets,
+                tileCount: mediaCanvas.tileCount,
+                performanceMonitor: performance
+            ))
+            self.decoderParameterSets = parameterSets
+        } catch {
+            fail(error)
+        }
+    }
+
+    private func makeDecoderFactory(
+        parameterSets: AppleHEVCParameterSets,
+        tileCount: Int,
+        performanceMonitor: AppleVideoPerformanceMonitor
+    ) -> AppleHEVCDecodePipeline.DecoderFactory {
+        { failureHandler, frameHandler in
+            try AppleHEVCDecoder(
+                parameterSets: parameterSets,
+                tileCount: tileCount,
+                backendHandler: { backend in
+                    performanceMonitor.setDecoderBackend(backend)
+                },
+                failureHandler: failureHandler,
+                frameHandler: frameHandler
+            )
+        }
     }
 
     private func scheduleKeyFramesForAllTiles(timestamp: UInt32? = nil) {

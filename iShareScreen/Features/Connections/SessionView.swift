@@ -269,7 +269,7 @@ private struct ActiveVideoSessionView: View {
                     .padding(12)
                     .allowsHitTesting(false)
             }
-            if stream.state != .streaming {
+            if shouldShowStatusOverlay {
                 Color.black
                     .overlay {
                         VStack(spacing: 10) {
@@ -288,6 +288,17 @@ private struct ActiveVideoSessionView: View {
                     .onAppear { onViewportChange(geometry.size) }
                     .onChange(of: geometry.size) { _, size in onViewportChange(size) }
             }
+        }
+    }
+
+    private var shouldShowStatusOverlay: Bool {
+        switch stream.state {
+        case .preparing:
+            stream.decodedFrameCount == 0
+        case .streaming:
+            false
+        case .failed, .stopped:
+            true
         }
     }
 

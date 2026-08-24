@@ -69,8 +69,11 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
                 try await session.sendEncrypted(message)
             },
             applyCanvas: { [weak stream, weak input] canvas in
-                await stream?.reconfigure(canvas: canvas)
+                await stream?.updateCanvas(canvas)
                 await input?.update(canvas: canvas)
+            },
+            prepareMediaRestart: { [weak stream] in
+                await stream?.prepareForMediaRestart()
             }
         )
         let cursorStore = AppleCursorStore()
@@ -135,6 +138,7 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(cursorStore.receivedUpdateCount, 0)
 
         let initialCanvas = stream.canvas
+        let frameCountBeforeResize = stream.decodedFrameCount
         let requestedSize = initialCanvas.width == 1920 && initialCanvas.height == 1080
             ? AppleDynamicResolutionSize(width: 1440, height: 900)
             : AppleDynamicResolutionSize(width: 960, height: 540)
@@ -145,12 +149,29 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
             let allTilesHaveFrames = (0..<resizedCanvas.tileCount).allSatisfy {
                 stream.frames.frame(at: $0) != nil
             }
-            if resizedCanvas != initialCanvas, allTilesHaveFrames, stream.state == .streaming { break }
+            if resizedCanvas != initialCanvas {
+                XCTAssertEqual(stream.state, .streaming)
+                XCTAssertTrue(
+                    allTilesHaveFrames,
+                    "A hot resolution change must retain the last complete frame until replacement frames arrive."
+                )
+            }
+            if resizedCanvas != initialCanvas,
+               allTilesHaveFrames,
+               stream.state == .streaming,
+               stream.decodedFrameCount > frameCountBeforeResize {
+                break
+            }
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertNotEqual(stream.canvas, initialCanvas)
         XCTAssertEqual(stream.state, .streaming)
         XCTAssertTrue((0..<stream.canvas.tileCount).allSatisfy { stream.frames.frame(at: $0) != nil })
+        XCTAssertGreaterThan(
+            stream.decodedFrameCount,
+            frameCountBeforeResize,
+            "The restarted media generation must replace the retained frame."
+        )
 
         try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: true))
         try await Task.sleep(for: .milliseconds(50))

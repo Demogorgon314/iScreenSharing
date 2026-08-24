@@ -108,14 +108,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         callbackBridge = CallbackBridge()
         decoder = nil
 
-        decoder = try decoderFactory(
-            { [callbackBridge] failure in
-                callbackBridge.emit(failure)
-            },
-            { [callbackBridge] frame in
-                callbackBridge.emit(frame)
-            }
-        )
+        decoder = try makeDecoder(using: decoderFactory)
         callbackBridge.install(
             frameHandler: { [weak self, callbackQueue] frame in
                 callbackQueue.async { [weak self] in
@@ -176,6 +169,15 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         admission.reset()
     }
 
+    /// Replaces only the decompression session for a new video format. RTP
+    /// admission and playout anchoring remain continuous across the change.
+    func replaceDecoder(using decoderFactory: DecoderFactory) throws {
+        guard !isClosed else { throw AppleHEVCDecoderError.sessionClosed }
+        decoder?.close()
+        decoder = nil
+        decoder = try makeDecoder(using: decoderFactory)
+    }
+
     func close() {
         guard !isClosed else { return }
         isClosed = true
@@ -198,6 +200,18 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         )
         Self.logger.notice(
             "Asynchronous video decode failure tile=\(failure.tileIndex, privacy: .public) status=\(failure.status, privacy: .public); continuing submissions"
+        )
+    }
+
+    private func makeDecoder(using decoderFactory: DecoderFactory) throws
+        -> any AppleHEVCDecodeSubmitting {
+        try decoderFactory(
+            { [callbackBridge] failure in
+                callbackBridge.emit(failure)
+            },
+            { [callbackBridge] frame in
+                callbackBridge.emit(frame)
+            }
         )
     }
 

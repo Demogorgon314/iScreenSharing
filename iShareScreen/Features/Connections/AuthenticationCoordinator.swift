@@ -117,8 +117,11 @@ final class AuthenticationCoordinator: ObservableObject {
                                 try await session.sendEncrypted(message)
                             },
                             applyCanvas: { [weak stream, weak input] canvas in
-                                await stream?.reconfigure(canvas: canvas)
+                                await stream?.updateCanvas(canvas)
                                 await input?.update(canvas: canvas)
+                            },
+                            prepareMediaRestart: { [weak stream] in
+                                await stream?.prepareForMediaRestart()
                             }
                         )
                         session.install(dynamicResolutionController: controller)
