@@ -111,9 +111,6 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
     }
-    var usesExplicitPresentationTiming = false {
-        didSet { configurePresentation() }
-    }
     var showsDeveloperHUD: Bool {
         didSet { configureDeveloperHUD() }
     }
@@ -151,7 +148,6 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         fullCanvasLayout = source.fullCanvasLayout
         renderingBounds = source.renderingBounds
         synchronizesPresentation = source.synchronizesPresentation
-        usesExplicitPresentationTiming = false
         showsDeveloperHUD = false
         super.init(layer: layer)
         configurePresentation()
@@ -196,7 +192,6 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         fullCanvasLayout = AppleVideoCanvasLayout.Tile(container: .zero, content: .zero)
         renderingBounds = .zero
         self.performance = performance
-        usesExplicitPresentationTiming = false
         self.synchronizesPresentation = synchronizesPresentation
         self.showsDeveloperHUD = showsDeveloperHUD
     }
@@ -211,7 +206,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     @discardableResult
-    func present(at targetTimestamp: TimeInterval? = nil) -> Bool {
+    func present() -> Bool {
         guard inFlightGate.begin() else {
             performance?.recordRendererBusy()
             return false
@@ -226,8 +221,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         commit(
             commandBuffer,
             presenting: drawable,
-            submittedAt: ProcessInfo.processInfo.systemUptime,
-            targetTimestamp: targetTimestamp
+            submittedAt: ProcessInfo.processInfo.systemUptime
         )
         return true
     }
@@ -235,8 +229,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private func commit(
         _ commandBuffer: MTLCommandBuffer,
         presenting drawable: CAMetalDrawable,
-        submittedAt: TimeInterval,
-        targetTimestamp: TimeInterval?
+        submittedAt: TimeInterval
     ) {
         recordPresentation(submittedAt: submittedAt)
         let presentationSubmittedAt = CACurrentMediaTime()
@@ -249,12 +242,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
                 presentedAt: drawable.presentedTime
             )
         }
-        if let targetTimestamp,
-           targetTimestamp > presentationSubmittedAt {
-            commandBuffer.present(drawable, atTime: targetTimestamp)
-        } else {
-            commandBuffer.present(drawable)
-        }
+        commandBuffer.present(drawable)
         let inFlightGate = inFlightGate
         commandBuffer.addCompletedHandler { commandBuffer in
             defer { inFlightGate.end() }
@@ -271,7 +259,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     private func configurePresentation() {
-        displaySyncEnabled = synchronizesPresentation && !usesExplicitPresentationTiming
+        displaySyncEnabled = synchronizesPresentation
         presentsWithTransaction = false
     }
 

@@ -4,7 +4,6 @@ struct AppleVideoDisplayScheduler {
     struct DisplayUpdate {
         let frames: AppleVideoFrameStore.FrameBatch
         let requiresPresentation: Bool
-        let targetTimestamp: TimeInterval
     }
 
     private let queueCapacity: Int
@@ -64,8 +63,7 @@ struct AppleVideoDisplayScheduler {
         forcePresentation = false
         return DisplayUpdate(
             frames: frames,
-            requiresPresentation: requiresPresentation,
-            targetTimestamp: targetTimestamp
+            requiresPresentation: requiresPresentation
         )
     }
 

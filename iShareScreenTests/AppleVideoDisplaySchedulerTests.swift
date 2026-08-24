@@ -32,7 +32,6 @@ final class AppleVideoDisplaySchedulerTests: XCTestCase {
         XCTAssertFalse(emptyTick.requiresPresentation)
         XCTAssertEqual(update.frames[0]?.sequence, 1)
         XCTAssertTrue(update.requiresPresentation)
-        XCTAssertEqual(update.targetTimestamp, 10)
         XCTAssertEqual(scheduler.queuedFrameCount, 0)
     }
 

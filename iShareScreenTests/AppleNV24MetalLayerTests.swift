@@ -237,7 +237,7 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertTrue(originalLayer === retainedLayer)
     }
 
-    func testVideoCanvasUsesDisplayLinkPacingWithMetalSynchronization() throws {
+    func testVideoCanvasUsesDisplayLinkAdmissionWithImmediateMetalSynchronization() throws {
         let view = RemoteVideoCanvasNSView(
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
             frames: AppleVideoFrameStore(),
@@ -262,12 +262,10 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         window.contentView = view
 
         XCTAssertTrue(view.usesSynchronizedDisplayLink)
-        XCTAssertTrue(metalLayer.usesExplicitPresentationTiming)
-        XCTAssertFalse(metalLayer.displaySyncEnabled)
+        XCTAssertTrue(metalLayer.displaySyncEnabled)
 
         view.synchronizesPresentation = false
         XCTAssertFalse(view.usesSynchronizedDisplayLink)
-        XCTAssertFalse(metalLayer.usesExplicitPresentationTiming)
         XCTAssertFalse(metalLayer.displaySyncEnabled)
     }
 

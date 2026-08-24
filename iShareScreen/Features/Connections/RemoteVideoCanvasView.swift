@@ -672,9 +672,7 @@ final class RemoteVideoCanvasNSView: NSView {
     ) {
         if !update.frames.isEmpty { apply(update.frames) }
         guard update.requiresPresentation else { return }
-        let presented = (displayLayer as? AppleNV24MetalLayer)?.present(
-            at: update.targetTimestamp
-        ) ?? true
+        let presented = (displayLayer as? AppleNV24MetalLayer)?.present() ?? true
         if !presented { displayScheduler.presentationDidFail() }
     }
 
@@ -685,7 +683,6 @@ final class RemoteVideoCanvasNSView: NSView {
         displayScheduler.invalidateDisplayTarget()
         guard let metalLayer = displayLayer as? AppleNV24MetalLayer else { return }
 
-        metalLayer.usesExplicitPresentationTiming = false
         metalLayer.synchronizesPresentation = synchronizesPresentation
 #if DEBUG
         Self.diagnosticsLogger.notice(
@@ -705,7 +702,6 @@ final class RemoteVideoCanvasNSView: NSView {
             selector: #selector(RemoteVideoCanvasDisplayLinkTarget.displayLinkDidFire(_:))
         )
         displayLink.add(to: .main, forMode: .common)
-        metalLayer.usesExplicitPresentationTiming = true
         displayLinkTarget = target
         self.displayLink = displayLink
         updateDisplayLinkFrameRate()
