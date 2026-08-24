@@ -20,6 +20,50 @@ final class AppleVideoDisplaySchedulerTests: XCTestCase {
         XCTAssertEqual(scheduler.queuedFrameCount, 0)
     }
 
+    func testEligibleFrameProcessesImmediatelyAfterDisplayTargetIsKnown() throws {
+        var scheduler = AppleVideoDisplayScheduler()
+        let emptyTick = scheduler.displayLinkDidFire(targetTimestamp: 10)
+
+        let update = try XCTUnwrap(scheduler.enqueue([
+            0: try makeFrame(sequence: 1, presentationTime: 9),
+        ]))
+
+        XCTAssertTrue(emptyTick.frames.isEmpty)
+        XCTAssertFalse(emptyTick.requiresPresentation)
+        XCTAssertEqual(update.frames[0]?.sequence, 1)
+        XCTAssertTrue(update.requiresPresentation)
+        XCTAssertEqual(update.targetTimestamp, 10)
+        XCTAssertEqual(scheduler.queuedFrameCount, 0)
+    }
+
+    func testFutureFrameStillWaitsWhenEnqueuedAfterDisplayTargetIsKnown() throws {
+        var scheduler = AppleVideoDisplayScheduler()
+        _ = scheduler.displayLinkDidFire(targetTimestamp: 10)
+
+        let immediateUpdate = try XCTUnwrap(scheduler.enqueue([
+            0: try makeFrame(sequence: 1, presentationTime: 11),
+        ]))
+        let eligibleUpdate = scheduler.displayLinkDidFire(targetTimestamp: 11)
+
+        XCTAssertTrue(immediateUpdate.frames.isEmpty)
+        XCTAssertFalse(immediateUpdate.requiresPresentation)
+        XCTAssertEqual(eligibleUpdate.frames[0]?.sequence, 1)
+    }
+
+    func testInvalidatedDisplayTargetDoesNotReleaseFrameUntilNextTick() throws {
+        var scheduler = AppleVideoDisplayScheduler()
+        _ = scheduler.displayLinkDidFire(targetTimestamp: 10)
+        scheduler.invalidateDisplayTarget()
+
+        let immediateUpdate = scheduler.enqueue([
+            0: try makeFrame(sequence: 1, presentationTime: 9),
+        ])
+        let nextTick = scheduler.displayLinkDidFire(targetTimestamp: 11)
+
+        XCTAssertNil(immediateUpdate)
+        XCTAssertEqual(nextTick.frames[0]?.sequence, 1)
+    }
+
     func testSixtyFPSFrameUsesFirstEligibleTickOn144HzDisplay() throws {
         var scheduler = AppleVideoDisplayScheduler()
         let displayPeriod = 1.0 / 144.0

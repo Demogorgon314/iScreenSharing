@@ -4,12 +4,14 @@ struct AppleVideoDisplayScheduler {
     struct DisplayUpdate {
         let frames: AppleVideoFrameStore.FrameBatch
         let requiresPresentation: Bool
+        let targetTimestamp: TimeInterval
     }
 
     private let queueCapacity: Int
     private var queues = [Int: [AppleVideoFrameStore.Frame]]()
     private var lastEnqueuedSequence = [Int: UInt64]()
     private var lastDisplayedPresentationTime = [Int: TimeInterval]()
+    private var latestDisplayTargetTimestamp: TimeInterval?
     private var forcePresentation = false
 
     init(queueCapacity: Int = 16) {
@@ -21,7 +23,10 @@ struct AppleVideoDisplayScheduler {
         queues.values.reduce(0) { $0 + $1.count }
     }
 
-    mutating func enqueue(_ frames: AppleVideoFrameStore.FrameBatch) {
+    @discardableResult
+    mutating func enqueue(
+        _ frames: AppleVideoFrameStore.FrameBatch
+    ) -> DisplayUpdate? {
         for (tileIndex, frame) in frames {
             guard frame.presentationTime
                     > lastDisplayedPresentationTime[tileIndex, default: -.infinity] else { continue }
@@ -36,6 +41,8 @@ struct AppleVideoDisplayScheduler {
                 return $0.sequence < $1.sequence
             }
         }
+        guard let latestDisplayTargetTimestamp else { return nil }
+        return displayUpdate(through: latestDisplayTargetTimestamp)
     }
 
     mutating func markNeedsPresentation() {
@@ -45,12 +52,20 @@ struct AppleVideoDisplayScheduler {
     mutating func displayLinkDidFire(
         targetTimestamp: TimeInterval
     ) -> DisplayUpdate {
+        latestDisplayTargetTimestamp = targetTimestamp
+        return displayUpdate(through: targetTimestamp)
+    }
+
+    private mutating func displayUpdate(
+        through targetTimestamp: TimeInterval
+    ) -> DisplayUpdate {
         let frames = dequeueFrames(through: targetTimestamp)
         let requiresPresentation = forcePresentation || !frames.isEmpty
         forcePresentation = false
         return DisplayUpdate(
             frames: frames,
-            requiresPresentation: requiresPresentation
+            requiresPresentation: requiresPresentation,
+            targetTimestamp: targetTimestamp
         )
     }
 
@@ -71,7 +86,12 @@ struct AppleVideoDisplayScheduler {
         queues.removeAll(keepingCapacity: false)
         lastEnqueuedSequence.removeAll(keepingCapacity: false)
         lastDisplayedPresentationTime.removeAll(keepingCapacity: false)
+        latestDisplayTargetTimestamp = nil
         forcePresentation = false
+    }
+
+    mutating func invalidateDisplayTarget() {
+        latestDisplayTargetTimestamp = nil
     }
 
     private mutating func dequeueFrames(

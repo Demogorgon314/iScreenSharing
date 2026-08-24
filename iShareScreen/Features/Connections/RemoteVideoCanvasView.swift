@@ -610,7 +610,9 @@ final class RemoteVideoCanvasNSView: NSView {
     private func enqueueForPresentation(_ frames: AppleVideoFrameStore.FrameBatch) {
         guard !frames.isEmpty else { return }
         if synchronizesPresentation {
-            displayScheduler.enqueue(frames)
+            if let update = displayScheduler.enqueue(frames) {
+                applyAndPresent(update)
+            }
         } else {
             apply(frames)
             schedulePresentation()
@@ -662,10 +664,16 @@ final class RemoteVideoCanvasNSView: NSView {
         let update = displayScheduler.displayLinkDidFire(
             targetTimestamp: displayLink.targetTimestamp
         )
+        applyAndPresent(update)
+    }
+
+    private func applyAndPresent(
+        _ update: AppleVideoDisplayScheduler.DisplayUpdate
+    ) {
         if !update.frames.isEmpty { apply(update.frames) }
         guard update.requiresPresentation else { return }
         let presented = (displayLayer as? AppleNV24MetalLayer)?.present(
-            at: displayLink.targetTimestamp
+            at: update.targetTimestamp
         ) ?? true
         if !presented { displayScheduler.presentationDidFail() }
     }
@@ -674,6 +682,7 @@ final class RemoteVideoCanvasNSView: NSView {
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
+        displayScheduler.invalidateDisplayTarget()
         guard let metalLayer = displayLayer as? AppleNV24MetalLayer else { return }
 
         metalLayer.usesExplicitPresentationTiming = false
