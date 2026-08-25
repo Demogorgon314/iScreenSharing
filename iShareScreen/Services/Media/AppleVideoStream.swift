@@ -314,6 +314,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             accessUnit.encodedByteCount,
             intraRefreshCount: accessUnit.containsRandomAccessPicture ? 1 : 0
         )
+        performance.recordReceivedFrame(rtpTimestamp: accessUnit.timestamp)
         if decodePipeline == nil { prepareDecoderIfPossible() }
         replaceDecoderForChangedParameterSetsIfNeeded()
 
@@ -397,6 +398,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 ),
                 frameHandler: { [weak self] decodedFrame in
                     self?.performance.recordDecode(duration: decodedFrame.decodeDuration)
+                    if let timing = decodedFrame.accessUnitTiming {
+                        self?.performance.recordAccessUnitToDecoderOutput(
+                            duration: decodedFrame.decoderOutputAt - timing.assemblyCompletedAt
+                        )
+                    }
                     self?.publish(
                         decodedFrame.pixelBuffer,
                         region: decodedFrame.region,

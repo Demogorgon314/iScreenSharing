@@ -17,9 +17,14 @@ struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
     var intraRefreshesPerSecond = 0.0
     var rateControlFeedbacksPerSecond = 0.0
     var estimatedReceiveBandwidthMegabitsPerSecond = 0.0
+    var receivedFramesPerSecond = 0.0
     var decodedFramesPerSecond = 0.0
     var presentedFramesPerSecond = 0.0
     var averageDecodeMilliseconds = 0.0
+    var averageAccessUnitToDecoderOutputMilliseconds = 0.0
+    var accessUnitToDecoderOutputSampleCount = 0
+    var averageRenderCallMilliseconds = 0.0
+    var renderCallSampleCount = 0
     var averagePresentationMilliseconds = 0.0
     var averageGPUMilliseconds = 0.0
     var displayedFramesPerSecond = 0.0
@@ -56,12 +61,17 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         var intraRefreshes = 0
         var rateControlFeedbacks = 0
         var estimatedReceiveBandwidthKilobitsPerSecond: UInt32 = 0
+        var receivedSourceTimestamps = Set<UInt32>()
         var decodedSubframes = 0
         var timestampedDecodedSubframes = 0
         var decodedSourceFrames = 0
         var presentedFrames = 0
         var decodeDuration = 0.0
         var decodeSamples = 0
+        var accessUnitToDecoderOutputDuration = 0.0
+        var accessUnitToDecoderOutputSamples = 0
+        var renderCallDuration = 0.0
+        var renderCallSamples = 0
         var presentationDuration = 0.0
         var presentationSamples = 0
         var gpuDuration = 0.0
@@ -195,6 +205,12 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         }
     }
 
+    func recordReceivedFrame(rtpTimestamp: UInt32) {
+        lock.withPerformanceLock {
+            accumulator.receivedSourceTimestamps.insert(rtpTimestamp)
+        }
+    }
+
     func recordRateControlFeedback(estimatedBandwidthKilobitsPerSecond: UInt32) {
         lock.withPerformanceLock {
             accumulator.rateControlFeedbacks += 1
@@ -207,6 +223,20 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         lock.withPerformanceLock {
             accumulator.decodeDuration += max(0, duration)
             accumulator.decodeSamples += 1
+        }
+    }
+
+    func recordAccessUnitToDecoderOutput(duration: TimeInterval) {
+        lock.withPerformanceLock {
+            accumulator.accessUnitToDecoderOutputDuration += max(0, duration)
+            accumulator.accessUnitToDecoderOutputSamples += 1
+        }
+    }
+
+    func recordRenderCall(duration: TimeInterval) {
+        lock.withPerformanceLock {
+            accumulator.renderCallDuration += max(0, duration)
+            accumulator.renderCallSamples += 1
         }
     }
 
@@ -427,6 +457,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
                 rateControlFeedbacksPerSecond: Double(values.rateControlFeedbacks) / elapsed,
                 estimatedReceiveBandwidthMegabitsPerSecond:
                     Double(values.estimatedReceiveBandwidthKilobitsPerSecond) / 1_000,
+                receivedFramesPerSecond: Double(values.receivedSourceTimestamps.count) / elapsed,
                 decodedFramesPerSecond: Self.decodedFramesPerSecond(
                     values: values,
                     tileCount: tileCount,
@@ -437,6 +468,16 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
                     total: values.decodeDuration,
                     count: values.decodeSamples
                 ),
+                averageAccessUnitToDecoderOutputMilliseconds: Self.averageMilliseconds(
+                    total: values.accessUnitToDecoderOutputDuration,
+                    count: values.accessUnitToDecoderOutputSamples
+                ),
+                accessUnitToDecoderOutputSampleCount: values.accessUnitToDecoderOutputSamples,
+                averageRenderCallMilliseconds: Self.averageMilliseconds(
+                    total: values.renderCallDuration,
+                    count: values.renderCallSamples
+                ),
+                renderCallSampleCount: values.renderCallSamples,
                 averagePresentationMilliseconds: Self.averageMilliseconds(
                     total: values.presentationDuration,
                     count: values.presentationSamples

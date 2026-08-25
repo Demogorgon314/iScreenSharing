@@ -30,7 +30,7 @@ struct SessionView: View {
                     displayScale: commandState.displayScale,
                     synchronizesPresentation: commandState.synchronizesVideoPresentation,
                     showsPerformanceOverlay: commandState.showsVideoPerformanceOverlay,
-                    showsDetailedVideoMetrics: commandState.showsDetailedVideoMetrics,
+                    performanceLevel: commandState.videoPerformanceLevel,
                     showsMetalPerformanceHUD: commandState.showsMetalPerformanceHUD,
                     sourceRect: usesIndependentVideoStreams ? nil : displayLayout.sourceRect(for: displayIndex),
                     inputMapping: displayLayout.inputMapping(
@@ -295,7 +295,7 @@ private struct ActiveVideoSessionView: View {
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
     let showsPerformanceOverlay: Bool
-    let showsDetailedVideoMetrics: Bool
+    let performanceLevel: VideoPerformanceLevel
     let showsMetalPerformanceHUD: Bool
     let sourceRect: CGRect?
     let inputMapping: AppleDisplayInputMapping?
@@ -326,7 +326,8 @@ private struct ActiveVideoSessionView: View {
             if showsPerformanceOverlay {
                 AppleVideoPerformanceOverlay(
                     performance: stream.performance,
-                    showsDetailedMetrics: showsDetailedVideoMetrics
+                    canvas: stream.canvas,
+                    level: performanceLevel
                 )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(12)
@@ -352,14 +353,14 @@ private struct ActiveVideoSessionView: View {
                     .onChange(of: geometry.size) { _, size in onViewportChange(size) }
             }
         }
-        .onAppear { updateDetailedMetricsCollection() }
-        .onChange(of: showsPerformanceOverlay) { _, _ in updateDetailedMetricsCollection() }
-        .onChange(of: showsDetailedVideoMetrics) { _, _ in updateDetailedMetricsCollection() }
+        .onAppear { updatePipelineDiagnosticsCollection() }
+        .onChange(of: showsPerformanceOverlay) { _, _ in updatePipelineDiagnosticsCollection() }
+        .onChange(of: performanceLevel) { _, _ in updatePipelineDiagnosticsCollection() }
     }
 
-    private func updateDetailedMetricsCollection() {
+    private func updatePipelineDiagnosticsCollection() {
         stream.performance.setPipelineDiagnosticsEnabled(
-            showsPerformanceOverlay && showsDetailedVideoMetrics
+            showsPerformanceOverlay && performanceLevel == .detailed
         )
     }
 
@@ -386,18 +387,44 @@ private struct ActiveVideoSessionView: View {
 
 private struct AppleVideoPerformanceOverlay: View {
     @ObservedObject var performance: AppleVideoPerformanceMonitor
-    let showsDetailedMetrics: Bool
+    let canvas: AppleCanvas
+    let level: VideoPerformanceLevel
 
     var body: some View {
         let stats = performance.snapshot
         let latency = stats.pipelineLatency
         VStack(alignment: .leading, spacing: 3) {
+            if level == .compact {
+                compactMetrics(stats)
+            } else {
+                standardMetrics(stats, latency: latency)
+            }
+        }
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.74), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(.white.opacity(0.14), lineWidth: 0.5)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Video performance statistics")
+    }
+
+    @ViewBuilder
+    private func standardMetrics(
+        _ stats: AppleVideoPerformanceSnapshot,
+        latency: AppleVideoPipelineLatencySnapshot
+    ) -> some View {
             Text(String(
                 format: "Network  %.1f Mb/s  %.0f pkt/s",
                 stats.networkMegabitsPerSecond,
                 stats.networkPacketsPerSecond
             ))
-            if showsDetailedMetrics {
+            if level == .detailed {
                 Text(String(
                     format: "Socket   %.0f KB  queue %.0f KB/%.2f ms",
                     Double(stats.socketReceiveBufferBytes) / 1_024,
@@ -471,7 +498,7 @@ private struct AppleVideoPerformanceOverlay: View {
                 stats.keyFrameRequestCount,
                 stats.rendererBusyCount
             ))
-            if showsDetailedMetrics {
+            if level == .detailed {
                 Text(String(
                     format: "AU       span %.2f  asm %.2f  queue %.2f ms",
                     latency.datagramSpanMilliseconds.p95,
@@ -546,19 +573,37 @@ private struct AppleVideoPerformanceOverlay: View {
                     latency.traceEvictionCount
                 ))
             }
-        }
-        .font(.system(size: 11, weight: .medium, design: .monospaced))
-        .foregroundStyle(.white)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 8)
-        .background(.black.opacity(0.74), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(.white.opacity(0.14), lineWidth: 0.5)
-        }
-        .fixedSize()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Video performance statistics")
+    }
+
+    @ViewBuilder
+    private func compactMetrics(_ stats: AppleVideoPerformanceSnapshot) -> some View {
+        Text(String(
+            format: "%dx%d@%.0f HEVC 4:4:4/%@",
+            canvas.width,
+            canvas.height,
+            stats.receivedFramesPerSecond,
+            stats.decoderBackend?.rawValue ?? "—"
+        ))
+        Text(String(
+            format: "FPS %.1f Rx · %.1f De · %.1f Rd",
+            stats.receivedFramesPerSecond,
+            stats.decodedFramesPerSecond,
+            stats.presentedFramesPerSecond
+        ))
+        Text(String(
+            format: "Network RTP loss %.2f%% · Video UDP %.1f Mb/s",
+            stats.receiverReportLossPercentage,
+            stats.networkMegabitsPerSecond
+        ))
+        Text(
+            "Render \(formattedMilliseconds(stats.averageRenderCallMilliseconds, sampleCount: stats.renderCallSampleCount))"
+                + " · Decode \(formattedMilliseconds(stats.averageAccessUnitToDecoderOutputMilliseconds, sampleCount: stats.accessUnitToDecoderOutputSampleCount))"
+        )
+    }
+
+    private func formattedMilliseconds(_ value: Double, sampleCount: Int) -> String {
+        guard sampleCount > 0 else { return "—" }
+        return String(format: "%.2f ms", value)
     }
 }
 

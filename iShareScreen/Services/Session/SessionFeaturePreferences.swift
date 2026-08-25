@@ -1,5 +1,21 @@
 import Foundation
 
+enum VideoPerformanceLevel: String, CaseIterable, Identifiable {
+    case compact
+    case standard
+    case detailed
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .compact: "Compact"
+        case .standard: "Standard"
+        case .detailed: "Detailed"
+        }
+    }
+}
+
 struct SessionFeaturePreferences {
     static let sharesKeyboardInputSourceKey = "sharesKeyboardInputSource"
     static let usesDynamicResolutionKey = "usesDynamicResolution"
@@ -8,6 +24,8 @@ struct SessionFeaturePreferences {
     static let synchronizesVideoPresentationKey = "synchronizesVideoPresentation"
     static let showsVideoPerformanceOverlayKey = "showsVideoPerformanceOverlay"
     static let showsDetailedVideoMetricsKey = "showsDetailedVideoMetrics"
+    static let showsMoonlightStyleMetricsKey = "showsMoonlightStyleMetrics"
+    static let videoPerformanceLevelKey = "videoPerformanceLevel"
     static let showsMetalPerformanceHUDKey = "showsMetalPerformanceHUD"
 
     private let defaults: UserDefaults
@@ -42,8 +60,18 @@ struct SessionFeaturePreferences {
         storedBool(forKey: Self.showsVideoPerformanceOverlayKey, defaultValue: false)
     }
 
-    var showsDetailedVideoMetrics: Bool {
-        storedBool(forKey: Self.showsDetailedVideoMetricsKey, defaultValue: false)
+    var videoPerformanceLevel: VideoPerformanceLevel {
+        if let storedValue = defaults.string(forKey: Self.videoPerformanceLevelKey),
+           let level = VideoPerformanceLevel(rawValue: storedValue) {
+            return level
+        }
+        if defaults.bool(forKey: Self.showsMoonlightStyleMetricsKey) {
+            return .compact
+        }
+        if defaults.bool(forKey: Self.showsDetailedVideoMetricsKey) {
+            return .detailed
+        }
+        return .compact
     }
 
     var showsMetalPerformanceHUD: Bool {
@@ -78,8 +106,10 @@ struct SessionFeaturePreferences {
         defaults.set(enabled, forKey: Self.showsVideoPerformanceOverlayKey)
     }
 
-    func setShowsDetailedVideoMetrics(_ enabled: Bool) {
-        defaults.set(enabled, forKey: Self.showsDetailedVideoMetricsKey)
+    func setVideoPerformanceLevel(_ level: VideoPerformanceLevel) {
+        defaults.set(level.rawValue, forKey: Self.videoPerformanceLevelKey)
+        defaults.removeObject(forKey: Self.showsDetailedVideoMetricsKey)
+        defaults.removeObject(forKey: Self.showsMoonlightStyleMetricsKey)
     }
 
     func setShowsMetalPerformanceHUD(_ enabled: Bool) {

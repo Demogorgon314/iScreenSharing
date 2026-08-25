@@ -27,7 +27,7 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         XCTAssertNil(preferences.fixedDisplayScale)
         XCTAssertTrue(preferences.synchronizesVideoPresentation)
         XCTAssertFalse(preferences.showsVideoPerformanceOverlay)
-        XCTAssertFalse(preferences.showsDetailedVideoMetrics)
+        XCTAssertEqual(preferences.videoPerformanceLevel, .compact)
         XCTAssertFalse(preferences.showsMetalPerformanceHUD)
     }
 
@@ -39,7 +39,7 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         preferences.setFixedDisplayScale(1.25)
         preferences.setSynchronizesVideoPresentation(false)
         preferences.setShowsVideoPerformanceOverlay(true)
-        preferences.setShowsDetailedVideoMetrics(true)
+        preferences.setVideoPerformanceLevel(.detailed)
         preferences.setShowsMetalPerformanceHUD(true)
 
         let restored = SessionFeaturePreferences(defaults: defaults)
@@ -50,8 +50,31 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         XCTAssertEqual(restored.fixedDisplayScale, 1.25)
         XCTAssertFalse(restored.synchronizesVideoPresentation)
         XCTAssertTrue(restored.showsVideoPerformanceOverlay)
-        XCTAssertTrue(restored.showsDetailedVideoMetrics)
+        XCTAssertEqual(restored.videoPerformanceLevel, .detailed)
         XCTAssertTrue(restored.showsMetalPerformanceHUD)
+    }
+
+    func testMigratesLegacyMetricTogglesToPerformanceLevels() {
+        defaults.set(true, forKey: SessionFeaturePreferences.showsDetailedVideoMetricsKey)
+        XCTAssertEqual(
+            SessionFeaturePreferences(defaults: defaults).videoPerformanceLevel,
+            .detailed
+        )
+
+        defaults.set(true, forKey: SessionFeaturePreferences.showsMoonlightStyleMetricsKey)
+        XCTAssertEqual(
+            SessionFeaturePreferences(defaults: defaults).videoPerformanceLevel,
+            .compact
+        )
+    }
+
+    func testInvalidPerformanceLevelFallsBackToCompact() {
+        defaults.set("unsupported", forKey: SessionFeaturePreferences.videoPerformanceLevelKey)
+
+        XCTAssertEqual(
+            SessionFeaturePreferences(defaults: defaults).videoPerformanceLevel,
+            .compact
+        )
     }
 
     @MainActor

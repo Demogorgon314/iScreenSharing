@@ -211,6 +211,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         displayPeriod: TimeInterval? = nil,
         isDisplayLinkTriggered: Bool = false
     ) -> Bool {
+        let renderCallStartedAt = CACurrentMediaTime()
         guard inFlightGate.begin() else {
             performance?.recordRendererBusy()
             return false
@@ -250,6 +251,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             submittedAt: encodeEndedAt,
             batchID: batchID
         )
+        performance?.recordRenderCall(duration: CACurrentMediaTime() - renderCallStartedAt)
         return true
     }
 

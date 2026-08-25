@@ -9,7 +9,7 @@ final class SessionCommandState: ObservableObject {
     @Published private(set) var displayScale: AppleVideoDisplayScale
     @Published private(set) var synchronizesVideoPresentation: Bool
     @Published private(set) var showsVideoPerformanceOverlay: Bool
-    @Published private(set) var showsDetailedVideoMetrics: Bool
+    @Published private(set) var videoPerformanceLevel: VideoPerformanceLevel
     @Published private(set) var showsMetalPerformanceHUD: Bool
     @Published private(set) var usesDynamicResolution: Bool
     @Published private(set) var canUseDynamicResolution: Bool
@@ -51,7 +51,7 @@ final class SessionCommandState: ObservableObject {
         )
         synchronizesVideoPresentation = preferences.synchronizesVideoPresentation
         showsVideoPerformanceOverlay = preferences.showsVideoPerformanceOverlay
-        showsDetailedVideoMetrics = preferences.showsDetailedVideoMetrics
+        videoPerformanceLevel = preferences.videoPerformanceLevel
         showsMetalPerformanceHUD = preferences.showsMetalPerformanceHUD
         usesDynamicResolution = dynamicResolution?.isEnabled ?? false
         canUseDynamicResolution = displayLayout?.supportsDynamicResolution == true
@@ -125,10 +125,10 @@ final class SessionCommandState: ObservableObject {
         preferences.setShowsVideoPerformanceOverlay(enabled)
     }
 
-    func setShowsDetailedVideoMetrics(_ enabled: Bool) {
-        guard enabled != showsDetailedVideoMetrics else { return }
-        showsDetailedVideoMetrics = enabled
-        preferences.setShowsDetailedVideoMetrics(enabled)
+    func setVideoPerformanceLevel(_ level: VideoPerformanceLevel) {
+        guard level != videoPerformanceLevel else { return }
+        videoPerformanceLevel = level
+        preferences.setVideoPerformanceLevel(level)
     }
 
     func setShowsMetalPerformanceHUD(_ enabled: Bool) {

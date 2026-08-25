@@ -160,9 +160,15 @@ The following environment variables are intended for local development:
 - `ISHARESCREEN_PIPELINE_DIAGNOSTICS=1`: correlate decoder output, playback and
   main-queue delivery, display scheduling, drawable acquisition, Metal GPU
   execution, display-link targets, and physical presentation; emits only
-  500 ms aggregate samples rather than per-frame logs. The persisted
-  **Detailed Video Metrics** toggle enables the same collection for the
-  on-screen Video Performance overlay without requiring this environment flag
+  500 ms aggregate samples rather than per-frame logs. Selecting the persisted
+  **Detailed** metrics level enables the same collection for the on-screen
+  Video Performance overlay without requiring this environment flag
+- The persisted **Metrics Level** menu offers Compact (the default), Standard,
+  and Detailed views. Compact uses Moonlight's Rx/Decode/Render layout while
+  retaining iShareScreen's actual semantics: bandwidth is this stream's
+  delivered video UDP traffic and loss is the primary RTP receiver-report
+  loss. Peer RTT and host encode time are omitted because the client cannot
+  measure them reliably
 - `ISHARESCREEN_VIDEO_RCVBUF_BYTES=<bytes>`: in Debug builds only, override the
   video UDP receive buffer for controlled A/B testing; unset it to retain the
   native-aligned system default

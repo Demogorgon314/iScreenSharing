@@ -34,6 +34,9 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         )
         monitor.recordAccessUnits(240)
         monitor.recordAccessUnitBytes(480_000, intraRefreshCount: 2)
+        monitor.recordReceivedFrame(rtpTimestamp: 100)
+        monitor.recordReceivedFrame(rtpTimestamp: 100)
+        monitor.recordReceivedFrame(rtpTimestamp: 200)
         for _ in 0..<20 {
             monitor.recordRateControlFeedback(
                 estimatedBandwidthKilobitsPerSecond: 32_001
@@ -41,6 +44,10 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         }
         monitor.recordDecode(duration: 0.004)
         monitor.recordDecode(duration: 0.002)
+        monitor.recordAccessUnitToDecoderOutput(duration: 0.006)
+        monitor.recordAccessUnitToDecoderOutput(duration: 0.004)
+        monitor.recordRenderCall(duration: 0.001)
+        monitor.recordRenderCall(duration: 0.003)
         for _ in 0..<240 { monitor.recordDecodedFrame() }
         monitor.recordPresentation(latency: 0.008, tileSkew: 0.0015, decodingOrderSpan: 3)
         monitor.recordGPU(duration: 0.0005)
@@ -70,9 +77,18 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
             32.001,
             accuracy: 0.001
         )
+        XCTAssertEqual(snapshot.receivedFramesPerSecond, 2, accuracy: 0.001)
         XCTAssertEqual(snapshot.decodedFramesPerSecond, 60, accuracy: 0.001)
         XCTAssertEqual(snapshot.presentedFramesPerSecond, 1, accuracy: 0.001)
         XCTAssertEqual(snapshot.averageDecodeMilliseconds, 3, accuracy: 0.001)
+        XCTAssertEqual(
+            snapshot.averageAccessUnitToDecoderOutputMilliseconds,
+            5,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(snapshot.accessUnitToDecoderOutputSampleCount, 2)
+        XCTAssertEqual(snapshot.averageRenderCallMilliseconds, 2, accuracy: 0.001)
+        XCTAssertEqual(snapshot.renderCallSampleCount, 2)
         XCTAssertEqual(snapshot.averagePresentationMilliseconds, 8, accuracy: 0.001)
         XCTAssertEqual(snapshot.averageGPUMilliseconds, 0.5, accuracy: 0.001)
         XCTAssertEqual(snapshot.displayedFramesPerSecond, 2, accuracy: 0.001)
