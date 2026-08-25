@@ -6,11 +6,23 @@ final class NWConnectionTransport: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.isharescreen.rfb-transport")
 
     init(endpoint: ConnectionEndpoint) {
-        connection = NWConnection(to: Self.networkEndpoint(for: endpoint), using: .tcp)
+        connection = NWConnection(
+            to: Self.networkEndpoint(for: endpoint),
+            using: Self.networkParameters()
+        )
     }
 
     init(remoteAddress: ResolvedRemoteAddress) {
-        connection = NWConnection(to: Self.networkEndpoint(for: remoteAddress), using: .tcp)
+        connection = NWConnection(
+            to: Self.networkEndpoint(for: remoteAddress),
+            using: Self.networkParameters()
+        )
+    }
+
+    static func networkParameters() -> NWParameters {
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.noDelay = true
+        return NWParameters(tls: nil, tcp: tcpOptions)
     }
 
     static func networkEndpoint(for endpoint: ConnectionEndpoint) -> NWEndpoint {

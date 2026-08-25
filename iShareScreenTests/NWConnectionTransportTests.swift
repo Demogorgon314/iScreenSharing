@@ -3,6 +3,16 @@ import XCTest
 @testable import iShareScreen
 
 final class NWConnectionTransportTests: XCTestCase {
+    func testEnablesTCPNoDelayWithoutChangingServiceClass() throws {
+        let parameters = NWConnectionTransport.networkParameters()
+        let tcpOptions = try XCTUnwrap(
+            parameters.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options
+        )
+
+        XCTAssertTrue(tcpOptions.noDelay)
+        XCTAssertEqual(parameters.serviceClass, .bestEffort)
+    }
+
     func testCreatesHostPortEndpoint() throws {
         let endpoint = try ConnectionEndpoint(host: "example.local", port: 5901)
 
