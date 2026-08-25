@@ -10,6 +10,11 @@ final class AppleVideoFrameStore: @unchecked Sendable {
         let pixelBuffer: CVPixelBuffer
         let decodingOrderNumber: UInt16?
         let rtpTimestamp: UInt32?
+        let accessUnitTiming: AppleHEVCAccessUnit.Timing?
+        let decodeEnteredAt: TimeInterval
+        let decoderSubmittedAt: TimeInterval
+        let decoderOutputAt: TimeInterval
+        let playbackHandledAt: TimeInterval
         let decodedAt: TimeInterval
         let presentationTime: TimeInterval
         let sequence: UInt64
@@ -60,6 +65,11 @@ final class AppleVideoFrameStore: @unchecked Sendable {
         at tileIndex: Int,
         decodingOrderNumber: UInt16? = nil,
         rtpTimestamp: UInt32? = nil,
+        accessUnitTiming: AppleHEVCAccessUnit.Timing? = nil,
+        decodeEnteredAt: TimeInterval? = nil,
+        decoderSubmittedAt: TimeInterval? = nil,
+        decoderOutputAt: TimeInterval? = nil,
+        playbackHandledAt: TimeInterval? = nil,
         decodedAt: TimeInterval = ProcessInfo.processInfo.systemUptime,
         presentationTime: TimeInterval? = nil
     ) {
@@ -75,6 +85,11 @@ final class AppleVideoFrameStore: @unchecked Sendable {
                 pixelBuffer: pixelBuffer,
                 decodingOrderNumber: decodingOrderNumber,
                 rtpTimestamp: rtpTimestamp,
+                accessUnitTiming: accessUnitTiming,
+                decodeEnteredAt: decodeEnteredAt ?? decoderSubmittedAt ?? decoderOutputAt ?? decodedAt,
+                decoderSubmittedAt: decoderSubmittedAt ?? decoderOutputAt ?? decodedAt,
+                decoderOutputAt: decoderOutputAt ?? decodedAt,
+                playbackHandledAt: playbackHandledAt ?? decodedAt,
                 decodedAt: decodedAt,
                 presentationTime: presentationTime ?? decodedAt,
                 sequence: nextSequence

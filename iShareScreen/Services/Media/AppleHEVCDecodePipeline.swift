@@ -11,7 +11,8 @@ protocol AppleHEVCDecodeSubmitting: AnyObject {
         decodingOrderNumber: UInt16?,
         isLongTermReferenceFrame: Bool,
         rtpTimestamp: UInt32,
-        presentationTime: TimeInterval
+        presentationTime: TimeInterval,
+        timing: AppleHEVCAccessUnit.Timing?
     ) throws -> Bool
 
     func close()
@@ -164,7 +165,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                     decodingOrderNumber: accessUnit.decodingOrderNumber,
                     isLongTermReferenceFrame: accessUnit.isLongTermReferenceFrame,
                     rtpTimestamp: accessUnit.timestamp,
-                    presentationTime: presentationTime
+                    presentationTime: presentationTime,
+                    timing: accessUnit.timing
                 )
             } catch let AppleHEVCDecoderError.decodeFailed(status) {
                 if status == kVTVideoDecoderReferenceMissingErr {

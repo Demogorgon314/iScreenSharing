@@ -2,6 +2,7 @@ import Combine
 import CoreVideo
 import Foundation
 import OSLog
+import QuartzCore
 
 final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     enum State: Equatable {
@@ -84,6 +85,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         mediaCanvas = video.canvas
         frames = AppleVideoFrameStore()
         performance = AppleVideoPerformanceMonitor(tileCount: video.canvas.tileCount)
+        performance.setSocketReceiveBufferBytes(
+            receiver.videoReceiveBufferConfiguration(
+                mediaStreamIndex: video.mediaStreamIndex
+            )?.actualBytes
+        )
         processor = try AppleHEVCStreamProcessor(keyBlob: video.serverKey)
         let environment = ProcessInfo.processInfo.environment
         rateControlMode = AppleVideoRateControlMode(
@@ -283,7 +289,9 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
         performance.recordNetwork(
             packetCount: 1,
-            byteCount: datagram.data.count
+            byteCount: datagram.data.count,
+            estimatedSocketBacklogBytes: datagram.estimatedSocketBacklogBytes,
+            receiveDrainDuration: processingTime - datagram.receiveBatchStartedAt
         )
         let accessUnit = processor.process(datagram)
         sendReceiverReportIfNeeded()
@@ -394,7 +402,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                         region: decodedFrame.region,
                         decodingOrderNumber: decodedFrame.decodingOrderNumber,
                         rtpTimestamp: decodedFrame.rtpTimestamp,
-                        presentationTime: decodedFrame.presentationTime
+                        presentationTime: decodedFrame.presentationTime,
+                        accessUnitTiming: decodedFrame.accessUnitTiming,
+                        decodeEnteredAt: decodedFrame.decodeEnteredAt,
+                        decoderSubmittedAt: decodedFrame.decoderSubmittedAt,
+                        decoderOutputAt: decodedFrame.decoderOutputAt
                     )
                 },
                 longTermReferenceHandler: { [weak self] decodingOrderNumber in
@@ -591,6 +603,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             guard let source,
                   let report = processor.receptionReport(for: source) else { return }
             lastReceiverReportTime = currentTime
+            performance.recordReceptionReport(
+                fractionLost: report.fractionLost,
+                cumulativePacketsLost: report.cumulativePacketsLost,
+                interarrivalJitterMilliseconds: Double(report.interarrivalJitter) / 24
+            )
             try feedback.sendReceiverReport(report: report)
         } catch {
             Self.logger.debug("Receiver report failed: \(error.localizedDescription, privacy: .public)")
@@ -628,9 +645,13 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         region: AppleHEVCDecoder.FrameRegion,
         decodingOrderNumber: UInt16?,
         rtpTimestamp: UInt32,
-        presentationTime: TimeInterval
+        presentationTime: TimeInterval,
+        accessUnitTiming: AppleHEVCAccessUnit.Timing?,
+        decodeEnteredAt: TimeInterval,
+        decoderSubmittedAt: TimeInterval,
+        decoderOutputAt: TimeInterval
     ) {
-        let decodedAt = ProcessInfo.processInfo.systemUptime
+        let playbackHandledAt = CACurrentMediaTime()
         let frameIndex: Int
         switch region {
         case let .tile(tileIndex):
@@ -643,12 +664,17 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             at: frameIndex,
             decodingOrderNumber: decodingOrderNumber,
             rtpTimestamp: rtpTimestamp,
-            decodedAt: decodedAt,
+            accessUnitTiming: accessUnitTiming,
+            decodeEnteredAt: decodeEnteredAt,
+            decoderSubmittedAt: decoderSubmittedAt,
+            decoderOutputAt: decoderOutputAt,
+            playbackHandledAt: playbackHandledAt,
+            decodedAt: playbackHandledAt,
             presentationTime: presentationTime
         )
         performance.recordDecodedFrame(rtpTimestamp: rtpTimestamp)
         countLock.withVideoStreamLock {
-            self.lastDecodedFrameTime = decodedAt
+            self.lastDecodedFrameTime = playbackHandledAt
         }
         let becameReady = countLock.withVideoStreamLock {
             frameCount += 1

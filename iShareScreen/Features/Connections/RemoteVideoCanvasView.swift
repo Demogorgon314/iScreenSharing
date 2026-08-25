@@ -609,11 +609,28 @@ final class RemoteVideoCanvasNSView: NSView {
 
     private func enqueueForPresentation(_ frames: AppleVideoFrameStore.FrameBatch) {
         guard !frames.isEmpty else { return }
+        let mainDeliveredAt = CACurrentMediaTime()
+        for frame in frames.values {
+            performance?.recordFrameDelivery(
+                frameKey: frame.sequence,
+                accessUnitTiming: frame.accessUnitTiming,
+                decodeEnteredAt: frame.decodeEnteredAt,
+                decoderSubmittedAt: frame.decoderSubmittedAt,
+                decoderOutputAt: frame.decoderOutputAt,
+                playbackHandledAt: frame.playbackHandledAt,
+                mainDeliveredAt: mainDeliveredAt,
+                presentationTime: frame.presentationTime
+            )
+        }
         if synchronizesPresentation {
             if let update = displayScheduler.enqueue(frames) {
                 applyAndPresent(update)
             }
         } else {
+            performance?.recordSchedulerSelection(
+                frameKeys: frames.values.map(\.sequence),
+                selectedAt: mainDeliveredAt
+            )
             apply(frames)
             schedulePresentation()
         }
@@ -661,18 +678,28 @@ final class RemoteVideoCanvasNSView: NSView {
             lead: displayLink.targetTimestamp - callbackTime,
             period: displayLink.targetTimestamp - displayLink.timestamp
         )
+        let period = displayLink.targetTimestamp - displayLink.timestamp
         let update = displayScheduler.displayLinkDidFire(
-            targetTimestamp: displayLink.targetTimestamp
+            targetTimestamp: displayLink.targetTimestamp,
+            period: period
         )
         applyAndPresent(update)
     }
 
-    private func applyAndPresent(
-        _ update: AppleVideoDisplayScheduler.DisplayUpdate
-    ) {
-        if !update.frames.isEmpty { apply(update.frames) }
+    private func applyAndPresent(_ update: AppleVideoDisplayScheduler.DisplayUpdate) {
+        if !update.frames.isEmpty {
+            performance?.recordSchedulerSelection(
+                frameKeys: update.frames.values.map(\.sequence),
+                selectedAt: CACurrentMediaTime()
+            )
+            apply(update.frames)
+        }
         guard update.requiresPresentation else { return }
-        let presented = (displayLayer as? AppleNV24MetalLayer)?.present() ?? true
+        let presented = (displayLayer as? AppleNV24MetalLayer)?.present(
+            targetTimestamp: update.targetTimestamp,
+            displayPeriod: update.displayPeriod,
+            isDisplayLinkTriggered: update.trigger == .displayLinkTick
+        ) ?? true
         if !presented { displayScheduler.presentationDidFail() }
     }
 
@@ -684,11 +711,6 @@ final class RemoteVideoCanvasNSView: NSView {
         guard let metalLayer = displayLayer as? AppleNV24MetalLayer else { return }
 
         metalLayer.synchronizesPresentation = synchronizesPresentation
-#if DEBUG
-        Self.diagnosticsLogger.notice(
-            "[DEBUG-TEAR-8A7C] mode vsync=\(self.synchronizesPresentation)"
-        )
-#endif
         guard synchronizesPresentation else {
             let pendingFrames = displayScheduler.takeLatestFrames()
             if !pendingFrames.isEmpty { apply(pendingFrames) }

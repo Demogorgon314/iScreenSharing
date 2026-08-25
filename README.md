@@ -157,6 +157,15 @@ The following environment variables are intended for local development:
   estimate (the default), force a 60.001 Mbps LAN report, or suppress RCTL
 - `ISHARESCREEN_QUALITY_DIAGNOSTICS=1`: enable additional quality logging
 - `ISHARESCREEN_FREEZE_DIAGNOSTICS=1`: enable decode/freeze recovery logging
+- `ISHARESCREEN_PIPELINE_DIAGNOSTICS=1`: correlate decoder output, playback and
+  main-queue delivery, display scheduling, drawable acquisition, Metal GPU
+  execution, display-link targets, and physical presentation; emits only
+  500 ms aggregate samples rather than per-frame logs. The persisted
+  **Detailed Video Metrics** toggle enables the same collection for the
+  on-screen Video Performance overlay without requiring this environment flag
+- `ISHARESCREEN_VIDEO_RCVBUF_BYTES=<bytes>`: in Debug builds only, override the
+  video UDP receive buffer for controlled A/B testing; unset it to retain the
+  native-aligned system default
 
 Keep diagnostics disabled in normal builds unless investigating a specific
 problem; per-packet logging can materially change media timing.

@@ -52,6 +52,8 @@ struct ScreenSharingCommands: Commands {
             Divider()
             Toggle("Video Performance", isOn: videoPerformanceBinding)
                 .disabled(activeSession == nil)
+            Toggle("Detailed Video Metrics", isOn: detailedVideoMetricsBinding)
+                .disabled(activeSession?.showsVideoPerformanceOverlay != true)
             Toggle("Metal Performance HUD", isOn: metalPerformanceHUDBinding)
                 .disabled(activeSession == nil)
             Divider()
@@ -234,6 +236,13 @@ struct ScreenSharingCommands: Commands {
         Binding(
             get: { sessionCommands.active?.showsVideoPerformanceOverlay ?? false },
             set: { sessionCommands.active?.setShowsVideoPerformanceOverlay($0) }
+        )
+    }
+
+    private var detailedVideoMetricsBinding: Binding<Bool> {
+        Binding(
+            get: { sessionCommands.active?.showsDetailedVideoMetrics ?? false },
+            set: { sessionCommands.active?.setShowsDetailedVideoMetrics($0) }
         )
     }
 

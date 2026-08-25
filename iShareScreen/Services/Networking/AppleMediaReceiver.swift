@@ -1,16 +1,45 @@
 import Darwin
 import Foundation
+import QuartzCore
 
 struct AppleReceivedVideoDatagram: Equatable, Sendable {
     let data: Data
     let arrivalTime: TimeInterval
+    let receiveBatchStartedAt: TimeInterval
+    let estimatedSocketBacklogBytes: Int
+
+    init(
+        data: Data,
+        arrivalTime: TimeInterval,
+        receiveBatchStartedAt: TimeInterval? = nil,
+        estimatedSocketBacklogBytes: Int = 0
+    ) {
+        self.data = data
+        self.arrivalTime = arrivalTime
+        self.receiveBatchStartedAt = receiveBatchStartedAt ?? arrivalTime
+        self.estimatedSocketBacklogBytes = max(0, estimatedSocketBacklogBytes)
+    }
 }
 
 typealias AppleVideoDatagramHandler = @Sendable (AppleReceivedVideoDatagram) -> Void
 
+struct AppleMediaReceiveBufferConfiguration: Equatable, Sendable {
+    let requestedBytes: Int?
+    let actualBytes: Int?
+}
+
 final class AppleMediaReceiver: @unchecked Sendable {
     private static let maximumQueuedControlPackets = 16_384
     private static let maximumDatagramLength = 65_535
+    private static let controlReceiveBufferBytes = 4 * 1_024 * 1_024
+    static let requestedVideoReceiveBufferBytes: Int? = requestedVideoReceiveBufferBytes(
+        environment: ProcessInfo.processInfo.environment
+    )
+
+    private struct PreparedSocket {
+        let descriptor: Int32
+        let receiveBuffer: AppleMediaReceiveBufferConfiguration
+    }
 
     private let lock = NSLock()
     private let queue: DispatchQueue
@@ -18,6 +47,8 @@ final class AppleMediaReceiver: @unchecked Sendable {
     private let controlSocket: Int32
     private let videoSocket: Int32
     private let secondaryVideoSocket: Int32?
+    private let videoReceiveBuffer: AppleMediaReceiveBufferConfiguration
+    private let secondaryVideoReceiveBuffer: AppleMediaReceiveBufferConfiguration?
     private let controlSource: DispatchSourceRead
     private var videoSource: DispatchSourceRead?
     private var secondaryVideoSource: DispatchSourceRead?
@@ -34,28 +65,35 @@ final class AppleMediaReceiver: @unchecked Sendable {
             throw AppleMediaReceiverError.invalidPort
         }
         self.remoteAddress = remoteAddress
-        controlSocket = try Self.makeSocket(
+        let preparedControlSocket = try Self.makeSocket(
             localPort: remoteAddress.port,
             remoteAddress: remoteAddress,
-            remotePort: remoteAddress.port
+            remotePort: remoteAddress.port,
+            requestedReceiveBufferBytes: Self.controlReceiveBufferBytes
         )
+        controlSocket = preparedControlSocket.descriptor
+        let preparedVideoSocket: PreparedSocket
         do {
-            videoSocket = try Self.makeSocket(
+            preparedVideoSocket = try Self.makeSocket(
                 localPort: remoteAddress.port + 1,
                 remoteAddress: remoteAddress,
-                remotePort: remoteAddress.port + 1
+                remotePort: remoteAddress.port + 1,
+                requestedReceiveBufferBytes: Self.requestedVideoReceiveBufferBytes
             )
         } catch {
             Darwin.close(controlSocket)
             throw error
         }
-        let preparedSecondaryVideoSocket: Int32?
+        videoSocket = preparedVideoSocket.descriptor
+        videoReceiveBuffer = preparedVideoSocket.receiveBuffer
+        let preparedSecondaryVideoSocket: PreparedSocket?
         if displayCount > 1 {
             do {
                 preparedSecondaryVideoSocket = try Self.makeSocket(
                     localPort: remoteAddress.port + 2,
                     remoteAddress: remoteAddress,
-                    remotePort: remoteAddress.port + 2
+                    remotePort: remoteAddress.port + 2,
+                    requestedReceiveBufferBytes: Self.requestedVideoReceiveBufferBytes
                 )
             } catch {
                 Darwin.close(videoSocket)
@@ -65,7 +103,8 @@ final class AppleMediaReceiver: @unchecked Sendable {
         } else {
             preparedSecondaryVideoSocket = nil
         }
-        secondaryVideoSocket = preparedSecondaryVideoSocket
+        secondaryVideoSocket = preparedSecondaryVideoSocket?.descriptor
+        secondaryVideoReceiveBuffer = preparedSecondaryVideoSocket?.receiveBuffer
 
         let receiverQueue = DispatchQueue(label: "com.isharescreen.media-receiver")
         queue = receiverQueue
@@ -102,6 +141,7 @@ final class AppleMediaReceiver: @unchecked Sendable {
                     guard let self else { return }
                     self.receiveAvailableVideoPackets(
                         socket: self.videoSocket,
+                        estimatedSocketBacklogBytes: Int(self.videoSource?.data ?? 0),
                         handler: handler
                     )
                 }
@@ -116,8 +156,10 @@ final class AppleMediaReceiver: @unchecked Sendable {
                     queue: deliveryQueue
                 )
                 source.setEventHandler { [weak self] in
-                    self?.receiveAvailableVideoPackets(
+                    guard let self else { return }
+                    self.receiveAvailableVideoPackets(
                         socket: secondaryVideoSocket,
+                        estimatedSocketBacklogBytes: Int(self.secondaryVideoSource?.data ?? 0),
                         handler: handler
                     )
                 }
@@ -139,6 +181,19 @@ final class AppleMediaReceiver: @unchecked Sendable {
             mediaStreamIndex == 0 ? videoSource : secondaryVideoSource
         }
         source?.cancel()
+    }
+
+    func videoReceiveBufferConfiguration(
+        mediaStreamIndex: Int
+    ) -> AppleMediaReceiveBufferConfiguration? {
+        switch mediaStreamIndex {
+        case 0:
+            videoReceiveBuffer
+        case 1:
+            secondaryVideoReceiveBuffer
+        default:
+            nil
+        }
     }
 
     func drainControlPackets() -> [Data] {
@@ -249,16 +304,20 @@ final class AppleMediaReceiver: @unchecked Sendable {
 
     private func receiveAvailableVideoPackets(
         socket: Int32,
+        estimatedSocketBacklogBytes: Int,
         handler: AppleVideoDatagramHandler
     ) {
+        let receiveBatchStartedAt = CACurrentMediaTime()
         var buffer = [UInt8](repeating: 0, count: Self.maximumDatagramLength)
         while true {
-            let arrivalTime = ProcessInfo.processInfo.systemUptime
+            let arrivalTime = CACurrentMediaTime()
             let count = Darwin.recv(socket, &buffer, buffer.count, MSG_DONTWAIT)
             guard count > 0 else { return }
             let datagram = AppleReceivedVideoDatagram(
                 data: Data(buffer.prefix(count)),
-                arrivalTime: arrivalTime
+                arrivalTime: arrivalTime,
+                receiveBatchStartedAt: receiveBatchStartedAt,
+                estimatedSocketBacklogBytes: estimatedSocketBacklogBytes
             )
             handler(datagram)
         }
@@ -267,8 +326,9 @@ final class AppleMediaReceiver: @unchecked Sendable {
     private static func makeSocket(
         localPort: UInt16,
         remoteAddress: ResolvedRemoteAddress,
-        remotePort: UInt16
-    ) throws -> Int32 {
+        remotePort: UInt16,
+        requestedReceiveBufferBytes: Int?
+    ) throws -> PreparedSocket {
         let descriptor = Darwin.socket(Int32(remoteAddress.family), SOCK_DGRAM, IPPROTO_UDP)
         guard descriptor >= 0 else { throw AppleMediaReceiverError.socketCreationFailed(errno) }
         do {
@@ -276,22 +336,60 @@ final class AppleMediaReceiver: @unchecked Sendable {
             guard setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled))) == 0 else {
                 throw AppleMediaReceiverError.socketConfigurationFailed(errno)
             }
-            var receiveBuffer = Int32(4 * 1_024 * 1_024)
-            _ = setsockopt(
-                descriptor,
-                SOL_SOCKET,
-                SO_RCVBUF,
-                &receiveBuffer,
-                socklen_t(MemoryLayout.size(ofValue: receiveBuffer))
-            )
+            if let requestedReceiveBufferBytes {
+                var receiveBuffer = Int32(clamping: requestedReceiveBufferBytes)
+                _ = setsockopt(
+                    descriptor,
+                    SOL_SOCKET,
+                    SO_RCVBUF,
+                    &receiveBuffer,
+                    socklen_t(MemoryLayout.size(ofValue: receiveBuffer))
+                )
+            }
             try bind(descriptor, family: remoteAddress.family, localPort: localPort)
 
             try connect(descriptor, remoteAddress: remoteAddress, remotePort: remotePort)
-            return descriptor
+            return PreparedSocket(
+                descriptor: descriptor,
+                receiveBuffer: AppleMediaReceiveBufferConfiguration(
+                    requestedBytes: requestedReceiveBufferBytes,
+                    actualBytes: receiveBufferSize(of: descriptor)
+                )
+            )
         } catch {
             Darwin.close(descriptor)
             throw error
         }
+    }
+
+    static func receiveBufferSize(of descriptor: Int32) -> Int? {
+        var receiveBuffer: Int32 = 0
+        var length = socklen_t(MemoryLayout.size(ofValue: receiveBuffer))
+        let result = getsockopt(
+            descriptor,
+            SOL_SOCKET,
+            SO_RCVBUF,
+            &receiveBuffer,
+            &length
+        )
+        guard result == 0, length == MemoryLayout.size(ofValue: receiveBuffer) else {
+            return nil
+        }
+        return max(0, Int(receiveBuffer))
+    }
+
+    static func requestedVideoReceiveBufferBytes(
+        environment: [String: String]
+    ) -> Int? {
+#if DEBUG
+        guard let rawValue = environment["ISHARESCREEN_VIDEO_RCVBUF_BYTES"],
+              let byteCount = Int(rawValue),
+              byteCount > 0,
+              byteCount <= Int(Int32.max) else { return nil }
+        return byteCount
+#else
+        nil
+#endif
     }
 
     private static func connect(

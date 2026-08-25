@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 
 struct AppleHEVCParameterSets: Equatable, Sendable {
     var video = Data()
@@ -9,24 +10,34 @@ struct AppleHEVCParameterSets: Equatable, Sendable {
 }
 
 struct AppleHEVCAccessUnit: Equatable, Sendable {
+    struct Timing: Equatable, Sendable {
+        let traceSequence: UInt64
+        let firstDatagramObservedAt: TimeInterval
+        let completingDatagramObservedAt: TimeInterval
+        let assemblyCompletedAt: TimeInterval
+    }
+
     let synchronizationSource: UInt32
     let timestamp: UInt32
     let decodingOrderNumber: UInt16?
     let nalUnits: [Data]
     let isLongTermReferenceFrame: Bool
+    let timing: Timing?
 
     init(
         synchronizationSource: UInt32,
         timestamp: UInt32,
         decodingOrderNumber: UInt16?,
         nalUnits: [Data],
-        isLongTermReferenceFrame: Bool = false
+        isLongTermReferenceFrame: Bool = false,
+        timing: Timing? = nil
     ) {
         self.synchronizationSource = synchronizationSource
         self.timestamp = timestamp
         self.decodingOrderNumber = decodingOrderNumber
         self.nalUnits = nalUnits
         self.isLongTermReferenceFrame = isLongTermReferenceFrame
+        self.timing = timing
     }
 
     var encodedByteCount: Int { nalUnits.reduce(0) { $0 + $1.count } }
@@ -86,6 +97,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
 
     private let lock = NSLock()
     private let decryptor: AppleSRTPDecryptor
+    private let clock: @Sendable () -> TimeInterval
     private var groups = [GroupKey: PendingAccessUnit]()
     private var sourcePacketCounts = [UInt32: Int]()
     private var sequenceTracker = AppleRTPSequenceTracker()
@@ -93,10 +105,15 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
     private var bandwidthProbeGate = AppleVideoBandwidthProbeGate()
     private var playoutTimestamp: UInt32?
     private var cachedFrameLosses = [UInt32: CachedFrameLoss]()
+    private var nextAccessUnitTraceSequence: UInt64 = 0
     private(set) var parameterSets = AppleHEVCParameterSets()
 
-    init(keyBlob: Data) throws {
+    init(
+        keyBlob: Data,
+        clock: @escaping @Sendable () -> TimeInterval = { CACurrentMediaTime() }
+    ) throws {
         decryptor = try AppleSRTPDecryptor(keyBlob: keyBlob)
+        self.clock = clock
     }
 
     func process(_ datagrams: [AppleReceivedVideoDatagram]) -> [AppleHEVCAccessUnit] {
@@ -127,7 +144,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
 
     func process(
         _ packet: AppleRTPPacket,
-        arrivalTime: TimeInterval = ProcessInfo.processInfo.systemUptime
+        arrivalTime: TimeInterval = CACurrentMediaTime()
     ) -> AppleHEVCAccessUnit? {
         lock.withStreamLock {
             processUnlocked(
@@ -215,12 +232,19 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         groups.removeValue(forKey: key)
         cacheFrameLossIfNeeded(for: key, group: group)
         harvest(units)
+        nextAccessUnitTraceSequence &+= 1
         return AppleHEVCAccessUnit(
             synchronizationSource: key.source,
             timestamp: key.timestamp,
             decodingOrderNumber: group.decodingOrderNumber,
             nalUnits: units,
-            isLongTermReferenceFrame: group.isLongTermReferenceFrame
+            isLongTermReferenceFrame: group.isLongTermReferenceFrame,
+            timing: AppleHEVCAccessUnit.Timing(
+                traceSequence: nextAccessUnitTraceSequence,
+                firstDatagramObservedAt: group.firstSeenAt ?? arrivalTime,
+                completingDatagramObservedAt: arrivalTime,
+                assemblyCompletedAt: clock()
+            )
         )
     }
 
@@ -477,7 +501,7 @@ struct AppleRTPSequenceTracker: Sendable {
 
     mutating func observe(
         _ packet: AppleRTPPacket,
-        arrivalTime: TimeInterval = ProcessInfo.processInfo.systemUptime
+        arrivalTime: TimeInterval = CACurrentMediaTime()
     ) {
         let source = packet.synchronizationSource
         let sequence = packet.sequenceNumber

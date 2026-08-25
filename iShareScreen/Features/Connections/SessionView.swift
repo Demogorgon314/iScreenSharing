@@ -30,6 +30,7 @@ struct SessionView: View {
                     displayScale: commandState.displayScale,
                     synchronizesPresentation: commandState.synchronizesVideoPresentation,
                     showsPerformanceOverlay: commandState.showsVideoPerformanceOverlay,
+                    showsDetailedVideoMetrics: commandState.showsDetailedVideoMetrics,
                     showsMetalPerformanceHUD: commandState.showsMetalPerformanceHUD,
                     sourceRect: usesIndependentVideoStreams ? nil : displayLayout.sourceRect(for: displayIndex),
                     inputMapping: displayLayout.inputMapping(
@@ -294,6 +295,7 @@ private struct ActiveVideoSessionView: View {
     let displayScale: AppleVideoDisplayScale
     let synchronizesPresentation: Bool
     let showsPerformanceOverlay: Bool
+    let showsDetailedVideoMetrics: Bool
     let showsMetalPerformanceHUD: Bool
     let sourceRect: CGRect?
     let inputMapping: AppleDisplayInputMapping?
@@ -322,7 +324,10 @@ private struct ActiveVideoSessionView: View {
                 onWindowKeyChange: onWindowKeyChange
             )
             if showsPerformanceOverlay {
-                AppleVideoPerformanceOverlay(performance: stream.performance)
+                AppleVideoPerformanceOverlay(
+                    performance: stream.performance,
+                    showsDetailedMetrics: showsDetailedVideoMetrics
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(12)
                     .allowsHitTesting(false)
@@ -347,6 +352,15 @@ private struct ActiveVideoSessionView: View {
                     .onChange(of: geometry.size) { _, size in onViewportChange(size) }
             }
         }
+        .onAppear { updateDetailedMetricsCollection() }
+        .onChange(of: showsPerformanceOverlay) { _, _ in updateDetailedMetricsCollection() }
+        .onChange(of: showsDetailedVideoMetrics) { _, _ in updateDetailedMetricsCollection() }
+    }
+
+    private func updateDetailedMetricsCollection() {
+        stream.performance.setPipelineDiagnosticsEnabled(
+            showsPerformanceOverlay && showsDetailedVideoMetrics
+        )
     }
 
     private var shouldShowStatusOverlay: Bool {
@@ -372,15 +386,31 @@ private struct ActiveVideoSessionView: View {
 
 private struct AppleVideoPerformanceOverlay: View {
     @ObservedObject var performance: AppleVideoPerformanceMonitor
+    let showsDetailedMetrics: Bool
 
     var body: some View {
         let stats = performance.snapshot
+        let latency = stats.pipelineLatency
         VStack(alignment: .leading, spacing: 3) {
             Text(String(
                 format: "Network  %.1f Mb/s  %.0f pkt/s",
                 stats.networkMegabitsPerSecond,
                 stats.networkPacketsPerSecond
             ))
+            if showsDetailedMetrics {
+                Text(String(
+                    format: "Socket   %.0f KB  queue %.0f KB/%.2f ms",
+                    Double(stats.socketReceiveBufferBytes) / 1_024,
+                    Double(stats.maximumSocketBacklogBytes) / 1_024,
+                    stats.maximumReceiveDrainMilliseconds
+                ))
+                Text(String(
+                    format: "RR       %.2f%% loss  %d total  %.2f ms jitter",
+                    stats.receiverReportLossPercentage,
+                    stats.cumulativePacketsLost,
+                    stats.interarrivalJitterMilliseconds
+                ))
+            }
             Text(String(
                 format: "Stream   %.1f AU/s  %.2f KB/AU",
                 stats.accessUnitsPerSecond,
@@ -441,6 +471,81 @@ private struct AppleVideoPerformanceOverlay: View {
                 stats.keyFrameRequestCount,
                 stats.rendererBusyCount
             ))
+            if showsDetailedMetrics {
+                Text(String(
+                    format: "AU       span %.2f  asm %.2f  queue %.2f ms",
+                    latency.datagramSpanMilliseconds.p95,
+                    latency.completingDatagramToAssemblyMilliseconds.p95,
+                    latency.assemblyToDecodeEntryMilliseconds.p95
+                ))
+                Text(String(
+                    format: "Decode   prep %.2f  decoder %.2f ms",
+                    latency.decodeEntryToSubmitMilliseconds.p95,
+                    latency.decoderSubmitToCallbackMilliseconds.p95
+                ))
+                Text(String(
+                    format: "CB→PB    %.2f/%.2f/%.2f ms",
+                    latency.decoderCallbackToPlaybackMilliseconds.p50,
+                    latency.decoderCallbackToPlaybackMilliseconds.p95,
+                    latency.decoderCallbackToPlaybackMilliseconds.maximum
+                ))
+                Text(String(
+                    format: "PB→Main  %.2f/%.2f/%.2f ms",
+                    latency.playbackToMainMilliseconds.p50,
+                    latency.playbackToMainMilliseconds.p95,
+                    latency.playbackToMainMilliseconds.maximum
+                ))
+                Text(String(
+                    format: "Schedule %.2f/%.2f + %.2f/%.2f ms",
+                    latency.mainToSchedulerMilliseconds.p50,
+                    latency.mainToSchedulerMilliseconds.p95,
+                    latency.schedulerToDrawableMilliseconds.p50,
+                    latency.schedulerToDrawableMilliseconds.p95
+                ))
+                Text(String(
+                    format: "Drawable %.2f/%.2f  Encode %.2f/%.2f ms",
+                    latency.drawableWaitMilliseconds.p50,
+                    latency.drawableWaitMilliseconds.p95,
+                    latency.encodeMilliseconds.p50,
+                    latency.encodeMilliseconds.p95
+                ))
+                Text(String(
+                    format: "Metal    T %.2f  S %.2f  Q %.2f  GPU %.2f ms",
+                    latency.encodeEndToCommitMilliseconds.p95,
+                    latency.commitToScheduledCallbackMilliseconds.p95,
+                    latency.gpuQueueWaitMilliseconds.p95,
+                    latency.gpuExecutionMilliseconds.p95
+                ))
+                Text(String(
+                    format: "Display  Scan %.2f  Commit %.2f ms",
+                    latency.gpuEndToDisplayMilliseconds.p95,
+                    latency.commitToDisplayMilliseconds.p95
+                ))
+                Text(String(
+                    format: "Target   C %+.2f  G %+.2f  D %+.2f ms",
+                    latency.commitLeadToTargetMilliseconds.p50,
+                    latency.gpuEndLeadToTargetMilliseconds.p50,
+                    latency.targetToDisplayMilliseconds.p50
+                ))
+                Text(String(
+                    format: "Phase    %.2f periods  miss %d",
+                    latency.targetPhasePeriods.p50,
+                    latency.displayLinkMissCount
+                ))
+                Text(String(
+                    format: "Socket→D %.2f/%.2f ms  Submit→D %.2f/%.2f ms",
+                    latency.firstDatagramToDisplayMilliseconds.p50,
+                    latency.firstDatagramToDisplayMilliseconds.p95,
+                    latency.decoderSubmitToDisplayMilliseconds.p50,
+                    latency.decoderSubmitToDisplayMilliseconds.p95
+                ))
+                Text(String(
+                    format: "Batches  L/I %d/%d  E %d",
+                    latency.displayLinkBatchCount,
+                    latency.immediateBatchCount,
+                    latency.traceEvictionCount
+                ))
+            }
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))
         .foregroundStyle(.white)

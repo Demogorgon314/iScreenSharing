@@ -105,6 +105,28 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(unit.nalUnits.count, 2)
     }
 
+    func testCarriesLocalAccessUnitTimingWithoutUsingWireIdentifiersAsTraceKeys() throws {
+        let processor = try AppleHEVCStreamProcessor(
+            keyBlob: Data(repeating: 0, count: 46),
+            clock: { 2 }
+        )
+        let payload = Data([0x42, 0x01, 0, 1, 0xaa])
+
+        XCTAssertNil(processor.process(
+            packet(sequence: 10, marker: false, payload: payload),
+            arrivalTime: 1
+        ))
+        let unit = try XCTUnwrap(processor.process(
+            packet(sequence: 11, marker: true, payload: payload),
+            arrivalTime: 1.5
+        ))
+
+        XCTAssertEqual(unit.timing?.traceSequence, 1)
+        XCTAssertEqual(unit.timing?.firstDatagramObservedAt, 1)
+        XCTAssertEqual(unit.timing?.completingDatagramObservedAt, 1.5)
+        XCTAssertEqual(unit.timing?.assemblyCompletedAt, 2)
+    }
+
     func testDropsIncompleteAccessUnitInsteadOfFeedingCorruptTile() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         let payload = Data([0x42, 0x01, 0, 1, 0xaa])

@@ -206,22 +206,49 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     @discardableResult
-    func present() -> Bool {
+    func present(
+        targetTimestamp: TimeInterval? = nil,
+        displayPeriod: TimeInterval? = nil,
+        isDisplayLinkTriggered: Bool = false
+    ) -> Bool {
         guard inFlightGate.begin() else {
             performance?.recordRendererBusy()
             return false
         }
         guard !latestFrames.isEmpty,
-              let commandBuffer = context.commandQueue.makeCommandBuffer(),
-              let drawable = nextDrawable(),
-              encode(into: commandBuffer, drawable: drawable) else {
+              let commandBuffer = context.commandQueue.makeCommandBuffer() else {
             inFlightGate.end()
             return false
         }
+        let drawableWaitStartedAt = CACurrentMediaTime()
+        guard let drawable = nextDrawable() else {
+            inFlightGate.end()
+            return false
+        }
+        let drawableAcquiredAt = CACurrentMediaTime()
+        let encodeStartedAt = drawableAcquiredAt
+        guard encode(into: commandBuffer, drawable: drawable) else {
+            inFlightGate.end()
+            return false
+        }
+        let encodeEndedAt = CACurrentMediaTime()
+        let changedFrames = changedFrames()
+        let batchID = performance?.beginRenderBatch(
+            frameKeys: changedFrames.map(\.sequence),
+            drawableWaitStartedAt: drawableWaitStartedAt,
+            drawableAcquiredAt: drawableAcquiredAt,
+            encodeStartedAt: encodeStartedAt,
+            encodeEndedAt: encodeEndedAt,
+            targetTimestamp: targetTimestamp,
+            displayPeriod: displayPeriod,
+            isDisplayLinkTriggered: isDisplayLinkTriggered
+        )
         commit(
             commandBuffer,
             presenting: drawable,
-            submittedAt: ProcessInfo.processInfo.systemUptime
+            changedFrames: changedFrames,
+            submittedAt: encodeEndedAt,
+            batchID: batchID
         )
         return true
     }
@@ -229,9 +256,11 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private func commit(
         _ commandBuffer: MTLCommandBuffer,
         presenting drawable: CAMetalDrawable,
-        submittedAt: TimeInterval
+        changedFrames: [AppleVideoFrameStore.Frame],
+        submittedAt: TimeInterval,
+        batchID: UInt64?
     ) {
-        recordPresentation(submittedAt: submittedAt)
+        recordPresentation(changedFrames, submittedAt: submittedAt)
         let presentationSubmittedAt = CACurrentMediaTime()
         let performance = performance
         let logger = Self.logger
@@ -241,21 +270,42 @@ final class AppleNV24MetalLayer: CAMetalLayer {
                 duration: drawable.presentedTime - presentationSubmittedAt,
                 presentedAt: drawable.presentedTime
             )
+            if let batchID {
+                performance?.recordRenderBatchPresented(batchID, at: drawable.presentedTime)
+            }
         }
         commandBuffer.present(drawable)
+        if let batchID {
+            commandBuffer.addScheduledHandler { _ in
+                performance?.recordRenderBatchScheduled(batchID, at: CACurrentMediaTime())
+            }
+        }
         let inFlightGate = inFlightGate
         commandBuffer.addCompletedHandler { commandBuffer in
             defer { inFlightGate.end() }
             performance?.recordGPU(
-                duration: ProcessInfo.processInfo.systemUptime - submittedAt
+                duration: CACurrentMediaTime() - submittedAt
             )
+            if let batchID {
+                let hasValidGPUTimestamps = commandBuffer.gpuStartTime > 0
+                    && commandBuffer.gpuEndTime >= commandBuffer.gpuStartTime
+                performance?.recordRenderBatchCompleted(
+                    batchID,
+                    gpuStart: hasValidGPUTimestamps ? commandBuffer.gpuStartTime : nil,
+                    gpuEnd: hasValidGPUTimestamps ? commandBuffer.gpuEndTime : nil
+                )
+            }
             if commandBuffer.status == .error {
                 logger.error(
                     "Metal frame batch failed: \(commandBuffer.error?.localizedDescription ?? "Unknown error", privacy: .public)"
                 )
             }
         }
+        let commitAt = CACurrentMediaTime()
         commandBuffer.commit()
+        if let batchID {
+            performance?.recordRenderBatchCommitted(batchID, at: commitAt)
+        }
     }
 
     private func configurePresentation() {
@@ -311,10 +361,16 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
-    private func recordPresentation(submittedAt: TimeInterval) {
-        let changedFrames = latestFrames.filter {
+    private func changedFrames() -> [AppleVideoFrameStore.Frame] {
+        latestFrames.filter {
             lastPresentedSequences[$0.key] != $0.value.sequence
         }.map(\.value)
+    }
+
+    private func recordPresentation(
+        _ changedFrames: [AppleVideoFrameStore.Frame],
+        submittedAt: TimeInterval
+    ) {
         guard !changedFrames.isEmpty else { return }
 
         let averageDecodedAt = changedFrames.map(\.decodedAt).reduce(0, +) / Double(changedFrames.count)

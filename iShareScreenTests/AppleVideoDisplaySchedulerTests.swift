@@ -22,7 +22,7 @@ final class AppleVideoDisplaySchedulerTests: XCTestCase {
 
     func testEligibleFrameProcessesImmediatelyAfterDisplayTargetIsKnown() throws {
         var scheduler = AppleVideoDisplayScheduler()
-        let emptyTick = scheduler.displayLinkDidFire(targetTimestamp: 10)
+        let emptyTick = scheduler.displayLinkDidFire(targetTimestamp: 10, period: 0.008)
 
         let update = try XCTUnwrap(scheduler.enqueue([
             0: try makeFrame(sequence: 1, presentationTime: 9),
@@ -32,6 +32,10 @@ final class AppleVideoDisplaySchedulerTests: XCTestCase {
         XCTAssertFalse(emptyTick.requiresPresentation)
         XCTAssertEqual(update.frames[0]?.sequence, 1)
         XCTAssertTrue(update.requiresPresentation)
+        XCTAssertEqual(update.targetTimestamp, 10)
+        XCTAssertEqual(update.displayPeriod, 0.008)
+        XCTAssertEqual(update.trigger, .enqueueUsingPreviousTarget)
+        XCTAssertEqual(emptyTick.trigger, .displayLinkTick)
         XCTAssertEqual(scheduler.queuedFrameCount, 0)
     }
 
@@ -183,6 +187,11 @@ final class AppleVideoDisplaySchedulerTests: XCTestCase {
             pixelBuffer: try XCTUnwrap(pixelBuffer),
             decodingOrderNumber: UInt16(truncatingIfNeeded: sequence),
             rtpTimestamp: UInt32(truncatingIfNeeded: sequence),
+            accessUnitTiming: nil,
+            decodeEnteredAt: presentationTime,
+            decoderSubmittedAt: presentationTime,
+            decoderOutputAt: presentationTime,
+            playbackHandledAt: presentationTime,
             decodedAt: presentationTime,
             presentationTime: presentationTime,
             sequence: sequence

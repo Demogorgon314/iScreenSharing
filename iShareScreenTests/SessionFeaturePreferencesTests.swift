@@ -27,6 +27,7 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         XCTAssertNil(preferences.fixedDisplayScale)
         XCTAssertTrue(preferences.synchronizesVideoPresentation)
         XCTAssertFalse(preferences.showsVideoPerformanceOverlay)
+        XCTAssertFalse(preferences.showsDetailedVideoMetrics)
         XCTAssertFalse(preferences.showsMetalPerformanceHUD)
     }
 
@@ -38,6 +39,7 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         preferences.setFixedDisplayScale(1.25)
         preferences.setSynchronizesVideoPresentation(false)
         preferences.setShowsVideoPerformanceOverlay(true)
+        preferences.setShowsDetailedVideoMetrics(true)
         preferences.setShowsMetalPerformanceHUD(true)
 
         let restored = SessionFeaturePreferences(defaults: defaults)
@@ -48,6 +50,7 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         XCTAssertEqual(restored.fixedDisplayScale, 1.25)
         XCTAssertFalse(restored.synchronizesVideoPresentation)
         XCTAssertTrue(restored.showsVideoPerformanceOverlay)
+        XCTAssertTrue(restored.showsDetailedVideoMetrics)
         XCTAssertTrue(restored.showsMetalPerformanceHUD)
     }
 

@@ -6,6 +6,12 @@ struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
     var decoderBackend: AppleHEVCDecoder.Backend? = nil
     var networkMegabitsPerSecond = 0.0
     var networkPacketsPerSecond = 0.0
+    var socketReceiveBufferBytes = 0
+    var maximumSocketBacklogBytes = 0
+    var maximumReceiveDrainMilliseconds = 0.0
+    var receiverReportLossPercentage = 0.0
+    var cumulativePacketsLost: Int32 = 0
+    var interarrivalJitterMilliseconds = 0.0
     var accessUnitsPerSecond = 0.0
     var averageAccessUnitKilobytes = 0.0
     var intraRefreshesPerSecond = 0.0
@@ -29,6 +35,7 @@ struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
     var nackCount = 0
     var keyFrameRequestCount = 0
     var rendererBusyCount = 0
+    var pipelineLatency = AppleVideoPipelineLatencySnapshot.zero
 
     static let zero = AppleVideoPerformanceSnapshot()
 }
@@ -42,6 +49,8 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
     private struct Accumulator {
         var networkPackets = 0
         var networkBytes = 0
+        var maximumSocketBacklogBytes = 0
+        var maximumReceiveDrainDuration = 0.0
         var accessUnits = 0
         var accessUnitBytes = 0
         var intraRefreshes = 0
@@ -75,6 +84,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
     private let tileCount: Int
     private let clock: @Sendable () -> TimeInterval
     private let diagnosticsEnabled: Bool
+    private let pipelineDiagnosticsForced: Bool
     private let lock = NSLock()
     private let timer: DispatchSourceTimer?
     private var accumulator = Accumulator()
@@ -83,6 +93,12 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
     private var lastDisplayedTime: TimeInterval?
     private var recentDisplayFrameTimes = [TimeInterval]()
     private var decoderBackend: AppleHEVCDecoder.Backend?
+    private var pipelineTrace = AppleVideoPipelineTrace()
+    private var pipelineDiagnosticsRequested = false
+    private var socketReceiveBufferBytes = 0
+    private var receiverReportLossPercentage = 0.0
+    private var cumulativePacketsLost: Int32 = 0
+    private var interarrivalJitterMilliseconds = 0.0
 
     private static let displayFrameHistoryLimit = 120
 
@@ -92,12 +108,16 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         automaticallyPublishes: Bool = true,
         diagnosticsEnabled: Bool = ProcessInfo.processInfo.environment[
             "ISHARESCREEN_FREEZE_DIAGNOSTICS"
+        ] == "1",
+        pipelineDiagnosticsEnabled: Bool = ProcessInfo.processInfo.environment[
+            "ISHARESCREEN_PIPELINE_DIAGNOSTICS"
         ] == "1"
     ) {
         precondition(tileCount > 0)
         self.tileCount = tileCount
         self.clock = clock
         self.diagnosticsEnabled = diagnosticsEnabled
+        pipelineDiagnosticsForced = pipelineDiagnosticsEnabled
         lastSampleTime = clock()
         if automaticallyPublishes {
             let timer = DispatchSource.makeTimerSource(
@@ -116,10 +136,51 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         timer?.cancel()
     }
 
-    func recordNetwork(packetCount: Int, byteCount: Int) {
+    func setPipelineDiagnosticsEnabled(_ enabled: Bool) {
+        lock.withPerformanceLock {
+            let wasEnabled = pipelineDiagnosticsAreEnabled
+            pipelineDiagnosticsRequested = enabled
+            if wasEnabled != pipelineDiagnosticsAreEnabled {
+                pipelineTrace.reset()
+            }
+        }
+    }
+
+    func setSocketReceiveBufferBytes(_ byteCount: Int?) {
+        lock.withPerformanceLock {
+            socketReceiveBufferBytes = max(0, byteCount ?? 0)
+        }
+    }
+
+    func recordNetwork(
+        packetCount: Int,
+        byteCount: Int,
+        estimatedSocketBacklogBytes: Int = 0,
+        receiveDrainDuration: TimeInterval = 0
+    ) {
         lock.withPerformanceLock {
             accumulator.networkPackets += packetCount
             accumulator.networkBytes += byteCount
+            accumulator.maximumSocketBacklogBytes = max(
+                accumulator.maximumSocketBacklogBytes,
+                estimatedSocketBacklogBytes
+            )
+            accumulator.maximumReceiveDrainDuration = max(
+                accumulator.maximumReceiveDrainDuration,
+                receiveDrainDuration
+            )
+        }
+    }
+
+    func recordReceptionReport(
+        fractionLost: UInt8,
+        cumulativePacketsLost: Int32,
+        interarrivalJitterMilliseconds: Double
+    ) {
+        lock.withPerformanceLock {
+            receiverReportLossPercentage = Double(fractionLost) * 100 / 256
+            self.cumulativePacketsLost = cumulativePacketsLost
+            self.interarrivalJitterMilliseconds = max(0, interarrivalJitterMilliseconds)
         }
     }
 
@@ -215,6 +276,102 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         }
     }
 
+    func recordFrameDelivery(
+        frameKey: UInt64,
+        accessUnitTiming: AppleHEVCAccessUnit.Timing?,
+        decodeEnteredAt: TimeInterval,
+        decoderSubmittedAt: TimeInterval,
+        decoderOutputAt: TimeInterval,
+        playbackHandledAt: TimeInterval,
+        mainDeliveredAt: TimeInterval,
+        presentationTime: TimeInterval
+    ) {
+        lock.withPerformanceLock {
+            guard pipelineDiagnosticsAreEnabled else { return }
+            pipelineTrace.recordFrameDelivery(
+                frameKey: frameKey,
+                accessUnitTiming: accessUnitTiming,
+                decodeEnteredAt: decodeEnteredAt,
+                decoderSubmittedAt: decoderSubmittedAt,
+                decoderOutputAt: decoderOutputAt,
+                playbackHandledAt: playbackHandledAt,
+                mainDeliveredAt: mainDeliveredAt,
+                presentationTime: presentationTime
+            )
+        }
+    }
+
+    func recordSchedulerSelection(frameKeys: [UInt64], selectedAt: TimeInterval) {
+        lock.withPerformanceLock {
+            guard pipelineDiagnosticsAreEnabled else { return }
+            pipelineTrace.recordSchedulerSelection(
+                frameKeys: frameKeys,
+                selectedAt: selectedAt
+            )
+        }
+    }
+
+    func beginRenderBatch(
+        frameKeys: [UInt64],
+        drawableWaitStartedAt: TimeInterval,
+        drawableAcquiredAt: TimeInterval,
+        encodeStartedAt: TimeInterval,
+        encodeEndedAt: TimeInterval,
+        targetTimestamp: TimeInterval?,
+        displayPeriod: TimeInterval?,
+        isDisplayLinkTriggered: Bool
+    ) -> UInt64? {
+        return lock.withPerformanceLock {
+            guard pipelineDiagnosticsAreEnabled else { return nil }
+            return pipelineTrace.beginRenderBatch(
+                frameKeys: frameKeys,
+                drawableWaitStartedAt: drawableWaitStartedAt,
+                drawableAcquiredAt: drawableAcquiredAt,
+                encodeStartedAt: encodeStartedAt,
+                encodeEndedAt: encodeEndedAt,
+                targetTimestamp: targetTimestamp,
+                displayPeriod: displayPeriod,
+                isDisplayLinkTriggered: isDisplayLinkTriggered
+            )
+        }
+    }
+
+    func recordRenderBatchCommitted(_ batchID: UInt64, at time: TimeInterval) {
+        lock.withPerformanceLock {
+            guard pipelineDiagnosticsAreEnabled else { return }
+            pipelineTrace.recordCommitted(batchID: batchID, at: time)
+        }
+    }
+
+    func recordRenderBatchScheduled(_ batchID: UInt64, at time: TimeInterval) {
+        lock.withPerformanceLock {
+            guard pipelineDiagnosticsAreEnabled else { return }
+            pipelineTrace.recordScheduled(batchID: batchID, at: time)
+        }
+    }
+
+    func recordRenderBatchCompleted(
+        _ batchID: UInt64,
+        gpuStart: TimeInterval?,
+        gpuEnd: TimeInterval?
+    ) {
+        lock.withPerformanceLock {
+            guard pipelineDiagnosticsAreEnabled else { return }
+            pipelineTrace.recordCompleted(
+                batchID: batchID,
+                gpuStart: gpuStart,
+                gpuEnd: gpuEnd
+            )
+        }
+    }
+
+    func recordRenderBatchPresented(_ batchID: UInt64, at time: TimeInterval) {
+        lock.withPerformanceLock {
+            guard pipelineDiagnosticsAreEnabled else { return }
+            pipelineTrace.recordPresented(batchID: batchID, at: time)
+        }
+    }
+
     func resetDisplayCadence() {
         lock.withPerformanceLock {
             lastDisplayedTime = nil
@@ -222,6 +379,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
             accumulator.displayLinkLead = 0
             accumulator.displayLinkPeriod = 0
             accumulator.displayLinkSamples = 0
+            pipelineTrace.reset()
         }
     }
 
@@ -246,12 +404,21 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
             let elapsed = max(now - lastSampleTime, 0.000_001)
             let values = accumulator
             let displayFrameTimes = recentDisplayFrameTimes
+            let pipelineLatency = pipelineDiagnosticsAreEnabled
+                ? pipelineTrace.sample(at: now)
+                : .zero
             accumulator = Accumulator()
             lastSampleTime = now
             return AppleVideoPerformanceSnapshot(
                 decoderBackend: decoderBackend,
                 networkMegabitsPerSecond: Double(values.networkBytes) * 8 / elapsed / 1_000_000,
                 networkPacketsPerSecond: Double(values.networkPackets) / elapsed,
+                socketReceiveBufferBytes: socketReceiveBufferBytes,
+                maximumSocketBacklogBytes: values.maximumSocketBacklogBytes,
+                maximumReceiveDrainMilliseconds: values.maximumReceiveDrainDuration * 1_000,
+                receiverReportLossPercentage: receiverReportLossPercentage,
+                cumulativePacketsLost: cumulativePacketsLost,
+                interarrivalJitterMilliseconds: interarrivalJitterMilliseconds,
                 accessUnitsPerSecond: Double(values.accessUnits) / elapsed,
                 averageAccessUnitKilobytes: values.accessUnits > 0
                     ? Double(values.accessUnitBytes) / Double(values.accessUnits) / 1_000
@@ -306,7 +473,8 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
                 maximumDecodingOrderSpan: values.maximumDecodingOrderSpan,
                 nackCount: values.nackCount,
                 keyFrameRequestCount: values.keyFrameRequestCount,
-                rendererBusyCount: values.rendererBusyCount
+                rendererBusyCount: values.rendererBusyCount,
+                pipelineLatency: pipelineLatency
             )
         }
     }
@@ -320,10 +488,45 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
 #endif
         if shouldLogDiagnostics {
             Self.logger.notice(
-            "[DEBUG-TEAR-8A7C] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s auKB=\(next.averageAccessUnitKilobytes, format: .fixed(precision: 2)) irap=\(next.intraRefreshesPerSecond, format: .fixed(precision: 1))/s rctl=\(next.rateControlFeedbacksPerSecond, format: .fixed(precision: 1))/s bwe=\(next.estimatedReceiveBandwidthMegabitsPerSecond, format: .fixed(precision: 1))Mbps decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
+                "[DEBUG-NET-27C4] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s rcvbuf=\(next.socketReceiveBufferBytes)B backlog=\(next.maximumSocketBacklogBytes)B drain=\(next.maximumReceiveDrainMilliseconds, format: .fixed(precision: 2))ms rrLoss=\(next.receiverReportLossPercentage, format: .fixed(precision: 2))% cumulativeLost=\(next.cumulativePacketsLost) rrJitter=\(next.interarrivalJitterMilliseconds, format: .fixed(precision: 2))ms"
+            )
+            Self.logger.notice(
+                "[DEBUG-TEAR-8A7C] stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s auKB=\(next.averageAccessUnitKilobytes, format: .fixed(precision: 2)) irap=\(next.intraRefreshesPerSecond, format: .fixed(precision: 1))/s rctl=\(next.rateControlFeedbacksPerSecond, format: .fixed(precision: 1))/s bwe=\(next.estimatedReceiveBandwidthMegabitsPerSecond, format: .fixed(precision: 1))Mbps decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
             )
         }
+        if pipelineDiagnosticsAreEnabledNow {
+            Self.logPipelineDiagnostics(next.pipelineLatency)
+        }
         DispatchQueue.main.async { [weak self] in self?.snapshot = next }
+    }
+
+    private static func logPipelineDiagnostics(_ latency: AppleVideoPipelineLatencySnapshot) {
+        logger.notice(
+            "[DEBUG-PIPE-A17E] ingress datagramSpan=\(latency.datagramSpanMilliseconds.p50, format: .fixed(precision: 2))/\(latency.datagramSpanMilliseconds.p95, format: .fixed(precision: 2))ms assemble=\(latency.completingDatagramToAssemblyMilliseconds.p50, format: .fixed(precision: 2))/\(latency.completingDatagramToAssemblyMilliseconds.p95, format: .fixed(precision: 2))ms auDecode=\(latency.assemblyToDecodeEntryMilliseconds.p50, format: .fixed(precision: 2))/\(latency.assemblyToDecodeEntryMilliseconds.p95, format: .fixed(precision: 2))ms prepare=\(latency.decodeEntryToSubmitMilliseconds.p50, format: .fixed(precision: 2))/\(latency.decodeEntryToSubmitMilliseconds.p95, format: .fixed(precision: 2))ms decoder=\(latency.decoderSubmitToCallbackMilliseconds.p50, format: .fixed(precision: 2))/\(latency.decoderSubmitToCallbackMilliseconds.p95, format: .fixed(precision: 2))ms"
+        )
+        logger.notice(
+            "[DEBUG-PIPE-A17E] delivery cbPb=\(latency.decoderCallbackToPlaybackMilliseconds.p50, format: .fixed(precision: 2))/\(latency.decoderCallbackToPlaybackMilliseconds.p95, format: .fixed(precision: 2))/\(latency.decoderCallbackToPlaybackMilliseconds.maximum, format: .fixed(precision: 2))ms pbMain=\(latency.playbackToMainMilliseconds.p50, format: .fixed(precision: 2))/\(latency.playbackToMainMilliseconds.p95, format: .fixed(precision: 2))/\(latency.playbackToMainMilliseconds.maximum, format: .fixed(precision: 2))ms mainSel=\(latency.mainToSchedulerMilliseconds.p50, format: .fixed(precision: 2))/\(latency.mainToSchedulerMilliseconds.p95, format: .fixed(precision: 2))/\(latency.mainToSchedulerMilliseconds.maximum, format: .fixed(precision: 2))ms"
+        )
+        logger.notice(
+            "[DEBUG-PIPE-A17E] render selDraw=\(latency.schedulerToDrawableMilliseconds.p50, format: .fixed(precision: 2))/\(latency.schedulerToDrawableMilliseconds.p95, format: .fixed(precision: 2))/\(latency.schedulerToDrawableMilliseconds.maximum, format: .fixed(precision: 2))ms drawable=\(latency.drawableWaitMilliseconds.p50, format: .fixed(precision: 2))/\(latency.drawableWaitMilliseconds.p95, format: .fixed(precision: 2))/\(latency.drawableWaitMilliseconds.maximum, format: .fixed(precision: 2))ms encode=\(latency.encodeMilliseconds.p50, format: .fixed(precision: 2))/\(latency.encodeMilliseconds.p95, format: .fixed(precision: 2))/\(latency.encodeMilliseconds.maximum, format: .fixed(precision: 2))ms traceCommit=\(latency.encodeEndToCommitMilliseconds.p95, format: .fixed(precision: 2))ms"
+        )
+        logger.notice(
+            "[DEBUG-PIPE-A17E] metal scheduledCallback=\(latency.commitToScheduledCallbackMilliseconds.p95, format: .fixed(precision: 2))ms gpuQueue=\(latency.gpuQueueWaitMilliseconds.p95, format: .fixed(precision: 2))ms gpuExec=\(latency.gpuExecutionMilliseconds.p95, format: .fixed(precision: 2))ms gpuDisplay=\(latency.gpuEndToDisplayMilliseconds.p95, format: .fixed(precision: 2))ms commitDisplay=\(latency.commitToDisplayMilliseconds.p95, format: .fixed(precision: 2))ms"
+        )
+        logger.notice(
+            "[DEBUG-PIPE-A17E] target schedulerLead=\(latency.schedulerToTargetMilliseconds.minimum, format: .fixed(precision: 2))/\(latency.schedulerToTargetMilliseconds.p50, format: .fixed(precision: 2))ms ptsLead=\(latency.presentationToTargetMilliseconds.minimum, format: .fixed(precision: 2))/\(latency.presentationToTargetMilliseconds.p50, format: .fixed(precision: 2))ms commitLead=\(latency.commitLeadToTargetMilliseconds.minimum, format: .fixed(precision: 2))/\(latency.commitLeadToTargetMilliseconds.p50, format: .fixed(precision: 2))ms gpuLead=\(latency.gpuEndLeadToTargetMilliseconds.minimum, format: .fixed(precision: 2))/\(latency.gpuEndLeadToTargetMilliseconds.p50, format: .fixed(precision: 2))ms displayPhase=\(latency.targetToDisplayMilliseconds.p50, format: .fixed(precision: 2))/\(latency.targetToDisplayMilliseconds.p95, format: .fixed(precision: 2))ms phasePeriods=\(latency.targetPhasePeriods.p50, format: .fixed(precision: 2))/\(latency.targetPhasePeriods.p95, format: .fixed(precision: 2)) misses=\(latency.displayLinkMissCount)"
+        )
+        logger.notice(
+            "[DEBUG-PIPE-A17E] result firstDatagramEnd=\(latency.firstDatagramToDisplayMilliseconds.p50, format: .fixed(precision: 2))/\(latency.firstDatagramToDisplayMilliseconds.p95, format: .fixed(precision: 2))/\(latency.firstDatagramToDisplayMilliseconds.maximum, format: .fixed(precision: 2))ms submitEnd=\(latency.decoderSubmitToDisplayMilliseconds.p50, format: .fixed(precision: 2))/\(latency.decoderSubmitToDisplayMilliseconds.p95, format: .fixed(precision: 2))/\(latency.decoderSubmitToDisplayMilliseconds.maximum, format: .fixed(precision: 2))ms callbackEnd=\(latency.decoderCallbackToDisplayMilliseconds.p50, format: .fixed(precision: 2))/\(latency.decoderCallbackToDisplayMilliseconds.p95, format: .fixed(precision: 2))/\(latency.decoderCallbackToDisplayMilliseconds.maximum, format: .fixed(precision: 2))ms immediateAge=\(latency.immediatePreviousTargetAgeMilliseconds.p95, format: .fixed(precision: 2))ms batches=\(latency.displayLinkBatchCount)/\(latency.immediateBatchCount)/\(latency.finalizedBatchCount) evict=\(latency.traceEvictionCount)"
+        )
+    }
+
+    private var pipelineDiagnosticsAreEnabled: Bool {
+        pipelineDiagnosticsForced || pipelineDiagnosticsRequested
+    }
+
+    private var pipelineDiagnosticsAreEnabledNow: Bool {
+        lock.withPerformanceLock { pipelineDiagnosticsAreEnabled }
     }
 
     private static func averageMilliseconds(total: TimeInterval, count: Int) -> Double {

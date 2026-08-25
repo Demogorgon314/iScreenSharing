@@ -113,7 +113,9 @@ final class AppleHEVCDecoderTests: XCTestCase {
             isLongTermReferenceFrame: true,
             rtpTimestamp: 30,
             presentationTime: 40,
-            decodeStartedAt: 39
+            accessUnitTiming: nil,
+            decodeEnteredAt: 38,
+            decoderSubmittedAt: 39
         )
         var receivedMetadata: AppleVCPDecompressionSession.FrameMetadata?
         var receivedStatus: OSStatus?
@@ -153,7 +155,9 @@ final class AppleHEVCDecoderTests: XCTestCase {
             isLongTermReferenceFrame: true,
             rtpTimestamp: 30,
             presentationTime: 40,
-            decodeStartedAt: 39
+            accessUnitTiming: nil,
+            decodeEnteredAt: 38,
+            decoderSubmittedAt: 39
         )
         var successfulMetadata: AppleVCPDecompressionSession.FrameMetadata?
 

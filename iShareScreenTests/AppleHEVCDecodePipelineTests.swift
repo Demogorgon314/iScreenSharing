@@ -385,7 +385,8 @@ private extension AppleHEVCDecodePipelineTests {
             decodingOrderNumber: UInt16?,
             isLongTermReferenceFrame: Bool,
             rtpTimestamp: UInt32,
-            presentationTime: TimeInterval
+            presentationTime: TimeInterval,
+            timing: AppleHEVCAccessUnit.Timing?
         ) throws -> Bool {
             submissions.append(Submission(
                 order: decodingOrderNumber,
@@ -438,6 +439,10 @@ private extension AppleHEVCDecodePipelineTests {
                 rtpTimestamp: timestamp,
                 presentationTime: 0,
                 decodeDuration: 0,
+                accessUnitTiming: nil,
+                decodeEnteredAt: 0,
+                decoderSubmittedAt: 0,
+                decoderOutputAt: 0,
                 pixelBuffer: pixelBuffer
             ))
         }

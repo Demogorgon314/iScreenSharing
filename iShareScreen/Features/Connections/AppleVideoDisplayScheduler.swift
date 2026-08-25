@@ -1,9 +1,17 @@
 import Foundation
 
 struct AppleVideoDisplayScheduler {
+    enum Trigger: Equatable {
+        case enqueueUsingPreviousTarget
+        case displayLinkTick
+    }
+
     struct DisplayUpdate {
         let frames: AppleVideoFrameStore.FrameBatch
         let requiresPresentation: Bool
+        let targetTimestamp: TimeInterval?
+        let displayPeriod: TimeInterval?
+        let trigger: Trigger
     }
 
     private let queueCapacity: Int
@@ -11,6 +19,7 @@ struct AppleVideoDisplayScheduler {
     private var lastEnqueuedSequence = [Int: UInt64]()
     private var lastDisplayedPresentationTime = [Int: TimeInterval]()
     private var latestDisplayTargetTimestamp: TimeInterval?
+    private var latestDisplayPeriod: TimeInterval?
     private var forcePresentation = false
 
     init(queueCapacity: Int = 16) {
@@ -23,9 +32,7 @@ struct AppleVideoDisplayScheduler {
     }
 
     @discardableResult
-    mutating func enqueue(
-        _ frames: AppleVideoFrameStore.FrameBatch
-    ) -> DisplayUpdate? {
+    mutating func enqueue(_ frames: AppleVideoFrameStore.FrameBatch) -> DisplayUpdate? {
         for (tileIndex, frame) in frames {
             guard frame.presentationTime
                     > lastDisplayedPresentationTime[tileIndex, default: -.infinity] else { continue }
@@ -41,7 +48,10 @@ struct AppleVideoDisplayScheduler {
             }
         }
         guard let latestDisplayTargetTimestamp else { return nil }
-        return displayUpdate(through: latestDisplayTargetTimestamp)
+        return displayUpdate(
+            through: latestDisplayTargetTimestamp,
+            trigger: .enqueueUsingPreviousTarget
+        )
     }
 
     mutating func markNeedsPresentation() {
@@ -49,21 +59,27 @@ struct AppleVideoDisplayScheduler {
     }
 
     mutating func displayLinkDidFire(
-        targetTimestamp: TimeInterval
+        targetTimestamp: TimeInterval,
+        period: TimeInterval = 0
     ) -> DisplayUpdate {
         latestDisplayTargetTimestamp = targetTimestamp
-        return displayUpdate(through: targetTimestamp)
+        latestDisplayPeriod = period > 0 ? period : nil
+        return displayUpdate(through: targetTimestamp, trigger: .displayLinkTick)
     }
 
     private mutating func displayUpdate(
-        through targetTimestamp: TimeInterval
+        through targetTimestamp: TimeInterval,
+        trigger: Trigger
     ) -> DisplayUpdate {
         let frames = dequeueFrames(through: targetTimestamp)
         let requiresPresentation = forcePresentation || !frames.isEmpty
         forcePresentation = false
         return DisplayUpdate(
             frames: frames,
-            requiresPresentation: requiresPresentation
+            requiresPresentation: requiresPresentation,
+            targetTimestamp: targetTimestamp,
+            displayPeriod: latestDisplayPeriod,
+            trigger: trigger
         )
     }
 
@@ -85,11 +101,13 @@ struct AppleVideoDisplayScheduler {
         lastEnqueuedSequence.removeAll(keepingCapacity: false)
         lastDisplayedPresentationTime.removeAll(keepingCapacity: false)
         latestDisplayTargetTimestamp = nil
+        latestDisplayPeriod = nil
         forcePresentation = false
     }
 
     mutating func invalidateDisplayTarget() {
         latestDisplayTargetTimestamp = nil
+        latestDisplayPeriod = nil
     }
 
     private mutating func dequeueFrames(

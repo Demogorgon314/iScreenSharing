@@ -2,6 +2,7 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import OSLog
+import QuartzCore
 import VideoToolbox
 
 final class AppleHEVCDecoder: @unchecked Sendable {
@@ -21,6 +22,10 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         let rtpTimestamp: UInt32
         let presentationTime: TimeInterval
         let decodeDuration: TimeInterval
+        let accessUnitTiming: AppleHEVCAccessUnit.Timing?
+        let decodeEnteredAt: TimeInterval
+        let decoderSubmittedAt: TimeInterval
+        let decoderOutputAt: TimeInterval
         let pixelBuffer: CVPixelBuffer
     }
 
@@ -103,14 +108,15 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         decodingOrderNumber: UInt16?,
         isLongTermReferenceFrame: Bool,
         rtpTimestamp: UInt32,
-        presentationTime: TimeInterval
+        presentationTime: TimeInterval,
+        timing: AppleHEVCAccessUnit.Timing?
     ) throws -> Bool {
         let validNALUnits = nalUnits.filter { AppleHEVCNALUnit.type(of: $0) != nil }
         guard validNALUnits.contains(where: {
             guard let type = AppleHEVCNALUnit.type(of: $0) else { return false }
             return type < 32
         }) else { return false }
-        let decodeStartedAt = ProcessInfo.processInfo.systemUptime
+        let decodeEnteredAt = CACurrentMediaTime()
         let sampleBuffer = try Self.makeSampleBuffer(
             nalUnits: validNALUnits,
             formatDescription: formatDescription,
@@ -138,7 +144,9 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                             isLongTermReferenceFrame: isLongTermReferenceFrame,
                             rtpTimestamp: rtpTimestamp,
                             presentationTime: presentationTime,
-                            decodeStartedAt: decodeStartedAt
+                            accessUnitTiming: timing,
+                            decodeEnteredAt: decodeEnteredAt,
+                            decoderSubmittedAt: 0
                         ),
                         flags: Self.decodeFlags
                     )
@@ -153,6 +161,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                 }
             case let .videoToolbox(session):
                 var decodeInfo = VTDecodeInfoFlags()
+                let decoderSubmittedAt = CACurrentMediaTime()
                 let status = VTDecompressionSessionDecodeFrame(
                     session,
                     sampleBuffer: sampleBuffer,
@@ -175,12 +184,17 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                         }
                         return
                     }
+                    let decoderOutputAt = CACurrentMediaTime()
                     frameHandler(DecodedFrame(
                         region: .tile(tileIndex),
                         decodingOrderNumber: decodingOrderNumber,
                         rtpTimestamp: rtpTimestamp,
                         presentationTime: presentationTime,
-                        decodeDuration: ProcessInfo.processInfo.systemUptime - decodeStartedAt,
+                        decodeDuration: decoderOutputAt - decodeEnteredAt,
+                        accessUnitTiming: timing,
+                        decodeEnteredAt: decodeEnteredAt,
+                        decoderSubmittedAt: decoderSubmittedAt,
+                        decoderOutputAt: decoderOutputAt,
                         pixelBuffer: imageBuffer
                     ))
                 }
@@ -286,12 +300,17 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                 )
             }
         }
+        let decoderOutputAt = CACurrentMediaTime()
         frameHandler(DecodedFrame(
             region: .fullCanvas,
             decodingOrderNumber: metadata.decodingOrderNumber,
             rtpTimestamp: metadata.rtpTimestamp,
             presentationTime: metadata.presentationTime,
-            decodeDuration: ProcessInfo.processInfo.systemUptime - metadata.decodeStartedAt,
+            decodeDuration: decoderOutputAt - metadata.decodeEnteredAt,
+            accessUnitTiming: metadata.accessUnitTiming,
+            decodeEnteredAt: metadata.decodeEnteredAt,
+            decoderSubmittedAt: metadata.decoderSubmittedAt,
+            decoderOutputAt: decoderOutputAt,
             pixelBuffer: pixelBuffer
         ))
     }

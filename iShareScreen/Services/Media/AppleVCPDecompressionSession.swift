@@ -2,6 +2,7 @@ import CoreMedia
 import CoreVideo
 import Darwin
 import Foundation
+import QuartzCore
 import VideoToolbox
 
 /// Thin, runtime-loaded wrapper around the same private VideoProcessing
@@ -21,7 +22,23 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
         let isLongTermReferenceFrame: Bool
         let rtpTimestamp: UInt32
         let presentationTime: TimeInterval
-        let decodeStartedAt: TimeInterval
+        let accessUnitTiming: AppleHEVCAccessUnit.Timing?
+        let decodeEnteredAt: TimeInterval
+        let decoderSubmittedAt: TimeInterval
+
+        func submitted(at time: TimeInterval) -> Self {
+            Self(
+                tileIndex: tileIndex,
+                tileOrder: tileOrder,
+                decodingOrderNumber: decodingOrderNumber,
+                isLongTermReferenceFrame: isLongTermReferenceFrame,
+                rtpTimestamp: rtpTimestamp,
+                presentationTime: presentationTime,
+                accessUnitTiming: accessUnitTiming,
+                decodeEnteredAt: decodeEnteredAt,
+                decoderSubmittedAt: time
+            )
+        }
     }
 
     typealias FrameHandler = @Sendable (FrameMetadata, CVPixelBuffer) -> Void
@@ -45,7 +62,7 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
     }
 
     private final class SourceFrameContext: @unchecked Sendable {
-        let metadata: FrameMetadata
+        var metadata: FrameMetadata
 
         init(metadata: FrameMetadata) {
             self.metadata = metadata
@@ -132,7 +149,9 @@ final class AppleVCPDecompressionSession: @unchecked Sendable {
     ) throws -> Bool {
         guard let session else { throw AppleVCPDecompressionSessionError.sessionClosed }
         Self.attachMetadata(metadata, to: sampleBuffer)
-        let sourceContext = Unmanaged.passRetained(SourceFrameContext(metadata: metadata))
+        let source = SourceFrameContext(metadata: metadata)
+        source.metadata = metadata.submitted(at: CACurrentMediaTime())
+        let sourceContext = Unmanaged.passRetained(source)
         var infoFlags: UInt32 = 0
         let status = functions.decode(
             session,

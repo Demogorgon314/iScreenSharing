@@ -7,6 +7,7 @@ struct SessionFeaturePreferences {
     static let fixedDisplayScaleKey = "sessionFixedDisplayScale"
     static let synchronizesVideoPresentationKey = "synchronizesVideoPresentation"
     static let showsVideoPerformanceOverlayKey = "showsVideoPerformanceOverlay"
+    static let showsDetailedVideoMetricsKey = "showsDetailedVideoMetrics"
     static let showsMetalPerformanceHUDKey = "showsMetalPerformanceHUD"
 
     private let defaults: UserDefaults
@@ -41,6 +42,10 @@ struct SessionFeaturePreferences {
         storedBool(forKey: Self.showsVideoPerformanceOverlayKey, defaultValue: false)
     }
 
+    var showsDetailedVideoMetrics: Bool {
+        storedBool(forKey: Self.showsDetailedVideoMetricsKey, defaultValue: false)
+    }
+
     var showsMetalPerformanceHUD: Bool {
         storedBool(forKey: Self.showsMetalPerformanceHUDKey, defaultValue: false)
     }
@@ -71,6 +76,10 @@ struct SessionFeaturePreferences {
 
     func setShowsVideoPerformanceOverlay(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.showsVideoPerformanceOverlayKey)
+    }
+
+    func setShowsDetailedVideoMetrics(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.showsDetailedVideoMetricsKey)
     }
 
     func setShowsMetalPerformanceHUD(_ enabled: Bool) {
