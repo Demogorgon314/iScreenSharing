@@ -125,6 +125,34 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertEqual(retainedLayer.developerHUDProperties?["mode"] as? String, "default")
     }
 
+    func testVideoCanvasReportsLiveResizeLifecycleWithFinalViewport() {
+        var events = [(isResizing: Bool, viewport: CGSize)]()
+        let view = RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            frames: AppleVideoFrameStore(),
+            input: nil,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil,
+            onLiveResizeChange: { events.append(($0, $1)) }
+        )
+
+        view.setFrameSize(NSSize(width: 700, height: 450))
+        view.viewWillStartLiveResize()
+        view.setFrameSize(NSSize(width: 900, height: 600))
+        view.viewDidEndLiveResize()
+
+        XCTAssertEqual(events.count, 2)
+        XCTAssertTrue(events[0].isResizing)
+        XCTAssertEqual(events[0].viewport, CGSize(width: 700, height: 450))
+        XCTAssertFalse(events[1].isResizing)
+        XCTAssertEqual(events[1].viewport, CGSize(width: 900, height: 600))
+    }
+
     func testVideoCanvasUpdatesResolutionWithoutReplacingMetalLayer() throws {
         let view = RemoteVideoCanvasNSView(
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),

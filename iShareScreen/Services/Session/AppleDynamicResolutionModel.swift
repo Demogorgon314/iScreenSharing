@@ -38,7 +38,8 @@ final class AppleDynamicResolutionModel: ObservableObject {
         viewport: CGSize,
         canvas: AppleCanvas? = nil,
         layout: AppleDisplayLayout? = nil,
-        controller: AppleDynamicResolutionController
+        controller: AppleDynamicResolutionController,
+        waitsForViewportToSettle: Bool = true
     ) {
         guard displayCount == 1,
               isEnabled,
@@ -67,7 +68,9 @@ final class AppleDynamicResolutionModel: ObservableObject {
         pendingSizes = sizes
         task = Task { [weak self, weak controller] in
             do {
-                try await Task.sleep(for: .milliseconds(Self.debounceMilliseconds))
+                if waitsForViewportToSettle {
+                    try await Task.sleep(for: .milliseconds(Self.debounceMilliseconds))
+                }
                 guard let self, let controller, self.isEnabled else { return }
                 if let lastRequestTime = self.lastRequestTime {
                     let elapsed = ProcessInfo.processInfo.systemUptime - lastRequestTime

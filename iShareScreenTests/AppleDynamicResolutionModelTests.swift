@@ -85,6 +85,29 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
     }
 
     @MainActor
+    func testCanSubmitSettledLiveResizeWithoutDebounce() async throws {
+        let recorder = DynamicResolutionMessageRecorder()
+        let controller = AppleDynamicResolutionController(
+            initialCanvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            mediaConfiguration: Data([0x1c, 0, 0, 0]),
+            sendMessage: { message in await recorder.append(message) },
+            applyCanvas: { _ in },
+            prepareMediaRestart: { }
+        )
+        let model = AppleDynamicResolutionModel()
+
+        model.schedule(
+            viewport: CGSize(width: 1000, height: 700),
+            controller: controller,
+            waitsForViewportToSettle: false
+        )
+
+        try await Task.sleep(for: .milliseconds(100))
+        let sentCount = await recorder.count()
+        XCTAssertEqual(sentCount, 1)
+    }
+
+    @MainActor
     func testDoesNotRequestUnsupportedMultiDisplayResolution() async throws {
         let recorder = DynamicResolutionMessageRecorder()
         let controller = AppleDynamicResolutionController(

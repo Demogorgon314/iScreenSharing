@@ -85,6 +85,111 @@ final class AppleVideoRefreshSchedulerTests: XCTestCase {
     }
 }
 
+final class AppleVideoWarmRestartSourcePolicyTests: XCTestCase {
+    private let previousSourceToTile: [UInt32: Int] = [
+        103: 3,
+        101: 1,
+        100: 0,
+        102: 2,
+    ]
+
+    func testReusesPreviousTileOrderAfterEverySourceProducesACompleteAccessUnit() {
+        XCTAssertEqual(
+            AppleVideoWarmRestartSourcePolicy.sources(
+                previousSourceToTile: previousSourceToTile,
+                observedSources: [100, 101, 102, 103],
+                tileCount: 4
+            ),
+            [100, 101, 102, 103]
+        )
+    }
+
+    func testWaitsWhenAnyPreviousSourceHasNotProducedACompleteAccessUnit() {
+        XCTAssertNil(
+            AppleVideoWarmRestartSourcePolicy.sources(
+                previousSourceToTile: previousSourceToTile,
+                observedSources: [100, 101, 103],
+                tileCount: 4
+            )
+        )
+    }
+
+    func testRejectsPreviousMappingWhenTileCountChanges() {
+        XCTAssertNil(
+            AppleVideoWarmRestartSourcePolicy.sources(
+                previousSourceToTile: previousSourceToTile,
+                observedSources: [100, 101, 102, 103],
+                tileCount: 2
+            )
+        )
+    }
+
+    func testRejectsMalformedPreviousMapping() {
+        XCTAssertNil(
+            AppleVideoWarmRestartSourcePolicy.sources(
+                previousSourceToTile: [100: 0, 101: 0],
+                observedSources: [100, 101],
+                tileCount: 2
+            )
+        )
+    }
+}
+
+final class AppleVideoFreshRestartSourcePolicyTests: XCTestCase {
+    func testSelectsCompleteFreshGroupWhenParameterSetsAreReady() {
+        XCTAssertEqual(
+            AppleVideoFreshRestartSourcePolicy.sources(
+                currentSources: [200, 201, 202, 203],
+                completedAccessUnitSources: [200, 201, 202, 203],
+                tileCount: 4,
+                hasCompleteParameterSets: true
+            ),
+            [200, 201, 202, 203]
+        )
+    }
+
+    func testWaitsForEveryFreshSourceToProduceACompleteAccessUnit() {
+        XCTAssertNil(
+            AppleVideoFreshRestartSourcePolicy.sources(
+                currentSources: [200, 201, 202, 203],
+                completedAccessUnitSources: [200, 201, 203],
+                tileCount: 4,
+                hasCompleteParameterSets: true
+            )
+        )
+    }
+
+    func testWaitsForCompleteParameterSets() {
+        XCTAssertNil(
+            AppleVideoFreshRestartSourcePolicy.sources(
+                currentSources: [200, 201, 202, 203],
+                completedAccessUnitSources: [200, 201, 202, 203],
+                tileCount: 4,
+                hasCompleteParameterSets: false
+            )
+        )
+    }
+
+    func testRejectsDuplicateOrIncompleteSourceGroup() {
+        XCTAssertNil(
+            AppleVideoFreshRestartSourcePolicy.sources(
+                currentSources: [200, 201, 201, 203],
+                completedAccessUnitSources: [200, 201, 203],
+                tileCount: 4,
+                hasCompleteParameterSets: true
+            )
+        )
+        XCTAssertNil(
+            AppleVideoFreshRestartSourcePolicy.sources(
+                currentSources: [200, 201, 202],
+                completedAccessUnitSources: [200, 201, 202],
+                tileCount: 4,
+                hasCompleteParameterSets: true
+            )
+        )
+    }
+}
+
 final class AppleVideoInitialRecoveryPolicyTests: XCTestCase {
     private let policy = AppleVideoInitialRecoveryPolicy()
 

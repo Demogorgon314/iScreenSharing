@@ -10,6 +10,7 @@ struct SessionView: View {
     let displayIndex: Int
     let disconnectsSessionOnDisappear: Bool
     @State private var viewportSize = CGSize.zero
+    @State private var isLiveResizing = false
     @State private var sessionWindowIdentifier = UUID()
     let videoRenderer: AppleVideoRenderer
     private let viewportStore = SessionViewportStore()
@@ -49,6 +50,7 @@ struct SessionView: View {
                             isKey: isKey
                         )
                     },
+                    onLiveResizeChange: liveResizeChanged,
                     onViewportChange: viewportChanged
                 )
                 .onChange(of: stream.state) { _, state in
@@ -211,11 +213,24 @@ struct SessionView: View {
     private func viewportChanged(_ size: CGSize) {
         viewportSize = size
         viewportStore.save(size, for: endpoint, displayIndex: displayIndex)
+        guard !isLiveResizing else { return }
         scheduleDynamicResolution()
     }
 
-    private func scheduleDynamicResolution() {
-        guard commandState.canUseDynamicResolution,
+    private func liveResizeChanged(_ isResizing: Bool, _ size: CGSize) {
+        viewportSize = size
+        viewportStore.save(size, for: endpoint, displayIndex: displayIndex)
+        isLiveResizing = isResizing
+        if isResizing {
+            dynamicResolution.cancel()
+        } else {
+            scheduleDynamicResolution(waitsForViewportToSettle: false)
+        }
+    }
+
+    private func scheduleDynamicResolution(waitsForViewportToSettle: Bool = true) {
+        guard !isLiveResizing,
+              commandState.canUseDynamicResolution,
               let session = sessions.session(for: endpoint),
               session.videoStream(for: displayIndex)?.state == .streaming,
               let controller = session.dynamicResolutionController else { return }
@@ -224,7 +239,8 @@ struct SessionView: View {
             viewport: viewportSize,
             canvas: session.videoStream(for: displayIndex)?.canvas,
             layout: displayLayout.layout,
-            controller: controller
+            controller: controller,
+            waitsForViewportToSettle: waitsForViewportToSettle
         )
     }
 
@@ -305,6 +321,7 @@ private struct ActiveVideoSessionView: View {
     let inputCoordinatesAreDisplayLocal: Bool
     let inputDisplayID: UInt32?
     let onWindowKeyChange: (Bool) -> Void
+    let onLiveResizeChange: (Bool, CGSize) -> Void
     let onViewportChange: (CGSize) -> Void
 
     var body: some View {
@@ -325,7 +342,8 @@ private struct ActiveVideoSessionView: View {
                 inputMapping: inputMapping,
                 inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
                 inputDisplayID: inputDisplayID,
-                onWindowKeyChange: onWindowKeyChange
+                onWindowKeyChange: onWindowKeyChange,
+                onLiveResizeChange: onLiveResizeChange
             )
             if showsPerformanceOverlay {
                 AppleVideoPerformanceOverlay(

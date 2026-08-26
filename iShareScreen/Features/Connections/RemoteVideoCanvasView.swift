@@ -19,6 +19,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let inputCoordinatesAreDisplayLocal: Bool
     let inputDisplayID: UInt32?
     let onWindowKeyChange: (Bool) -> Void
+    let onLiveResizeChange: (Bool, CGSize) -> Void
 
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
@@ -36,6 +37,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             inputCoordinatesAreDisplayLocal: inputCoordinatesAreDisplayLocal,
             inputDisplayID: inputDisplayID,
             onWindowKeyChange: onWindowKeyChange,
+            onLiveResizeChange: onLiveResizeChange,
             performance: performance
         )
     }
@@ -51,6 +53,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
         view.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         view.inputDisplayID = inputDisplayID
         view.onWindowKeyChange = onWindowKeyChange
+        view.onLiveResizeChange = onLiveResizeChange
         view.updateInput(input)
     }
 
@@ -149,6 +152,7 @@ final class RemoteVideoCanvasNSView: NSView {
     var inputCoordinatesAreDisplayLocal: Bool
     var inputDisplayID: UInt32?
     var onWindowKeyChange: (Bool) -> Void
+    var onLiveResizeChange: (Bool, CGSize) -> Void
 
     private(set) var canvas: AppleCanvas
     private let frames: AppleVideoFrameStore
@@ -191,6 +195,7 @@ final class RemoteVideoCanvasNSView: NSView {
         inputCoordinatesAreDisplayLocal: Bool,
         inputDisplayID: UInt32?,
         onWindowKeyChange: @escaping (Bool) -> Void = { _ in },
+        onLiveResizeChange: @escaping (Bool, CGSize) -> Void = { _, _ in },
         performance: AppleVideoPerformanceMonitor? = nil
     ) {
         self.canvas = canvas
@@ -207,6 +212,7 @@ final class RemoteVideoCanvasNSView: NSView {
         self.inputCoordinatesAreDisplayLocal = inputCoordinatesAreDisplayLocal
         self.inputDisplayID = inputDisplayID
         self.onWindowKeyChange = onWindowKeyChange
+        self.onLiveResizeChange = onLiveResizeChange
         decodedTileHeights = Array(repeating: nil, count: canvas.tileCount)
         displayLayer = (renderer ?? AppleVideoRenderer()).displayLayer(
             synchronizesPresentation: synchronizesPresentation,
@@ -292,6 +298,16 @@ final class RemoteVideoCanvasNSView: NSView {
         super.layout()
         updateDisplayLayerGeometry()
         schedulePresentation()
+    }
+
+    override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        onLiveResizeChange(true, bounds.size)
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        onLiveResizeChange(false, bounds.size)
     }
 
     private func updateDisplayLayerGeometry() {

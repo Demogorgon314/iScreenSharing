@@ -55,6 +55,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var decodePipeline: AppleHEVCDecodePipeline?
     private var decoderParameterSets: AppleHEVCParameterSets?
     private var sourceToTile = [UInt32: Int]()
+    private var restartSourceToTile = [UInt32: Int]()
     private var abandonedSources = Set<UInt32>()
     private var cachedUnits = [UInt32: [AppleHEVCAccessUnit]]()
     private var isClosed = false
@@ -72,6 +73,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var lastInitialKeyFrameRequestTime: TimeInterval = 0
     private var lastStallKeyFrameRequestTime: TimeInterval = 0
     private var refreshScheduler = AppleVideoRefreshScheduler()
+    private var restartSourceSelectionPending = false
 
     convenience init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
         try self.init(receiver: receiver, video: negotiation.videos[0])
@@ -163,6 +165,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 self.decodePipeline?.close()
                 self.decodePipeline = nil
                 self.decoderParameterSets = nil
+                self.restartSourceToTile = self.sourceToTile
                 self.sourceToTile.removeAll(keepingCapacity: false)
                 self.abandonedSources.removeAll(keepingCapacity: false)
                 self.cachedUnits.removeAll(keepingCapacity: false)
@@ -178,6 +181,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 self.lastStallKeyFrameRequestTime = 0
                 self.playbackWatchdogStartTime = 0
                 self.refreshScheduler.reset()
+                self.restartSourceSelectionPending = true
                 continuation.resume()
             }
         }
@@ -344,6 +348,25 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         guard let firstPacketTime = countLock.withVideoStreamLock({ self.firstPacketTime }) else {
             return
         }
+        if processor.currentParameterSets().isComplete,
+           let sources = AppleVideoWarmRestartSourcePolicy.sources(
+               previousSourceToTile: restartSourceToTile,
+               observedSources: Set(cachedUnits.keys),
+               tileCount: mediaCanvas.tileCount
+           ) {
+            sourceToTile = restartSourceToTile
+            restartSourceToTile.removeAll(keepingCapacity: false)
+            restartSourceSelectionPending = false
+            prepareDecoder(for: sources)
+            return
+        }
+        if let sources = freshRestartSourcesIfReady() {
+            sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
+            restartSourceToTile.removeAll(keepingCapacity: false)
+            restartSourceSelectionPending = false
+            prepareDecoder(for: sources)
+            return
+        }
         let now = ProcessInfo.processInfo.systemUptime
         if initialBurstReadyTime == nil,
            (processor.totalPacketCount >= Self.minimumInitialPacketCount
@@ -359,8 +382,20 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         )
         guard sources.count == mediaCanvas.tileCount else { return }
         sourceToTile = Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) })
+        restartSourceToTile.removeAll(keepingCapacity: false)
+        restartSourceSelectionPending = false
         recoverMissingInitialParameterSetsIfNeeded(now: now)
         prepareDecoder(for: sources)
+    }
+
+    private func freshRestartSourcesIfReady() -> [UInt32]? {
+        guard restartSourceSelectionPending else { return nil }
+        return AppleVideoFreshRestartSourcePolicy.sources(
+            currentSources: processor.primarySources(tileCount: mediaCanvas.tileCount),
+            completedAccessUnitSources: Set(cachedUnits.keys),
+            tileCount: mediaCanvas.tileCount,
+            hasCompleteParameterSets: processor.currentParameterSets().isComplete
+        )
     }
 
     private func recoverMissingInitialParameterSetsIfNeeded(now: TimeInterval) {
@@ -748,6 +783,42 @@ struct AppleVideoRefreshScheduler {
 
     mutating func reset() {
         lastRequestedTimestamp = nil
+    }
+}
+
+struct AppleVideoWarmRestartSourcePolicy {
+    static func sources(
+        previousSourceToTile: [UInt32: Int],
+        observedSources: Set<UInt32>,
+        tileCount: Int
+    ) -> [UInt32]? {
+        guard tileCount > 0,
+              previousSourceToTile.count == tileCount,
+              observedSources.isSuperset(of: previousSourceToTile.keys) else { return nil }
+
+        var sources = [UInt32?](repeating: nil, count: tileCount)
+        for (source, tileIndex) in previousSourceToTile {
+            guard sources.indices.contains(tileIndex), sources[tileIndex] == nil else { return nil }
+            sources[tileIndex] = source
+        }
+        guard sources.allSatisfy({ $0 != nil }) else { return nil }
+        return sources.compactMap { $0 }
+    }
+}
+
+struct AppleVideoFreshRestartSourcePolicy {
+    static func sources(
+        currentSources: [UInt32],
+        completedAccessUnitSources: Set<UInt32>,
+        tileCount: Int,
+        hasCompleteParameterSets: Bool
+    ) -> [UInt32]? {
+        guard hasCompleteParameterSets,
+              tileCount > 0,
+              currentSources.count == tileCount,
+              Set(currentSources).count == tileCount,
+              completedAccessUnitSources.isSuperset(of: currentSources) else { return nil }
+        return currentSources
     }
 }
 
