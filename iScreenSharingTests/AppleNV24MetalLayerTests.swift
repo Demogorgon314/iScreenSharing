@@ -45,6 +45,50 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         )
     }
 
+    func testSnapshotRequiresAFrame() throws {
+        let context = try XCTUnwrap(AppleNV24MetalContext())
+        let layer = AppleNV24MetalLayer(context: context)
+        layer.bounds = CGRect(x: 0, y: 0, width: 8, height: 4)
+        layer.contentsScale = 1
+        layer.update(
+            layouts: [],
+            fullCanvasLayout: AppleVideoCanvasLayout.Tile(
+                container: layer.bounds,
+                content: layer.bounds
+            ),
+            bounds: layer.bounds
+        )
+
+        XCTAssertNil(layer.snapshot())
+    }
+
+    func testSnapshotRendersTheCurrentFrameAtDrawableResolution() throws {
+        let context = try XCTUnwrap(AppleNV24MetalContext())
+        let layer = AppleNV24MetalLayer(context: context)
+        layer.bounds = CGRect(x: 0, y: 0, width: 8, height: 4)
+        layer.contentsScale = 2
+        layer.update(
+            layouts: [],
+            fullCanvasLayout: AppleVideoCanvasLayout.Tile(
+                container: layer.bounds,
+                content: layer.bounds
+            ),
+            bounds: layer.bounds
+        )
+        layer.update(
+            makeFrame(pixelBuffer: try makeNV24PixelBuffer(width: 8, height: 4)),
+            at: AppleVideoFrameStore.fullCanvasIndex
+        )
+
+        let image = try XCTUnwrap(layer.snapshot())
+
+        XCTAssertEqual(image.width, 16)
+        XCTAssertEqual(image.height, 8)
+        let pixels = try XCTUnwrap(image.dataProvider?.data as Data?)
+        XCTAssertGreaterThan(pixels[0], 0)
+        XCTAssertEqual(pixels[3], 255)
+    }
+
     func testAppEnablesMetalHUDRuntimeForLayerToggle() {
         XCTAssertEqual(
             Bundle.main.object(forInfoDictionaryKey: "MetalHudEnabled") as? Bool,
@@ -359,5 +403,49 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         )
         XCTAssertTrue(originalLayer === retainedLayer)
         XCTAssertTrue(performance.sample(at: 1).recentDisplayFrameMilliseconds.isEmpty)
+    }
+
+    private func makeNV24PixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
+        var pixelBuffer: CVPixelBuffer?
+        let attributes = [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
+        ] as CFDictionary
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            AppleHEVCDecoder.nativePixelFormat,
+            attributes,
+            &pixelBuffer
+        )
+        let result = try XCTUnwrap(pixelBuffer, "CVPixelBufferCreate failed with \(status)")
+        CVPixelBufferLockBaseAddress(result, [])
+        defer { CVPixelBufferUnlockBaseAddress(result, []) }
+        for plane in 0..<CVPixelBufferGetPlaneCount(result) {
+            guard let baseAddress = CVPixelBufferGetBaseAddressOfPlane(result, plane) else { continue }
+            memset(
+                baseAddress,
+                128,
+                CVPixelBufferGetBytesPerRowOfPlane(result, plane)
+                    * CVPixelBufferGetHeightOfPlane(result, plane)
+            )
+        }
+        return result
+    }
+
+    private func makeFrame(pixelBuffer: CVPixelBuffer) -> AppleVideoFrameStore.Frame {
+        AppleVideoFrameStore.Frame(
+            pixelBuffer: pixelBuffer,
+            decodingOrderNumber: nil,
+            rtpTimestamp: nil,
+            accessUnitTiming: nil,
+            decodeEnteredAt: 0,
+            decoderSubmittedAt: 0,
+            decoderOutputAt: 0,
+            playbackHandledAt: 0,
+            decodedAt: 0,
+            presentationTime: 0,
+            sequence: 1
+        )
     }
 }

@@ -12,6 +12,7 @@ struct SessionView: View {
     @State private var viewportSize = CGSize.zero
     @State private var isLiveResizing = false
     @State private var sessionWindowIdentifier = UUID()
+    @State private var screenshotButtonAnchor: NSView?
     let videoRenderer: AppleVideoRenderer
     private let viewportStore = SessionViewportStore()
 
@@ -93,6 +94,13 @@ struct SessionView: View {
     @ToolbarContentBuilder
     private var sessionToolbar: some ToolbarContent {
         ToolbarItemGroup {
+            Button { takeScreenshot() } label: {
+                Label("Take Screenshot", systemImage: "camera")
+            }
+            .background {
+                ScreenshotButtonAnchor(anchorView: $screenshotButtonAnchor)
+            }
+            .help("Take Screenshot")
             Button { commandState.setScalesToFit(!commandState.displayScale.scalesToFit) } label: {
                 Label(
                     commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On",
@@ -246,6 +254,24 @@ struct SessionView: View {
 
     private func performRemoteSystemCommand(_ command: AppleRemoteSystemCommand) {
         commandState.perform(command)
+    }
+
+    private func takeScreenshot() {
+        guard let anchorView = screenshotButtonAnchor,
+              anchorView.window != nil,
+              let image = videoRenderer.snapshot() else {
+            NSSound.beep()
+            return
+        }
+        do {
+            try ScreenshotSharingCoordinator.show(
+                image,
+                suggestedName: "Screenshot \(endpoint.displayName)",
+                relativeTo: anchorView
+            )
+        } catch {
+            NSSound.beep()
+        }
     }
 }
 
