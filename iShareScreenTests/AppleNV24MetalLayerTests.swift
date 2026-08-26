@@ -237,6 +237,27 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertTrue(originalLayer === retainedLayer)
     }
 
+    func testMetalLayerExplicitlyDisablesGeometryAnimations() throws {
+        let view = RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            frames: AppleVideoFrameStore(),
+            input: nil,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            stretchesVideoToFillBounds: true,
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+        let metalLayer = try XCTUnwrap(
+            view.layer?.sublayers?.compactMap { $0 as? AppleNV24MetalLayer }.first
+        )
+        XCTAssertTrue(metalLayer.actions?["bounds"] is NSNull)
+        XCTAssertTrue(metalLayer.actions?["position"] is NSNull)
+    }
+
     func testVideoCanvasUsesDisplayLinkAdmissionWithImmediateMetalSynchronization() throws {
         let view = RemoteVideoCanvasNSView(
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),

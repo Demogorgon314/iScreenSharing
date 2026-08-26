@@ -28,6 +28,8 @@ struct SessionView: View {
                     input: isObserving ? nil : session.inputController,
                     cursors: session.cursorStore,
                     displayScale: commandState.displayScale,
+                    stretchesVideoToFillBounds:
+                        commandState.canUseDynamicResolution && commandState.usesDynamicResolution,
                     synchronizesPresentation: commandState.synchronizesVideoPresentation,
                     showsPerformanceOverlay: commandState.showsVideoPerformanceOverlay,
                     performanceLevel: commandState.videoPerformanceLevel,
@@ -293,6 +295,7 @@ private struct ActiveVideoSessionView: View {
     let input: AppleInputController?
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
+    let stretchesVideoToFillBounds: Bool
     let synchronizesPresentation: Bool
     let showsPerformanceOverlay: Bool
     let performanceLevel: VideoPerformanceLevel
@@ -315,6 +318,7 @@ private struct ActiveVideoSessionView: View {
                 input: input,
                 cursors: cursors,
                 displayScale: displayScale,
+                stretchesVideoToFillBounds: stretchesVideoToFillBounds,
                 synchronizesPresentation: synchronizesPresentation,
                 showsDeveloperHUD: showsMetalPerformanceHUD,
                 sourceRect: sourceRect,

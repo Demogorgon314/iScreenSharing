@@ -123,6 +123,58 @@ final class AppleVideoCanvasLayoutTests: XCTestCase {
         )
     }
 
+    func testStretchesFullCanvasAcrossNonMatchingBounds() {
+        let layout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: AppleCanvas(width: 100, height: 50, tileCount: 1),
+            bounds: CGRect(x: 0, y: 0, width: 300, height: 300),
+            fixedScale: nil,
+            stretchesToFillBounds: true
+        )
+
+        XCTAssertEqual(layout.container, CGRect(x: 0, y: 0, width: 300, height: 300))
+        XCTAssertEqual(layout.content, CGRect(x: 0, y: 0, width: 300, height: 300))
+    }
+
+    func testStretchesTilesAcrossNonMatchingBounds() {
+        let layouts = AppleVideoCanvasLayout.tiles(
+            canvas: AppleCanvas(width: 100, height: 50, tileCount: 2),
+            bounds: CGRect(x: 0, y: 0, width: 300, height: 300),
+            slotHeight: 25,
+            fixedScale: nil,
+            stretchesToFillBounds: true
+        )
+
+        XCTAssertEqual(layouts[0].container, CGRect(x: 0, y: 150, width: 300, height: 150))
+        XCTAssertEqual(layouts[0].content, CGRect(x: 0, y: 0, width: 300, height: 150))
+        XCTAssertEqual(layouts[1].container, CGRect(x: 0, y: 0, width: 300, height: 150))
+        XCTAssertEqual(layouts[1].content, CGRect(x: 0, y: 0, width: 300, height: 150))
+    }
+
+    func testMapsStretchedCoordinatesAcrossEntireBounds() {
+        let point = AppleVideoCanvasLayout.remotePoint(
+            location: CGPoint(x: 150, y: 20),
+            canvas: AppleCanvas(width: 100, height: 50, tileCount: 1),
+            bounds: CGRect(x: 0, y: 0, width: 300, height: 300),
+            fixedScale: nil,
+            stretchesToFillBounds: true
+        )
+
+        XCTAssertEqual(point?.x, 50)
+        XCTAssertEqual(point?.y, 46)
+    }
+
+    func testFixedScaleTakesPriorityOverStretching() {
+        let layout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: AppleCanvas(width: 100, height: 50, tileCount: 1),
+            bounds: CGRect(x: 0, y: 0, width: 300, height: 300),
+            fixedScale: 1,
+            stretchesToFillBounds: true
+        )
+
+        XCTAssertEqual(layout.container, CGRect(x: 100, y: 125, width: 100, height: 50))
+        XCTAssertEqual(layout.content, CGRect(x: 0, y: 0, width: 100, height: 50))
+    }
+
     func testCropsRightDisplayFromCombinedCanvas() {
         let layouts = AppleVideoCanvasLayout.tiles(
             canvas: AppleCanvas(width: 3840, height: 1080, tileCount: 1),
