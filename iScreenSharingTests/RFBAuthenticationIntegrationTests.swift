@@ -217,6 +217,8 @@ private final class IntegrationClipboardReceiver: AppleClipboardReceiving {
     var allowsRemoteSynchronization: Bool { true }
     func localArchive() -> AppleClipboardArchive? { nil }
     func archiveForRemoteRequest() -> AppleClipboardArchive? { nil }
+    func remoteRequestDidFinish() { }
+    func remotePasteboardDidChange() { }
     func receive(_ archive: AppleClipboardArchive) { }
     func synchronizationLease() -> UInt64? { 0 }
     func isSynchronizationLeaseValid(_ lease: UInt64) -> Bool { lease == 0 }

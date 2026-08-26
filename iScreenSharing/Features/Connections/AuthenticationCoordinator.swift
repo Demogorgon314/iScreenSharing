@@ -113,9 +113,18 @@ final class AuthenticationCoordinator: ObservableObject {
                     let input = AppleInputController(session: session, canvas: negotiation.canvas)
                     session.install(inputController: input)
                     let clipboard = AppleClipboardService(
+                        isSharingEnabled: session.serverInfo.supportsSharedPasteboard,
+                        supportsSharedClipboard: session.serverInfo.supportsSharedPasteboard,
                         advertise: { [weak input] archive in
                             guard let input else { throw CancellationError() }
                             try await input.sendClipboard(archive, promises: true)
+                        },
+                        updateRemoteSharingEnabled: { [weak input] enabled in
+                            if enabled {
+                                await input?.enableClipboard()
+                            } else {
+                                await input?.disableClipboard()
+                            }
                         }
                     )
                     let fileTransferService: AppleFileTransferService?
@@ -242,8 +251,8 @@ final class AuthenticationCoordinator: ObservableObject {
                         clipboardService: clipboard
                     )
                     session.install(controlState: AppleSessionControlState(session: session))
-                    controlMessages.start()
                     clipboard.start()
+                    controlMessages.start()
                     keyboardInputSource.start()
                     if let receiver = session.mediaReceiver,
                        let audio = try? AppleAudioStream(

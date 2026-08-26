@@ -112,11 +112,24 @@ struct SessionView: View {
                 )
             }
             .help(commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On")
-            Button { commandState.sendClipboard() } label: {
-                Label("Send Clipboard", systemImage: "arrow.right.doc.on.clipboard")
+            Menu {
+                Toggle("Use Shared Clipboard", isOn: sharedClipboardBinding)
+                    .disabled(!commandState.canToggleSharedClipboard)
+                Divider()
+                Button("Get Clipboard") { commandState.getClipboard() }
+                    .disabled(!commandState.canGetOrSendClipboard)
+                Button("Send Clipboard") { commandState.sendClipboard() }
+                    .disabled(!commandState.canGetOrSendClipboard)
+            } label: {
+                Label(
+                    "Clipboard",
+                    systemImage: commandState.usesSharedClipboard
+                        ? "doc.on.clipboard"
+                        : "clipboard"
+                )
             }
-            .help("Send Clipboard to Remote Mac")
-            .disabled(isObserving || isChangingMode)
+            .help("Clipboard Settings")
+            .disabled(!commandState.canUseClipboard)
             if let capabilities = sessions.session(for: endpoint)?.remoteSystemCapabilities,
                sessions.session(for: endpoint)?.inputController != nil {
                 RemoteSystemCommandButtons(
@@ -205,6 +218,13 @@ struct SessionView: View {
         Binding(
             get: { commandState.usesDynamicResolution },
             set: { commandState.setUsesDynamicResolution($0) }
+        )
+    }
+
+    private var sharedClipboardBinding: Binding<Bool> {
+        Binding(
+            get: { commandState.usesSharedClipboard },
+            set: { commandState.setUsesSharedClipboard($0) }
         )
     }
 

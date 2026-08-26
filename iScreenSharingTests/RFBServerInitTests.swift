@@ -50,6 +50,26 @@ final class RFBServerInitTests: XCTestCase {
         XCTAssertFalse(policyDisabled.supportsViewerToHostFileTransfer)
     }
 
+    func testClipboardCapabilitiesRequireTheNativeCommandSets() {
+        var commands = Data(repeating: 0, count: 16)
+        commands[1] = 0x10 // command 11
+        commands[3] = 0x01 // command 31
+        let manualOnly = makeServerInfo(commands: commands)
+
+        XCTAssertTrue(manualOnly.supportsCopyPaste)
+        XCTAssertFalse(manualOnly.supportsSharedPasteboard)
+
+        commands[2] = 0x04 // command 21
+        let shared = makeServerInfo(commands: commands)
+        XCTAssertTrue(shared.supportsCopyPaste)
+        XCTAssertTrue(shared.supportsSharedPasteboard)
+
+        commands[1] = 0
+        let missingRequestCommand = makeServerInfo(commands: commands)
+        XCTAssertFalse(missingRequestCommand.supportsCopyPaste)
+        XCTAssertFalse(missingRequestCommand.supportsSharedPasteboard)
+    }
+
     func testRejectsTruncatedEnhancedServerInitPrefix() {
         let name = Data([0, 0, 1, 2, 3])
         var header = Data()
@@ -72,5 +92,15 @@ final class RFBServerInitTests: XCTestCase {
         header[3] = 0
         header[23] = 0
         XCTAssertThrowsError(try RFBServerInfo.parse(header: header, nameData: Data()))
+    }
+
+    private func makeServerInfo(commands: Data) -> RFBServerInfo {
+        RFBServerInfo(
+            width: 1920,
+            height: 1080,
+            pixelFormat: Data(repeating: 0, count: 16),
+            name: "Remote Mac",
+            commandBitmap: commands
+        )
     }
 }

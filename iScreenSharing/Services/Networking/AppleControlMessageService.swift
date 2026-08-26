@@ -2,8 +2,7 @@ import Foundation
 
 final class AppleControlMessageService: @unchecked Sendable {
     private weak var session: RFBAuthenticatedSession?
-    private let input: AppleInputController
-    private let clipboard: any AppleClipboardReceiving
+    private let clipboardExchange: AppleClipboardExchange
     private let pendingMessages: [Data]
     private let receiveDisplayLayout: @Sendable (AppleDisplayLayout) async -> Void
     private let receiveMediaCanvas: @Sendable (AppleCanvas) async -> Void
@@ -30,8 +29,19 @@ final class AppleControlMessageService: @unchecked Sendable {
         receiveFileTransferMessage: @escaping @Sendable (Data) async -> Bool = { _ in false }
     ) {
         self.session = session
-        self.input = input
-        self.clipboard = clipboard
+        clipboardExchange = AppleClipboardExchange(
+            clipboard: clipboard,
+            sendRequest: { promises, sessionID in
+                try await input.requestClipboard(promises: promises, sessionID: sessionID)
+            },
+            sendArchive: { archive, promises, sessionID in
+                try await input.sendClipboard(
+                    archive,
+                    promises: promises,
+                    sessionID: sessionID
+                )
+            }
+        )
         self.pendingMessages = pendingMessages
         self.receiveDisplayLayout = receiveDisplayLayout
         self.receiveMediaCanvas = receiveMediaCanvas
@@ -44,6 +54,10 @@ final class AppleControlMessageService: @unchecked Sendable {
 
     var receivedMessageCount: Int {
         countLock.withControlMessageLock { messageCount }
+    }
+
+    func requestRemoteClipboard() async throws {
+        try await clipboardExchange.requestRemoteClipboard()
     }
 
     func start() {
@@ -61,42 +75,22 @@ final class AppleControlMessageService: @unchecked Sendable {
     }
 
     private func run() async {
-        var reassembler = AppleClipboardReassembler()
-        var clipboardRequest = ClipboardRequestState.idle
-        await input.enableClipboard()
         for message in pendingMessages {
-            await process(
-                message,
-                reassembler: &reassembler,
-                clipboardRequest: &clipboardRequest
-            )
+            await process(message)
         }
 
         while !Task.isCancelled, let session {
             do {
                 let message = try await session.receiveEncrypted()
-                await process(
-                    message,
-                    reassembler: &reassembler,
-                    clipboardRequest: &clipboardRequest
-                )
+                await process(message)
             } catch {
                 return
             }
         }
     }
 
-    private func process(
-        _ message: Data,
-        reassembler: inout AppleClipboardReassembler,
-        clipboardRequest: inout ClipboardRequestState
-    ) async {
+    private func process(_ message: Data) async {
         guard !message.isEmpty else { return }
-        if let lease = clipboardRequest.lease,
-           !(await clipboard.isSynchronizationLeaseValid(lease)) {
-            clipboardRequest = .idle
-            reassembler = AppleClipboardReassembler()
-        }
         countLock.withControlMessageLock { messageCount += 1 }
         if await receiveFileTransferMessage(message) { return }
         if message[0] == 0 {
@@ -121,75 +115,7 @@ final class AppleControlMessageService: @unchecked Sendable {
             }
             return
         }
-        if reassembler.isInProgress || message[0] == 0x1f {
-            do {
-                if let complete = try reassembler.process(message) {
-                    let envelope = try AppleClipboardMessage.envelope(from: complete)
-                    switch clipboardRequest {
-                    case .awaitingPromises(let sessionID, let lease)
-                        where envelope.sessionID == sessionID && envelope.containsPromises:
-                        guard await clipboard.isSynchronizationLeaseValid(lease) else {
-                            clipboardRequest = .idle
-                            return
-                        }
-                        do {
-                            let fullSessionID = try await input.requestClipboard(promises: false)
-                            guard await clipboard.isSynchronizationLeaseValid(lease) else {
-                                clipboardRequest = .idle
-                                return
-                            }
-                            clipboardRequest = .awaitingFull(id: fullSessionID, lease: lease)
-                        } catch {
-                            clipboardRequest = .idle
-                        }
-                    case .awaitingFull(let sessionID, let lease)
-                        where envelope.sessionID == sessionID && !envelope.containsPromises:
-                        _ = await clipboard.receiveIfEligible(envelope.archive, lease: lease)
-                        clipboardRequest = .idle
-                    default:
-                        return
-                    }
-                }
-            } catch {
-                reassembler = AppleClipboardReassembler()
-            }
-            return
-        }
-        if let request = AppleClipboardMessage.request(from: message),
-           let archive = await clipboard.archiveForRemoteRequest() {
-            try? await input.sendClipboard(
-                archive,
-                promises: request.requestsPromises,
-                sessionID: request.sessionID
-            )
-            return
-        }
-        if message[0] == 0x14,
-           message.count >= 8,
-           (try? message.uint16BE(at: 6)) == 2,
-           case .idle = clipboardRequest,
-           let lease = await clipboard.synchronizationLease() {
-            do {
-                let sessionID = try await input.requestClipboard(promises: true)
-                guard await clipboard.isSynchronizationLeaseValid(lease) else { return }
-                clipboardRequest = .awaitingPromises(id: sessionID, lease: lease)
-            } catch {
-                clipboardRequest = .idle
-            }
-        }
-    }
-}
-
-private enum ClipboardRequestState {
-    case idle
-    case awaitingPromises(id: UInt32, lease: UInt64)
-    case awaitingFull(id: UInt32, lease: UInt64)
-
-    var lease: UInt64? {
-        switch self {
-        case .idle: nil
-        case .awaitingPromises(_, let lease), .awaitingFull(_, let lease): lease
-        }
+        _ = await clipboardExchange.receive(message)
     }
 }
 

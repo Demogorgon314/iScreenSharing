@@ -36,7 +36,6 @@ actor AppleInputController {
     private var inputTimestamp = AppleInputTimestamp()
     private let microseconds: @Sendable () -> UInt64
     private var isClosed = false
-    private var nextClipboardSessionID: UInt32 = 1
     private var keyboardEventSubtype: UInt8 = 1
     private var isControlling = true
     private(set) var sentEventCount = 0
@@ -248,20 +247,11 @@ actor AppleInputController {
         await send(AppleClipboardMessage.enable)
     }
 
-    func fetchClipboard() async {
-        _ = try? await requestClipboard(promises: false)
-    }
-
-    @discardableResult
-    func requestClipboard(promises: Bool) async throws -> UInt32 {
+    func requestClipboard(promises: Bool, sessionID: UInt32) async throws {
         guard isControlling else { throw AppleInputControllerError.notControlling }
-        let sessionID = nextClipboardSessionID
-        nextClipboardSessionID &+= 1
-        if nextClipboardSessionID == 0 { nextClipboardSessionID = 1 }
         try await sendThrowing(
             AppleClipboardMessage.request(promises: promises, sessionID: sessionID)
         )
-        return sessionID
     }
 
     func sendClipboard(

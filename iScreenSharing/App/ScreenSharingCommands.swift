@@ -34,10 +34,16 @@ struct ScreenSharingCommands: Commands {
             Divider()
             Toggle("Scale to Fit", isOn: displayScalingBinding)
                 .disabled(activeSession == nil)
+            Toggle("Use Shared Clipboard", isOn: sharedClipboardBinding)
+                .disabled(activeSession?.canToggleSharedClipboard != true)
+            Button("Get Clipboard") {
+                activeSession?.getClipboard()
+            }
+            .disabled(activeSession?.canGetOrSendClipboard != true)
             Button("Send Clipboard") {
                 activeSession?.sendClipboard()
             }
-            .disabled(activeSession?.canSendClipboard != true)
+            .disabled(activeSession?.canGetOrSendClipboard != true)
             Toggle("Share Input Source", isOn: keyboardInputSourceBinding)
                 .disabled(activeSession?.canShareKeyboardInputSource != true)
             Divider()
@@ -226,6 +232,13 @@ struct ScreenSharingCommands: Commands {
         Binding(
             get: { sessionCommands.active?.sharesKeyboardInputSource ?? false },
             set: { sessionCommands.active?.setSharesKeyboardInputSource($0) }
+        )
+    }
+
+    private var sharedClipboardBinding: Binding<Bool> {
+        Binding(
+            get: { sessionCommands.active?.usesSharedClipboard ?? false },
+            set: { sessionCommands.active?.setUsesSharedClipboard($0) }
         )
     }
 

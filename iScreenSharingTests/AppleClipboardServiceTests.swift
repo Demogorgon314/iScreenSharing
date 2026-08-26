@@ -215,6 +215,56 @@ final class AppleClipboardServiceTests: XCTestCase {
         service.close()
     }
 
+    func testRemoteDataRequestReadsCurrentPasteboardInsteadOfAdvertisedSnapshot() async throws {
+        let pasteboard = makePasteboard()
+        let recorder = ClipboardAdvertisementRecorder()
+        let advertised = expectation(description: "Pasteboard promises advertised")
+        let service = AppleClipboardService(
+            pasteboard: pasteboard,
+            advertise: { archive in
+                await recorder.record(archive)
+                advertised.fulfill()
+            },
+            isApplicationActive: { true }
+        )
+        service.start()
+        pasteboard.clearContents()
+        pasteboard.setString("advertised", forType: .string)
+        service.setSessionWindow(UUID(), isKey: true)
+        await fulfillment(of: [advertised], timeout: 1)
+
+        pasteboard.clearContents()
+        pasteboard.setString("current", forType: .string)
+
+        XCTAssertEqual(service.archiveForRemoteRequest()?.preferredText, "current")
+        service.close()
+    }
+
+    func testSharedClipboardToggleUpdatesSessionStateAndRemoteMode() async {
+        let enabled = expectation(description: "Shared clipboard enabled remotely")
+        let disabled = expectation(description: "Shared clipboard disabled remotely")
+        let service = AppleClipboardService(
+            pasteboard: makePasteboard(),
+            updateRemoteSharingEnabled: { isEnabled in
+                if isEnabled {
+                    enabled.fulfill()
+                } else {
+                    disabled.fulfill()
+                }
+            },
+            isApplicationActive: { true }
+        )
+
+        service.start()
+        await fulfillment(of: [enabled], timeout: 1)
+        XCTAssertTrue(service.isSharingEnabled)
+
+        service.setSharingEnabled(false)
+        await fulfillment(of: [disabled], timeout: 1)
+        XCTAssertFalse(service.isSharingEnabled)
+        service.close()
+    }
+
     private func makePasteboard() -> NSPasteboard {
         let pasteboard = NSPasteboard(name: .init("clipboard-tests-\(UUID().uuidString)"))
         pasteboard.clearContents()

@@ -17,6 +17,7 @@ final class SessionCommandState: ObservableObject {
     @Published private(set) var isChangingMode: Bool
     @Published private(set) var sharesKeyboardInputSource: Bool
     @Published private(set) var supportsKeyboardInputSource: Bool
+    @Published private(set) var usesSharedClipboard: Bool
     @Published private(set) var isAudioMuted: Bool
     @Published private(set) var supportedRemoteCommands: Set<AppleRemoteSystemCommand>
 
@@ -26,7 +27,10 @@ final class SessionCommandState: ObservableObject {
     private let dynamicResolution: AppleDynamicResolutionModel?
     private let controlState: AppleSessionControlState?
     private let keyboardInputSource: AppleKeyboardInputSourceService?
+    private let clipboardService: AppleClipboardService?
     private let audioStream: AppleAudioStream?
+    private let supportsCopyPaste: Bool
+    private let supportsSharedClipboard: Bool
     private var subscriptions = Set<AnyCancellable>()
 
     init(
@@ -44,7 +48,10 @@ final class SessionCommandState: ObservableObject {
         self.dynamicResolution = dynamicResolution
         self.controlState = controlState
         keyboardInputSource = session?.keyboardInputSourceService
+        clipboardService = session?.clipboardService
         audioStream = session?.audioStream
+        supportsCopyPaste = session?.serverInfo.supportsCopyPaste ?? false
+        supportsSharedClipboard = session?.serverInfo.supportsSharedPasteboard ?? false
 
         displayScale = AppleVideoDisplayScale(
             fixedScale: preferences.fixedDisplayScale.map { CGFloat($0) }
@@ -60,18 +67,24 @@ final class SessionCommandState: ObservableObject {
         isChangingMode = controlState?.isChangingMode ?? false
         sharesKeyboardInputSource = keyboardInputSource?.isSharingEnabled ?? false
         supportsKeyboardInputSource = keyboardInputSource?.isSupported ?? false
+        usesSharedClipboard = clipboardService?.isSharingEnabled ?? false
         isAudioMuted = audioStream?.isMuted ?? false
         supportedRemoteCommands = session?.remoteSystemCapabilities?.supportedCommands ?? []
 
         observeSessionModels()
     }
 
-    var canSendClipboard: Bool {
+    var canUseClipboard: Bool {
         !isObserving
             && !isChangingMode
             && session?.inputController != nil
-            && session?.clipboardService != nil
+            && clipboardService != nil
+            && supportsCopyPaste
     }
+
+    var canToggleSharedClipboard: Bool { canUseClipboard && supportsSharedClipboard }
+
+    var canGetOrSendClipboard: Bool { canUseClipboard && !usesSharedClipboard }
 
     var canToggleObservationMode: Bool {
         session != nil && !isChangingMode
@@ -156,15 +169,28 @@ final class SessionCommandState: ObservableObject {
         keyboardInputSource?.setSharingEnabled(enabled)
     }
 
+    func setUsesSharedClipboard(_ enabled: Bool) {
+        guard canToggleSharedClipboard,
+              enabled != usesSharedClipboard else { return }
+        clipboardService?.setSharingEnabled(enabled)
+    }
+
     func setAudioMuted(_ muted: Bool) {
         guard let audioStream, muted != isAudioMuted else { return }
         audioStream.toggleMute()
     }
 
+    func getClipboard() {
+        guard canGetOrSendClipboard,
+              let controlMessages = session?.controlMessageService else { return }
+        Task { try? await controlMessages.requestRemoteClipboard() }
+    }
+
     func sendClipboard() {
-        guard canSendClipboard,
+        let archive = clipboardService?.localArchive()
+        guard canGetOrSendClipboard,
               let input = session?.inputController,
-              let archive = session?.clipboardService?.localArchive() else { return }
+              let archive else { return }
         Task { try? await input.sendClipboard(archive) }
     }
 
@@ -206,6 +232,11 @@ final class SessionCommandState: ObservableObject {
         keyboardInputSource?.$isSupported
             .removeDuplicates()
             .sink { [weak self] in self?.supportsKeyboardInputSource = $0 }
+            .store(in: &subscriptions)
+
+        clipboardService?.$isSharingEnabled
+            .removeDuplicates()
+            .sink { [weak self] in self?.usesSharedClipboard = $0 }
             .store(in: &subscriptions)
 
         audioStream?.$isMuted

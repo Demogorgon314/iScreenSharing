@@ -18,6 +18,15 @@ final class AppleClipboardMessageTests: XCTestCase {
         XCTAssertEqual(try AppleClipboardMessage.text(from: message), "Hello, 世界 👋")
     }
 
+    func testClipboardPayloadUsesNativeSyncFlushFraming() throws {
+        let message = try AppleClipboardMessage.send(text: "clipboard")
+        let compressedSize = try Int(message.uint32BE(at: 12))
+        let payload = message.suffix(compressedSize)
+
+        XCTAssertEqual(payload.prefix(2), Data([0x78, 0xda]))
+        XCTAssertEqual(payload.suffix(4), Data([0x00, 0x00, 0xff, 0xff]))
+    }
+
     func testRoundTripsMultipleItemsFlavorsAndAliases() throws {
         let archive = AppleClipboardArchive(items: [
             AppleClipboardItem(flavors: [

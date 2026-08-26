@@ -36,6 +36,14 @@ struct RFBServerInfo: Equatable, Sendable {
         supportsServerCommand(32) && supportsServerCommand(34)
     }
 
+    var supportsCopyPaste: Bool {
+        supportsServerCommand(11) && supportsServerCommand(31)
+    }
+
+    var supportsSharedPasteboard: Bool {
+        supportsCopyPaste && supportsServerCommand(21)
+    }
+
     static func parse(header: Data, nameData: Data) throws -> Self {
         guard header.count == 24,
               nameData.count == Int(try header.uint32BE(at: 20)) else {

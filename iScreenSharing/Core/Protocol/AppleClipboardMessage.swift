@@ -92,7 +92,7 @@ enum AppleClipboardMessage {
         guard archiveData.count <= maximumArchiveLength else {
             throw AppleClipboardError.payloadTooLarge
         }
-        let compressed = try ZlibCodec.compress(
+        let compressed = try ZlibCodec.compressSyncFlush(
             archiveData,
             maximumOutputLength: maximumPayloadLength
         )
