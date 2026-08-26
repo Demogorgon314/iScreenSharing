@@ -115,6 +115,7 @@ protocol EmbeddedTailscaleRunning: Actor {
     func events() -> AsyncStream<EmbeddedTailscaleEvent>
     func start() async throws
     func startLogin() async throws
+    func logout() async throws
 }
 
 protocol TailscaleNodeProviding: Actor {
@@ -195,6 +196,16 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
         }
         try await localAPIClient.startLoginInteractive()
         try await publishStatus(from: localAPIClient)
+    }
+
+    func logout() async throws {
+        guard let node, localAPIClient != nil else {
+            throw EmbeddedTailscaleRuntimeError.notStarted
+        }
+        try await Self.logout(node: node)
+        peerNodesByID.removeAll()
+        publish(.state(.needsLogin))
+        publish(.peers([]))
     }
 
     func tailscaleHandle() async throws -> TailscaleHandle {
@@ -303,6 +314,27 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
         return "iScreenSharing-(computerName)"
     }
 
+    private static func logout(node: TailscaleNode) async throws {
+        let (configuration, loopback) = try await URLSessionConfiguration.tailscaleSession(node)
+        guard let host = loopback.ip,
+              let port = loopback.port,
+              let url = URL(string: "http://\(host):\(port)/localapi/v0/logout") else {
+            throw EmbeddedTailscaleRuntimeError.invalidLocalAPIAddress
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let credentials = Data("tsnet:\(loopback.localAPIKey)".utf8).base64EncodedString()
+        request.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
+        request.setValue("localapi", forHTTPHeaderField: "Sec-Tailscale")
+
+        let (_, response) = try await URLSession(configuration: configuration).data(for: request)
+        guard let response = response as? HTTPURLResponse,
+              (200..<300).contains(response.statusCode) else {
+            throw EmbeddedTailscaleRuntimeError.logoutFailed
+        }
+    }
+
     private static func state(from state: Ipn.State) -> EmbeddedTailscaleState {
         switch state {
         case .NoState, .Starting:
@@ -391,12 +423,18 @@ private actor TailscaleBusConsumer: MessageConsumer {
 
 enum EmbeddedTailscaleRuntimeError: LocalizedError {
     case applicationSupportUnavailable
+    case invalidLocalAPIAddress
+    case logoutFailed
     case notStarted
 
     var errorDescription: String? {
         switch self {
         case .applicationSupportUnavailable:
             "The Application Support folder is unavailable for embedded Tailscale state."
+        case .invalidLocalAPIAddress:
+            "The embedded Tailscale management connection is unavailable."
+        case .logoutFailed:
+            "The embedded Tailscale node could not log out."
         case .notStarted:
             "The embedded Tailscale node has not started yet."
         }

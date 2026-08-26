@@ -42,7 +42,7 @@ operational.
   connections, groups, recent items, and Keychain credentials
 - An embedded userspace Tailscale node with browser login, peer discovery,
   encrypted on-disk state, and RFB TCP plus packet-preserving UDP media routed
-  through the tailnet
+  through the tailnet, plus native account status and logout controls in Settings
 
 ## Architecture
 

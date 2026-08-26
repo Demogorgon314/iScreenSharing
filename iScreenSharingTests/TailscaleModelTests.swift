@@ -77,6 +77,80 @@ final class TailscaleModelTests: XCTestCase {
         XCTAssertFalse(model.isLinkingAccount)
     }
 
+    func testLogoutClearsAccountState() async throws {
+        let peer = TailscalePeer(
+            id: "node-1",
+            name: "Studio Mac",
+            dnsName: "studio.example.ts.net",
+            addresses: ["100.64.0.10"],
+            isOnline: true
+        )
+        let url = try XCTUnwrap(URL(string: "https://login.tailscale.com/a/example"))
+        let runtime = MockEmbeddedTailscaleRuntime(events: [
+            .state(.running),
+            .peers([peer]),
+            .authenticationURL(url),
+        ])
+        let model = TailscaleModel(runtime: runtime)
+
+        model.start()
+        for _ in 0..<100 where model.authenticationURL == nil {
+            await Task.yield()
+        }
+        await model.logout()
+
+        let logoutCount = await runtime.logoutCount
+        XCTAssertEqual(logoutCount, 1)
+        XCTAssertEqual(model.state, .needsLogin)
+        XCTAssertTrue(model.peers.isEmpty)
+        XCTAssertNil(model.authenticationURL)
+        XCTAssertFalse(model.isLoggingOut)
+        XCTAssertNil(model.logoutErrorMessage)
+    }
+
+    func testLogoutFailureKeepsAccountStateAndShowsSafeError() async {
+        let runtime = MockEmbeddedTailscaleRuntime(
+            events: [.state(.running)],
+            logoutError: TestError()
+        )
+        let model = TailscaleModel(runtime: runtime)
+
+        model.start()
+        for _ in 0..<100 where model.state != .running {
+            await Task.yield()
+        }
+        await model.logout()
+
+        XCTAssertEqual(model.state, .running)
+        XCTAssertEqual(model.logoutErrorMessage, "Couldn’t log out of Tailscale. Try again.")
+        XCTAssertFalse(model.isLoggingOut)
+    }
+
+    func testNeedsLoginStateClearsStaleAccountData() async throws {
+        let peer = TailscalePeer(
+            id: "node-1",
+            name: "Studio Mac",
+            dnsName: "studio.example.ts.net",
+            addresses: ["100.64.0.10"],
+            isOnline: true
+        )
+        let url = try XCTUnwrap(URL(string: "https://login.tailscale.com/a/example"))
+        let runtime = MockEmbeddedTailscaleRuntime(events: [
+            .peers([peer]),
+            .authenticationURL(url),
+            .state(.needsLogin),
+        ])
+        let model = TailscaleModel(runtime: runtime)
+
+        model.start()
+        for _ in 0..<100 where model.state != .needsLogin || !model.peers.isEmpty {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(model.peers.isEmpty)
+        XCTAssertNil(model.authenticationURL)
+    }
+
     func testPeerCreatesTailscaleRoutedEndpoint() throws {
         let peer = TailscalePeer(
             id: "node-1",
@@ -149,16 +223,20 @@ final class TailscaleModelTests: XCTestCase {
 private actor MockEmbeddedTailscaleRuntime: EmbeddedTailscaleRunning {
     private let initialEvents: [EmbeddedTailscaleEvent]
     private let loginError: Error?
+    private let logoutError: Error?
     private var continuation: AsyncStream<EmbeddedTailscaleEvent>.Continuation?
     private(set) var didStart = false
     private(set) var loginCount = 0
+    private(set) var logoutCount = 0
 
     init(
         events: [EmbeddedTailscaleEvent] = [],
-        loginError: Error? = nil
+        loginError: Error? = nil,
+        logoutError: Error? = nil
     ) {
         initialEvents = events
         self.loginError = loginError
+        self.logoutError = logoutError
     }
 
     func events() -> AsyncStream<EmbeddedTailscaleEvent> {
@@ -177,6 +255,11 @@ private actor MockEmbeddedTailscaleRuntime: EmbeddedTailscaleRunning {
     func startLogin() throws {
         loginCount += 1
         if let loginError { throw loginError }
+    }
+
+    func logout() throws {
+        logoutCount += 1
+        if let logoutError { throw logoutError }
     }
 
     func send(_ event: EmbeddedTailscaleEvent) {
