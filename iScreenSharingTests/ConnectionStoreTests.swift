@@ -39,6 +39,29 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(restored.recentConnections, store.recentConnections)
     }
 
+    func testLibraryCollectionsExcludeTailscaleConnections() throws {
+        let direct = try ConnectionEndpoint(host: "192.168.1.10", route: .direct)
+        let tailscale = try ConnectionEndpoint(host: "100.64.0.10", route: .tailscale)
+        let store = ConnectionStore(defaults: defaults)
+
+        store.record(direct, at: Date(timeIntervalSince1970: 100))
+        store.record(tailscale, at: Date(timeIntervalSince1970: 200))
+
+        XCTAssertEqual(store.connections.count, 2)
+        XCTAssertEqual(store.libraryConnections.map(\.endpoint), [direct])
+        XCTAssertEqual(store.libraryRecentConnections.map(\.endpoint), [direct])
+    }
+
+    func testRecognizesOfficialTailscaleAddressRangesAtStartup() {
+        XCTAssertTrue(TailscaleIPAddress.contains("100.64.0.0"))
+        XCTAssertTrue(TailscaleIPAddress.contains("100.127.255.255"))
+        XCTAssertFalse(TailscaleIPAddress.contains("100.128.0.0"))
+        XCTAssertFalse(TailscaleIPAddress.contains("100.115.92.1"))
+        XCTAssertTrue(TailscaleIPAddress.contains("fd7a:115c:a1e0::1"))
+        XCTAssertFalse(TailscaleIPAddress.contains("fd7a:115c:a1e1::1"))
+        XCTAssertFalse(TailscaleIPAddress.contains("deepdreams-mac-mini.tail.example.ts.net"))
+    }
+
     func testPersistsDeviceInfoAndKeepsItWhenConnectionIsRecordedAgain() throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let info = AppleRemoteDeviceInfo(

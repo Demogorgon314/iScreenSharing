@@ -46,6 +46,35 @@ final class TailscaleModelTests: XCTestCase {
         let loginCount = await runtime.loginCount
         XCTAssertEqual(model.state, .failed("Test login failed"))
         XCTAssertEqual(loginCount, 1)
+        XCTAssertFalse(model.isLinkingAccount)
+    }
+
+    func testKeepsLoginPendingUntilAuthenticationURLArrivesAndIgnoresDuplicateClicks() async throws {
+        let runtime = MockEmbeddedTailscaleRuntime()
+        let model = TailscaleModel(runtime: runtime)
+        let url = try XCTUnwrap(URL(string: "https://login.tailscale.com/a/example"))
+
+        model.start()
+        for _ in 0..<100 where await !runtime.didStart {
+            await Task.yield()
+        }
+        model.linkAccount()
+        model.linkAccount()
+        for _ in 0..<100 where await runtime.loginCount == 0 {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(model.isLinkingAccount)
+        let loginCount = await runtime.loginCount
+        XCTAssertEqual(loginCount, 1)
+
+        await runtime.send(.authenticationURL(url))
+        for _ in 0..<100 where model.authenticationURL == nil {
+            await Task.yield()
+        }
+
+        XCTAssertEqual(model.authenticationURL, url)
+        XCTAssertFalse(model.isLinkingAccount)
     }
 
     func testPeerCreatesTailscaleRoutedEndpoint() throws {
@@ -61,6 +90,19 @@ final class TailscaleModelTests: XCTestCase {
 
         XCTAssertEqual(endpoint.host, "100.64.0.10")
         XCTAssertEqual(endpoint.route, .tailscale)
+    }
+
+    func testPeerCreatesRemoteDeviceInfoFromTailscaleDeviceModel() throws {
+        let peer = TailscalePeer(
+            id: "node-1",
+            name: "Studio Mac",
+            dnsName: "studio.example.ts.net",
+            addresses: ["100.64.0.10"],
+            isOnline: true,
+            deviceModel: "Macmini9,1"
+        )
+
+        XCTAssertEqual(peer.deviceInfo?.modelIdentifier, "Macmini9,1")
     }
 }
 
@@ -95,6 +137,10 @@ private actor MockEmbeddedTailscaleRuntime: EmbeddedTailscaleRunning {
     func startLogin() throws {
         loginCount += 1
         if let loginError { throw loginError }
+    }
+
+    func send(_ event: EmbeddedTailscaleEvent) {
+        continuation?.yield(event)
     }
 }
 

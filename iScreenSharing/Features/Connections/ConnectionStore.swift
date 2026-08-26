@@ -1,4 +1,5 @@
 import Combine
+import Darwin
 import Foundation
 
 @MainActor
@@ -11,6 +12,18 @@ final class ConnectionStore: ObservableObject {
     private let storageKey: String
     private let recentStorageKey: String
     private let groupStorageKey: String
+
+    var libraryConnections: [SavedConnection] {
+        connections.filter {
+            $0.endpoint.route == .direct && !TailscaleIPAddress.contains($0.endpoint.host)
+        }
+    }
+
+    var libraryRecentConnections: [SavedConnection] {
+        recentConnections.filter {
+            $0.endpoint.route == .direct && !TailscaleIPAddress.contains($0.endpoint.host)
+        }
+    }
 
     init(
         defaults: UserDefaults = .standard,
@@ -195,6 +208,24 @@ final class ConnectionStore: ObservableObject {
             return []
         }
         return decoded
+    }
+}
+
+enum TailscaleIPAddress {
+    static func contains(_ host: String) -> Bool {
+        var ipv4 = in_addr()
+        if inet_pton(AF_INET, host, &ipv4) == 1 {
+            let address = UInt32(bigEndian: ipv4.s_addr)
+            let isCGNAT = address & 0xffc0_0000 == 0x6440_0000
+            let isChromeOSVM = address & 0xffff_fe00 == 0x6473_5c00
+            return isCGNAT && !isChromeOSVM
+        }
+
+        var ipv6 = in6_addr()
+        guard inet_pton(AF_INET6, host, &ipv6) == 1 else { return false }
+        return withUnsafeBytes(of: &ipv6) { bytes in
+            bytes.starts(with: [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0])
+        }
     }
 }
 

@@ -36,7 +36,16 @@ struct ConnectionsLibraryView: View {
     }
 
     private var filteredConnections: [SavedConnection] {
-        let connections = selectedGroup.map(store.connections(in:)) ?? store.connections
+        let tailscaleAddresses = Set(tailscale.peers.flatMap(\.addresses))
+        let connections = selectedGroup
+            .map(store.connections(in:))
+            .map { connections in
+                connections.filter {
+                    $0.endpoint.route == .direct && !tailscaleAddresses.contains($0.endpoint.host)
+                }
+            }
+            ?? store.libraryConnections
+                .filter { !tailscaleAddresses.contains($0.endpoint.host) }
         guard !searchText.isEmpty else { return connections }
         return connections.filter {
             $0.name.localizedStandardContains(searchText)
@@ -299,7 +308,13 @@ struct ConnectionsLibraryView: View {
             )
         case .running:
             List(filteredTailscalePeers) { peer in
-                TailscalePeerRow(peer: peer)
+                TailscalePeerRow(
+                    peer: peer,
+                    deviceInfo: peer.endpoint
+                        .flatMap { store.connection(for: $0) }?
+                        .deviceInfo
+                        ?? peer.deviceInfo
+                )
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
                         connect(to: peer)
@@ -346,9 +361,18 @@ struct ConnectionsLibraryView: View {
                     .frame(maxWidth: 620)
             }
 
-            Button("Link Account") { openTailscaleLogin() }
+            Button { openTailscaleLogin() } label: {
+                HStack(spacing: 8) {
+                    if tailscale.isLinkingAccount {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(tailscale.isLinkingAccount ? "Preparing Login…" : "Link Account")
+                }
+            }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(tailscale.isLinkingAccount)
         }
         .padding(36)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -511,11 +535,11 @@ struct ConnectionsLibraryView: View {
 
 private struct TailscalePeerRow: View {
     let peer: TailscalePeer
+    let deviceInfo: AppleRemoteDeviceInfo?
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "desktopcomputer")
-                .font(.title2)
+            RemoteDeviceIcon(deviceInfo: deviceInfo)
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 2) {

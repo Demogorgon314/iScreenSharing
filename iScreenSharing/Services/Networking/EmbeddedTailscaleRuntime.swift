@@ -1,5 +1,14 @@
 import Foundation
+import OSLog
 import TailscaleKit
+
+private struct EmbeddedTailscaleLogSink: LogSink {
+    let logFileHandle: Int32? = nil
+
+    func log(_ message: String) {
+        NSLog("[EmbeddedTailscale] %@", message)
+    }
+}
 
 enum EmbeddedTailscaleState: Equatable, Sendable {
     case starting
@@ -16,6 +25,23 @@ struct TailscalePeer: Equatable, Hashable, Identifiable, Sendable {
     let dnsName: String
     let addresses: [String]
     let isOnline: Bool
+    let deviceModel: String?
+
+    init(
+        id: String,
+        name: String,
+        dnsName: String,
+        addresses: [String],
+        isOnline: Bool,
+        deviceModel: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.dnsName = dnsName
+        self.addresses = addresses
+        self.isOnline = isOnline
+        self.deviceModel = deviceModel
+    }
 
     var preferredAddress: String? {
         addresses.first(where: { !$0.contains(":") }) ?? addresses.first
@@ -24,6 +50,14 @@ struct TailscalePeer: Equatable, Hashable, Identifiable, Sendable {
     var endpoint: ConnectionEndpoint? {
         guard let preferredAddress else { return nil }
         return try? ConnectionEndpoint(host: preferredAddress, route: .tailscale)
+    }
+
+    var deviceInfo: AppleRemoteDeviceInfo? {
+        guard let deviceModel,
+              !deviceModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return AppleRemoteDeviceInfo(modelIdentifier: deviceModel)
     }
 }
 
@@ -48,11 +82,17 @@ protocol TailscaleNodeProviding: Actor {
 actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding {
     static let shared = EmbeddedTailscaleRuntime()
 
+    private static let logger = Logger(
+        subsystem: "com.wangkai.iShareScreen",
+        category: "EmbeddedTailscale"
+    )
+
     private let keyStore: any TailscaleStateKeyStoring
     private var node: TailscaleNode?
     private var localAPIClient: LocalAPIClient?
     private var busConsumer: TailscaleBusConsumer?
     private var messageProcessor: MessageProcessor?
+    private var peerNodesByID = [Tailcfg.NodeID: Tailcfg.Node]()
     private var continuations = [UUID: AsyncStream<EmbeddedTailscaleEvent>.Continuation]()
 
     init(keyStore: any TailscaleStateKeyStoring = KeychainTailscaleStateKeyStore()) {
@@ -88,13 +128,13 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
         let node = try await Task.detached {
             try TailscaleNode(config: configuration, logger: nil)
         }.value
-        let client = LocalAPIClient(localNode: node, logger: nil)
+        let client = LocalAPIClient(localNode: node, logger: EmbeddedTailscaleLogSink())
         let consumer = TailscaleBusConsumer(runtime: self)
         let mask: Ipn.NotifyWatchOpt = [
             .initialState,
             .netmap,
-            .rateLimitNetmaps,
             .noPrivateKeys,
+            .peerChanges,
         ]
         let processor = try await client.watchIPNBus(mask: mask, consumer: consumer)
 
@@ -128,10 +168,35 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
 
     fileprivate func consume(_ notify: Ipn.Notify) {
         if let state = notify.State {
+            Self.logger.info("IPN state notification: \(String(describing: state), privacy: .public)")
             publish(.state(Self.state(from: state)))
         }
         if let netMap = notify.NetMap {
-            publish(.peers(Self.peers(from: netMap.Peers ?? [])))
+            Self.logger.info(
+                "IPN netmap notification contains \(netMap.Peers?.count ?? 0, privacy: .public) peer(s)"
+            )
+            peerNodesByID = Dictionary(
+                uniqueKeysWithValues: (netMap.Peers ?? []).map { ($0.ID, $0) }
+            )
+            publishCurrentPeers()
+        }
+        if let changed = notify.PeersChanged, !changed.isEmpty {
+            for peer in changed {
+                peerNodesByID[peer.ID] = peer
+            }
+            Self.logger.info(
+                "IPN peer update contains \(changed.count, privacy: .public) changed peer(s)"
+            )
+            publishCurrentPeers()
+        }
+        if let removed = notify.PeersRemoved, !removed.isEmpty {
+            for peerID in removed {
+                peerNodesByID[peerID] = nil
+            }
+            Self.logger.info(
+                "IPN peer update contains \(removed.count, privacy: .public) removed peer(s)"
+            )
+            publishCurrentPeers()
         }
         if let value = notify.BrowseToURL, let url = URL(string: value) {
             publish(.authenticationURL(url))
@@ -142,11 +207,15 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
     }
 
     fileprivate func consume(_ error: Error) {
+        Self.logger.error("IPN bus failed: \(error.localizedDescription, privacy: .public)")
         publish(.state(.failed(error.localizedDescription)))
     }
 
     private func publishStatus(from client: LocalAPIClient) async throws {
         let status = try await client.backendStatus()
+        Self.logger.info(
+            "LocalAPI status is \(status.BackendState, privacy: .public) with \(status.Peer?.count ?? 0, privacy: .public) peer(s)"
+        )
         publish(.state(Self.state(fromBackendState: status.BackendState)))
         let peerStatuses = status.Peer.map { Array($0.values) } ?? []
         publish(.peers(Self.peers(from: peerStatuses)))
@@ -159,6 +228,10 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
         for continuation in continuations.values {
             continuation.yield(event)
         }
+    }
+
+    private func publishCurrentPeers() {
+        publish(.peers(Self.peers(from: Array(peerNodesByID.values))))
     }
 
     private func removeContinuation(_ id: UUID) {
@@ -223,7 +296,8 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
                 name: $0.Hostinfo.Hostname ?? $0.ComputedName,
                 dnsName: $0.Name.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
                 addresses: ($0.Addresses ?? []).map(addressWithoutPrefix),
-                isOnline: $0.Online ?? false
+                isOnline: $0.Online ?? false,
+                deviceModel: $0.Hostinfo.DeviceModel
             )
         }
         .filter { !$0.addresses.isEmpty }
@@ -237,7 +311,8 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
                 name: $0.HostName.isEmpty ? $0.DNSName : $0.HostName,
                 dnsName: $0.DNSName.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
                 addresses: $0.TailscaleIPs ?? [],
-                isOnline: $0.Online
+                isOnline: $0.Online,
+                deviceModel: nil
             )
         }
         .filter { !$0.addresses.isEmpty }

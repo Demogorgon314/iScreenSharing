@@ -104,14 +104,14 @@ struct ScreenSharingCommands: Commands {
             }
             .keyboardShortcut("o", modifiers: .command)
             Menu("Open Recent") {
-                ForEach(store.recentConnections) { connection in
+                ForEach(store.libraryRecentConnections) { connection in
                     Button(connection.name) {
                         openWindow(id: "authentication", value: connection.endpoint)
                     }
                 }
                 Divider()
                 Button("Clear Menu") { store.clearRecentConnections() }
-                    .disabled(store.recentConnections.isEmpty)
+                    .disabled(store.libraryRecentConnections.isEmpty)
             }
             Divider()
             Button("Close") {

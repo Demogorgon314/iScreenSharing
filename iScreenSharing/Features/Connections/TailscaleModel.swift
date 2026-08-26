@@ -6,6 +6,7 @@ final class TailscaleModel: ObservableObject {
     @Published private(set) var state: EmbeddedTailscaleState = .starting
     @Published private(set) var peers = [TailscalePeer]()
     @Published private(set) var authenticationURL: URL?
+    @Published private(set) var isLinkingAccount = false
 
     private let runtime: any EmbeddedTailscaleRunning
     private var observationTask: Task<Void, Never>?
@@ -36,12 +37,14 @@ final class TailscaleModel: ObservableObject {
     }
 
     func linkAccount() {
-        state = .starting
+        guard !isLinkingAccount else { return }
+        isLinkingAccount = true
         let runtime = runtime
         Task { [weak self] in
             do {
                 try await runtime.startLogin()
             } catch {
+                self?.isLinkingAccount = false
                 self?.state = .failed(error.localizedDescription)
             }
         }
@@ -57,10 +60,14 @@ final class TailscaleModel: ObservableObject {
         switch event {
         case .state(let state):
             self.state = state
+            if state == .running || state == .needsMachineApproval {
+                isLinkingAccount = false
+            }
         case .peers(let peers):
             self.peers = peers
         case .authenticationURL(let url):
             authenticationURL = url
+            isLinkingAccount = false
         }
     }
 }
