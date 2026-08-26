@@ -42,6 +42,7 @@ protocol EmbeddedTailscaleRunning: Actor {
 protocol TailscaleNodeProviding: Actor {
     func start() async throws
     func tailscaleHandle() async throws -> TailscaleHandle
+    func tailscaleLocalAddresses() async throws -> [String]
 }
 
 actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding {
@@ -117,6 +118,12 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
             throw EmbeddedTailscaleRuntimeError.notStarted
         }
         return handle
+    }
+
+    func tailscaleLocalAddresses() async throws -> [String] {
+        guard let node else { throw EmbeddedTailscaleRuntimeError.notStarted }
+        let addresses = try await node.addrs()
+        return [addresses.ip4, addresses.ip6].compactMap { $0 }
     }
 
     fileprivate func consume(_ notify: Ipn.Notify) {

@@ -10,7 +10,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var recordLayer: AppleEncryptedRecordLayer?
     private(set) var rekeyGeneration: UInt32?
     private(set) var mediaNegotiation: AppleMediaNegotiationResult?
-    private(set) var mediaReceiver: AppleMediaReceiver?
+    private(set) var mediaReceiver: (any AppleMediaReceiving)?
     private(set) var videoStreams = [AppleVideoStream]()
     var videoStream: AppleVideoStream? {
         videoStreams.first(where: { $0.displayIndex == 0 }) ?? videoStreams.first
@@ -125,7 +125,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.mediaNegotiation = mediaNegotiation
     }
 
-    func install(mediaReceiver: AppleMediaReceiver) {
+    func install(mediaReceiver: any AppleMediaReceiving) {
         self.mediaReceiver?.close()
         self.mediaReceiver = mediaReceiver
     }
