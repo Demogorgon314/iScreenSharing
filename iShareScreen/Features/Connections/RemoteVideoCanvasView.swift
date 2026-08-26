@@ -372,6 +372,10 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    // The activation click is also remote input. If AppKit consumes it only to
+    // activate the window, remote control incorrectly requires a second click.
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: remoteCursor)
     }

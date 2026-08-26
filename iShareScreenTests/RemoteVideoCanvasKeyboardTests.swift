@@ -5,6 +5,34 @@ import XCTest
 
 @MainActor
 final class RemoteVideoCanvasKeyboardTests: XCTestCase {
+    func testRemoteCanvasAcceptsActivationClick() throws {
+        let view = RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 1_920, height: 1_080, tileCount: 4),
+            frames: AppleVideoFrameStore(),
+            input: nil,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 100, y: 100),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        XCTAssertTrue(view.acceptsFirstMouse(for: event))
+    }
+
     func testRemoteCanvasConsumesCommandKeyEquivalentBeforeApplicationMenu() throws {
         let canvas = AppleCanvas(width: 1_920, height: 1_080, tileCount: 4)
         let input = AppleInputController(
