@@ -33,8 +33,8 @@ final class AppleFileTransferHistory: ObservableObject {
     var preventsNewDrop: Bool {
         entries.contains {
             switch $0.state {
-            case .sending, .completing: true
-            case .waitingForRemote, .sent, .failed, .cancelled: false
+            case .waitingForRemote, .sending, .completing: true
+            case .sent, .failed, .cancelled: false
             }
         }
     }
@@ -159,14 +159,15 @@ actor AppleFileTransferService {
     typealias Send = @Sendable ([Data]) async throws -> Void
 
     private struct PendingDrop {
+        let id: UUID
         let sessionID: UInt32
-        let historyID: UUID
         let fileURL: URL
         let startedAtNanoseconds: UInt64
         let accessedSecurityScopedResource: Bool
     }
 
     private struct ActiveTransfer {
+        let dropID: UUID
         let sessionID: UInt32
         let historyID: UUID
         let fileURL: URL
@@ -232,11 +233,11 @@ actor AppleFileTransferService {
         var sessionID = makeSessionID() & 0x7fff_ffff
         if sessionID == 0 { sessionID = 1 }
         let accessed = fileURL.startAccessingSecurityScopedResource()
-        let historyID = UUID()
+        let dropID = UUID()
         let supersededDrop = pendingDrop
         let newDrop = PendingDrop(
+            id: dropID,
             sessionID: sessionID,
-            historyID: historyID,
             fileURL: fileURL,
             startedAtNanoseconds: uptimeNanoseconds(),
             accessedSecurityScopedResource: accessed
@@ -244,19 +245,11 @@ actor AppleFileTransferService {
         pendingDrop = newDrop
         if let supersededDrop {
             stopAccessing(supersededDrop)
-            await history.update(supersededDrop.historyID, state: .cancelled)
         }
-        await history.begin(
-            identifier: historyID,
-            fileURL: fileURL,
-            remoteName: remoteName
-        )
         do {
-            // Calls to MainActor above can re-enter this actor. A newer native-style
-            // drag supersedes this one, so an obsolete begin must not send or return
-            // a session identifier that no longer owns the pending drop.
-            guard ownsDrop(historyID: historyID) else {
-                await history.update(historyID, state: .cancelled)
+            // The ordered writer can re-enter this actor. A newer native-style drag
+            // supersedes this one, so an obsolete begin must not return its SID.
+            guard ownsDrop(dropID: dropID) else {
                 throw CancellationError()
             }
             let message = try AppleFileTransferMessage.beginDrop(
@@ -264,13 +257,12 @@ actor AppleFileTransferService {
                 sessionID: sessionID
             )
             try await send([message])
-            guard ownsDrop(historyID: historyID) else {
-                await history.update(historyID, state: .cancelled)
+            guard ownsDrop(dropID: dropID) else {
                 throw CancellationError()
             }
             return sessionID
         } catch {
-            await failPending(historyID: historyID, error)
+            failPending(dropID: dropID)
             throw error
         }
     }
@@ -285,7 +277,6 @@ actor AppleFileTransferService {
             // Cancellation is best effort on the wire. The local pending state and
             // security-scoped resource must still be released after disconnects.
         }
-        await history.update(pendingDrop.historyID, state: .cancelled)
         stopAccessing(pendingDrop)
     }
 
@@ -319,10 +310,6 @@ actor AppleFileTransferService {
         transferTask?.cancel()
         transferTask = nil
         if let pendingDrop {
-            await history.update(
-                pendingDrop.historyID,
-                state: .failed(AppleFileTransferError.closed.localizedDescription)
-            )
             stopAccessing(pendingDrop)
             self.pendingDrop = nil
         }
@@ -340,21 +327,35 @@ actor AppleFileTransferService {
         guard let pendingDrop, pendingDrop.sessionID == request.sessionID else { return }
         let age = uptimeNanoseconds() &- pendingDrop.startedAtNanoseconds
         guard age <= Self.dropRequestLifetimeNanoseconds else {
-            await failPending(
-                historyID: pendingDrop.historyID,
-                AppleFileTransferError.requestExpired
-            )
+            failPending(dropID: pendingDrop.id)
             return
         }
         self.pendingDrop = nil
+        let historyID = UUID()
         activeTransfer = ActiveTransfer(
+            dropID: pendingDrop.id,
             sessionID: pendingDrop.sessionID,
-            historyID: pendingDrop.historyID,
+            historyID: historyID,
             fileURL: pendingDrop.fileURL,
             accessedSecurityScopedResource: pendingDrop.accessedSecurityScopedResource,
             totalBytes: nil
         )
-        await history.update(pendingDrop.historyID, state: .sending)
+        await history.begin(
+            identifier: historyID,
+            fileURL: pendingDrop.fileURL,
+            remoteName: remoteName
+        )
+        guard activeTransfer?.dropID == pendingDrop.id else {
+            if isClosed {
+                await history.update(
+                    historyID,
+                    state: .failed(AppleFileTransferError.closed.localizedDescription)
+                )
+            }
+            return
+        }
+        await history.update(historyID, state: .sending)
+        guard activeTransfer?.dropID == pendingDrop.id else { return }
         transferTask = Task { [weak self] in
             await self?.runTransfer(request: request)
         }
@@ -482,17 +483,13 @@ actor AppleFileTransferService {
         stopAccessing(activeTransfer)
     }
 
-    private func ownsDrop(historyID: UUID) -> Bool {
-        pendingDrop?.historyID == historyID || activeTransfer?.historyID == historyID
+    private func ownsDrop(dropID: UUID) -> Bool {
+        pendingDrop?.id == dropID || activeTransfer?.dropID == dropID
     }
 
-    private func failPending(historyID: UUID, _ error: Error) async {
-        guard let pendingDrop, pendingDrop.historyID == historyID else { return }
+    private func failPending(dropID: UUID) {
+        guard let pendingDrop, pendingDrop.id == dropID else { return }
         self.pendingDrop = nil
-        await history.update(
-            pendingDrop.historyID,
-            state: .failed(error.localizedDescription)
-        )
         stopAccessing(pendingDrop)
     }
 

@@ -10,6 +10,7 @@ final class AppleFileTransferServiceTests: XCTestCase {
             fileURL: URL(fileURLWithPath: "/tmp/active.bin"),
             remoteName: "Remote Mac"
         )
+        XCTAssertTrue(history.preventsNewDrop)
         let completedID = history.begin(
             fileURL: URL(fileURLWithPath: "/tmp/completed.bin"),
             remoteName: "Remote Mac"
@@ -77,6 +78,28 @@ final class AppleFileTransferServiceTests: XCTestCase {
         XCTAssertTrue(messages.contains { $0.count >= 10 && $0.first == 0x22 })
     }
 
+    func testPendingDropDoesNotAppearInHistoryUntilRemoteAcceptsIt() async throws {
+        let fileURL = try makeTemporaryFile(contents: Data([0x58]))
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let history = AppleFileTransferHistory()
+        let service = AppleFileTransferService(
+            remoteName: "Remote Mac",
+            history: history,
+            sender: PausingFileCopySender(),
+            makeSessionID: { 0x1234 },
+            send: { _ in }
+        )
+
+        _ = try await service.beginDrop(fileURL: fileURL)
+        XCTAssertTrue(history.entries.isEmpty)
+
+        _ = await service.receive(type30Request())
+        XCTAssertEqual(history.entries.count, 1)
+        XCTAssertEqual(history.entries.first?.fileURL, fileURL)
+        XCTAssertEqual(history.entries.first?.state, .sending)
+        await service.close()
+    }
+
     func testNewDropSupersedesPendingWithoutSendingCancel() async throws {
         let firstURL = try makeTemporaryFile(contents: Data([0x41]))
         let secondURL = try makeTemporaryFile(contents: Data([0x42]))
@@ -100,8 +123,7 @@ final class AppleFileTransferServiceTests: XCTestCase {
 
         XCTAssertEqual(firstSessionID, 0x1234)
         XCTAssertEqual(secondSessionID, 0x5678)
-        XCTAssertEqual(history.entries.map(\.fileURL), [secondURL, firstURL])
-        XCTAssertEqual(history.entries.map(\.state), [.waitingForRemote, .cancelled])
+        XCTAssertTrue(history.entries.isEmpty)
         XCTAssertFalse(history.preventsNewDrop)
         let messages = await recorder.messages
         XCTAssertEqual(messages, [
@@ -110,7 +132,7 @@ final class AppleFileTransferServiceTests: XCTestCase {
         ])
 
         _ = await service.receive(type30Request(sessionID: 0x1234))
-        XCTAssertEqual(history.entries.map(\.state), [.waitingForRemote, .cancelled])
+        XCTAssertTrue(history.entries.isEmpty)
     }
 
     func testSupersedingAnInFlightBeginDoesNotReturnItsObsoleteSessionID() async throws {
@@ -147,7 +169,7 @@ final class AppleFileTransferServiceTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
         XCTAssertEqual(secondSessionID, 0x5678)
-        XCTAssertEqual(history.entries.map(\.state), [.waitingForRemote, .cancelled])
+        XCTAssertTrue(history.entries.isEmpty)
         let messages = await recorder.messages
         XCTAssertEqual(messages.count, 2)
         XCTAssertTrue(messages.allSatisfy { $0.first == 0x20 && $0.count > 16 })
@@ -198,7 +220,7 @@ final class AppleFileTransferServiceTests: XCTestCase {
         let sessionID = try await service.beginDrop(fileURL: fileURL)
         await service.cancelDrop(sessionID: sessionID)
 
-        XCTAssertEqual(history.entries.first?.state, .cancelled)
+        XCTAssertTrue(history.entries.isEmpty)
         let canAcceptDrop = await service.canAcceptDrop
         XCTAssertTrue(canAcceptDrop)
         let messages = await recorder.messages
@@ -225,18 +247,12 @@ final class AppleFileTransferServiceTests: XCTestCase {
         _ = try await service.beginDrop(fileURL: fileURL)
         let receivedMismatch = await service.receive(type30Request(sessionID: 0x4321))
         XCTAssertTrue(receivedMismatch)
-        XCTAssertEqual(history.entries.first?.state, .waitingForRemote)
+        XCTAssertTrue(history.entries.isEmpty)
 
         uptime.value = AppleFileTransferService.dropRequestLifetimeNanoseconds + 1
         let receivedExpiredRequest = await service.receive(type30Request())
         XCTAssertTrue(receivedExpiredRequest)
-        await waitUntil {
-            if case .failed = history.entries.first?.state { return true }
-            return false
-        }
-        guard case .failed = history.entries.first?.state else {
-            return XCTFail("Expected an expired transfer to fail")
-        }
+        XCTAssertTrue(history.entries.isEmpty)
     }
 
     func testRemoteFailureBecomesTerminalOnlyAfterSenderFinishes() async throws {
