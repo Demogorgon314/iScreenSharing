@@ -1,0 +1,4 @@
+[submodule "Dependencies/libtailscale"]
+	path = Dependencies/libtailscale
+	url = https://github.com/Demogorgon314/libtailscale.git
+	branch = feature/packet-udp-encrypted-state
