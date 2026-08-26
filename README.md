@@ -1,6 +1,6 @@
-# iShareScreenSwift
+# iScreenSharing
 
-iShareScreenSwift is a native macOS client for Apple's proprietary Screen
+iScreenSharing is a native macOS client for Apple's proprietary Screen
 Sharing high-performance mode. It targets macOS 15 and implements the Apple RFB
 control channel together with the encrypted HEVC, audio, feedback, input, and
 clipboard protocols used by Screen Sharing.app.
@@ -121,13 +121,13 @@ clipboard, display-link, and decoder adapters.
 ## Build and test
 
 ```sh
-xcodebuild -project iShareScreen.xcodeproj \
-  -scheme iShareScreen \
+xcodebuild -project iScreenSharing.xcodeproj \
+  -scheme iScreenSharing \
   -destination 'platform=macOS' \
   build
 
-xcodebuild -project iShareScreen.xcodeproj \
-  -scheme iShareScreen \
+xcodebuild -project iScreenSharing.xcodeproj \
+  -scheme iScreenSharing \
   -destination 'platform=macOS' \
   test
 ```
@@ -135,11 +135,11 @@ xcodebuild -project iShareScreen.xcodeproj \
 Run one test class while iterating:
 
 ```sh
-xcodebuild -project iShareScreen.xcodeproj \
-  -scheme iShareScreen \
+xcodebuild -project iScreenSharing.xcodeproj \
+  -scheme iScreenSharing \
   -destination 'platform=macOS' \
   test \
-  -only-testing:iShareScreenTests/AppleVideoRateControlTests
+  -only-testing:iScreenSharingTests/AppleVideoRateControlTests
 ```
 
 The real-host authentication integration test is opt-in. Set
@@ -165,7 +165,7 @@ The following environment variables are intended for local development:
   Video Performance overlay without requiring this environment flag
 - The persisted **Metrics Level** menu offers Compact (the default), Standard,
   and Detailed views. Compact uses Moonlight's Rx/Decode/Render layout while
-  retaining iShareScreen's actual semantics: bandwidth is this stream's
+  retaining iScreenSharing's actual semantics: bandwidth is this stream's
   delivered video UDP traffic and loss is the primary RTP receiver-report
   loss. Peer RTT and host encode time are omitted because the client cannot
   measure them reliably
