@@ -40,5 +40,10 @@ struct iScreenSharingApp: App {
         .defaultSize(width: 440, height: 315)
         .windowResizability(.contentSize)
         .windowToolbarStyle(.unifiedCompact)
+
+        Settings {
+            SettingsView(tailscale: tailscale, sessions: sessions)
+        }
+        .windowResizability(.contentSize)
     }
 }

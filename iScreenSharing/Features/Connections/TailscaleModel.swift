@@ -7,6 +7,8 @@ final class TailscaleModel: ObservableObject {
     @Published private(set) var peers = [TailscalePeer]()
     @Published private(set) var authenticationURL: URL?
     @Published private(set) var isLinkingAccount = false
+    @Published private(set) var isLoggingOut = false
+    @Published private(set) var logoutErrorMessage: String?
 
     private let runtime: any EmbeddedTailscaleRunning
     private var observationTask: Task<Void, Never>?
@@ -38,6 +40,7 @@ final class TailscaleModel: ObservableObject {
 
     func linkAccount() {
         guard !isLinkingAccount else { return }
+        logoutErrorMessage = nil
         isLinkingAccount = true
         let runtime = runtime
         Task { [weak self] in
@@ -56,12 +59,32 @@ final class TailscaleModel: ObservableObject {
         start()
     }
 
+    func logout() async {
+        guard !isLoggingOut else { return }
+        isLoggingOut = true
+        logoutErrorMessage = nil
+        defer { isLoggingOut = false }
+
+        do {
+            try await runtime.logout()
+            authenticationURL = nil
+            peers = []
+            state = .needsLogin
+        } catch {
+            logoutErrorMessage = "Couldn’t log out of Tailscale. Try again."
+        }
+    }
+
     private func apply(_ event: EmbeddedTailscaleEvent) {
         switch event {
         case .state(let state):
             self.state = state
             if state == .running || state == .needsMachineApproval {
                 isLinkingAccount = false
+            }
+            if state == .needsLogin {
+                peers = []
+                authenticationURL = nil
             }
         case .peers(let peers):
             self.peers = peers

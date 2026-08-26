@@ -17,5 +17,15 @@ final class SessionManager: ObservableObject {
     func disconnect(_ endpoint: ConnectionEndpoint) {
         sessions.removeValue(forKey: endpoint)?.close()
     }
-}
 
+    var tailscaleSessionCount: Int {
+        sessions.keys.count { $0.route == .tailscale }
+    }
+
+    func disconnectTailscaleSessions() {
+        let endpoints = sessions.keys.filter { $0.route == .tailscale }
+        for endpoint in endpoints {
+            disconnect(endpoint)
+        }
+    }
+}
