@@ -75,6 +75,38 @@ final class ConnectionStore: ObservableObject {
         connections.first { $0.endpoint == endpoint }
     }
 
+    func tailscaleConfiguration(
+        for endpoint: ConnectionEndpoint,
+        name: String,
+        deviceInfo: AppleRemoteDeviceInfo?
+    ) -> SavedConnection {
+        if let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
+            var didChange = false
+            let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty, connections[index].name != name {
+                connections[index].name = name
+                didChange = true
+            }
+            if connections[index].deviceInfo == nil, let deviceInfo {
+                connections[index].deviceInfo = deviceInfo
+                didChange = true
+            }
+            if didChange { persist() }
+            return connections[index]
+        }
+
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let connection = SavedConnection(
+            endpoint: endpoint,
+            name: name.isEmpty ? endpoint.displayName : name,
+            deviceInfo: deviceInfo
+        )
+        connections.append(connection)
+        connections.sort { $0.lastConnectedAt > $1.lastConnectedAt }
+        persist()
+        return connection
+    }
+
     func update(
         _ connection: SavedConnection,
         name: String,

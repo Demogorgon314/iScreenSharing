@@ -310,10 +310,9 @@ struct ConnectionsLibraryView: View {
             List(filteredTailscalePeers) { peer in
                 TailscalePeerRow(
                     peer: peer,
-                    deviceInfo: peer.endpoint
-                        .flatMap { store.connection(for: $0) }?
-                        .deviceInfo
-                        ?? peer.deviceInfo
+                    deviceInfo: deviceInfo(for: peer),
+                    onConnect: { connect(to: peer) },
+                    onEdit: { edit(peer) }
                 )
                     .contentShape(Rectangle())
                     .onTapGesture(count: 2) {
@@ -321,6 +320,8 @@ struct ConnectionsLibraryView: View {
                     }
                     .contextMenu {
                         Button("Connect") { connect(to: peer) }
+                            .disabled(peer.endpoint == nil)
+                        Button("Edit") { edit(peer) }
                             .disabled(peer.endpoint == nil)
                     }
             }
@@ -390,6 +391,22 @@ struct ConnectionsLibraryView: View {
     private func connect(to peer: TailscalePeer) {
         guard let endpoint = peer.endpoint else { return }
         openWindow(id: "authentication", value: endpoint)
+    }
+
+    private func edit(_ peer: TailscalePeer) {
+        guard let endpoint = peer.endpoint else { return }
+        editingConnection = store.tailscaleConfiguration(
+            for: endpoint,
+            name: peer.name,
+            deviceInfo: deviceInfo(for: peer)
+        )
+    }
+
+    private func deviceInfo(for peer: TailscalePeer) -> AppleRemoteDeviceInfo? {
+        peer.endpoint
+            .flatMap { store.connection(for: $0) }?
+            .deviceInfo
+            ?? peer.deviceInfo
     }
 
     private var connectionList: some View {
@@ -536,11 +553,23 @@ struct ConnectionsLibraryView: View {
 private struct TailscalePeerRow: View {
     let peer: TailscalePeer
     let deviceInfo: AppleRemoteDeviceInfo?
+    let onConnect: () -> Void
+    let onEdit: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 14) {
             RemoteDeviceIcon(deviceInfo: deviceInfo)
                 .frame(width: 32)
+                .overlay(alignment: .bottomTrailing) {
+                    Circle()
+                        .fill(peer.isOnline ? Color.green : Color.secondary)
+                        .frame(width: 9, height: 9)
+                        .overlay {
+                            Circle()
+                                .stroke(.background, lineWidth: 2)
+                        }
+                }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(peer.name)
@@ -552,11 +581,20 @@ private struct TailscalePeerRow: View {
 
             Spacer()
 
-            Text(peer.isOnline ? "Online" : "Offline")
-                .font(.caption)
-                .foregroundStyle(peer.isOnline ? .green : .secondary)
+            if isHovered {
+                Button("Connect", action: onConnect)
+                    .disabled(peer.endpoint == nil)
+            }
+            Button(action: onEdit) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(peer.endpoint == nil)
+            .help("Info")
         }
         .padding(.vertical, 7)
+        .onHover { isHovered = $0 }
     }
 }
 

@@ -62,6 +62,32 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertFalse(TailscaleIPAddress.contains("deepdreams-mac-mini.tail.example.ts.net"))
     }
 
+    func testCreatesTailscaleConfigurationWithoutAddingRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint(host: "100.64.0.10", route: .tailscale)
+        let info = AppleRemoteDeviceInfo(modelIdentifier: "Macmini9,1")
+        let store = ConnectionStore(defaults: defaults)
+
+        let configuration = store.tailscaleConfiguration(
+            for: endpoint,
+            name: "Studio Mac",
+            deviceInfo: info
+        )
+        let existingConfiguration = store.tailscaleConfiguration(
+            for: endpoint,
+            name: "Renamed by Tailscale",
+            deviceInfo: nil
+        )
+
+        XCTAssertEqual(configuration.name, "Studio Mac")
+        XCTAssertEqual(configuration.deviceInfo, info)
+        XCTAssertEqual(existingConfiguration.id, configuration.id)
+        XCTAssertEqual(existingConfiguration.name, "Renamed by Tailscale")
+        XCTAssertEqual(store.connections.count, 1)
+        XCTAssertTrue(store.libraryConnections.isEmpty)
+        XCTAssertTrue(store.recentConnections.isEmpty)
+        XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: endpoint), existingConfiguration)
+    }
+
     func testPersistsDeviceInfoAndKeepsItWhenConnectionIsRecordedAgain() throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let info = AppleRemoteDeviceInfo(
