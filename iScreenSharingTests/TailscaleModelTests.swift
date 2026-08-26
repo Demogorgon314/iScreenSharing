@@ -218,6 +218,54 @@ final class TailscaleModelTests: XCTestCase {
 
         XCTAssertEqual(peer.softwareDescription, "Linux")
     }
+
+    func testVideoNetworkPathRequiresAnActivePeerAndPrioritizesCurrentRoute() {
+        XCTAssertEqual(
+            EmbeddedTailscaleRuntime.videoNetworkPath(
+                isActive: false,
+                currentAddress: "192.0.2.1:1234",
+                peerRelay: "peer-relay",
+                relay: "7"
+            ),
+            .tailscaleUnknown
+        )
+        XCTAssertEqual(
+            EmbeddedTailscaleRuntime.videoNetworkPath(
+                isActive: true,
+                currentAddress: "192.0.2.1:1234",
+                peerRelay: "peer-relay",
+                relay: "7"
+            ),
+            .tailscaleDirect
+        )
+        XCTAssertEqual(
+            EmbeddedTailscaleRuntime.videoNetworkPath(
+                isActive: true,
+                currentAddress: "  ",
+                peerRelay: "peer-relay",
+                relay: "7"
+            ),
+            .tailscalePeerRelay
+        )
+        XCTAssertEqual(
+            EmbeddedTailscaleRuntime.videoNetworkPath(
+                isActive: true,
+                currentAddress: nil,
+                peerRelay: "",
+                relay: "7"
+            ),
+            .tailscaleDERP
+        )
+        XCTAssertEqual(
+            EmbeddedTailscaleRuntime.videoNetworkPath(
+                isActive: true,
+                currentAddress: nil,
+                peerRelay: nil,
+                relay: "\n"
+            ),
+            .tailscaleUnknown
+        )
+    }
 }
 
 private actor MockEmbeddedTailscaleRuntime: EmbeddedTailscaleRunning {

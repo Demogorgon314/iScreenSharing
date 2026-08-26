@@ -122,6 +122,7 @@ protocol TailscaleNodeProviding: Actor {
     func start() async throws
     func tailscaleHandle() async throws -> TailscaleHandle
     func tailscaleLocalAddresses() async throws -> [String]
+    func tailscaleVideoNetworkPath(to remoteHost: String) async -> AppleVideoNetworkPath?
 }
 
 actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding {
@@ -219,6 +220,35 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
         guard let node else { throw EmbeddedTailscaleRuntimeError.notStarted }
         let addresses = try await node.addrs()
         return [addresses.ip4, addresses.ip6].compactMap { $0 }
+    }
+
+    func tailscaleVideoNetworkPath(to remoteHost: String) async -> AppleVideoNetworkPath? {
+        guard let localAPIClient,
+              let status = try? await localAPIClient.backendStatus(),
+              let peer = status.Peer?.values.first(where: {
+                  ($0.TailscaleIPs ?? []).contains(remoteHost)
+              }) else {
+            return nil
+        }
+        return Self.videoNetworkPath(
+            isActive: peer.Active,
+            currentAddress: peer.CurAddr,
+            peerRelay: peer.PeerRelay,
+            relay: peer.Relay
+        )
+    }
+
+    static func videoNetworkPath(
+        isActive: Bool?,
+        currentAddress: String?,
+        peerRelay: String?,
+        relay: String?
+    ) -> AppleVideoNetworkPath {
+        guard isActive == true else { return .tailscaleUnknown }
+        if hasRouteValue(currentAddress) { return .tailscaleDirect }
+        if hasRouteValue(peerRelay) { return .tailscalePeerRelay }
+        if hasRouteValue(relay) { return .tailscaleDERP }
+        return .tailscaleUnknown
     }
 
     fileprivate func consume(_ notify: Ipn.Notify) {
@@ -400,6 +430,10 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
 
     private static func addressWithoutPrefix(_ address: String) -> String {
         String(address.split(separator: "/", maxSplits: 1).first ?? Substring(address))
+    }
+
+    private static func hasRouteValue(_ value: String?) -> Bool {
+        !(value?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 }
 

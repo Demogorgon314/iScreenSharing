@@ -2,6 +2,15 @@ import Combine
 import Foundation
 import OSLog
 
+struct AppleVideoIngressAgeSnapshot: Equatable, Sendable {
+    var p50Milliseconds = 0.0
+    var p95Milliseconds = 0.0
+    var p99Milliseconds = 0.0
+    var maximumMilliseconds = 0.0
+
+    static let zero = AppleVideoIngressAgeSnapshot()
+}
+
 struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
     var decoderBackend: AppleHEVCDecoder.Backend? = nil
     var networkMegabitsPerSecond = 0.0
@@ -9,6 +18,9 @@ struct AppleVideoPerformanceSnapshot: Equatable, Sendable {
     var socketReceiveBufferBytes = 0
     var maximumSocketBacklogBytes = 0
     var maximumReceiveDrainMilliseconds = 0.0
+    var networkPath = AppleVideoNetworkPath.direct
+    var ingressAge = AppleVideoIngressAgeSnapshot.zero
+    var receiveBufferOverflowPackets: UInt64 = 0
     var receiverReportLossPercentage = 0.0
     var cumulativePacketsLost: Int32 = 0
     var interarrivalJitterMilliseconds = 0.0
@@ -56,6 +68,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         var networkBytes = 0
         var maximumSocketBacklogBytes = 0
         var maximumReceiveDrainDuration = 0.0
+        var receiveBufferOverflowPackets: UInt64 = 0
         var accessUnits = 0
         var accessUnitBytes = 0
         var intraRefreshes = 0
@@ -106,6 +119,9 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
     private var pipelineTrace = AppleVideoPipelineTrace()
     private var pipelineDiagnosticsRequested = false
     private var socketReceiveBufferBytes = 0
+    private var networkPath = AppleVideoNetworkPath.direct
+    private var ingressAgeSamples = [TimeInterval]()
+    private var lastReceiveBufferOverflowCount: UInt64?
     private var receiverReportLossPercentage = 0.0
     private var cumulativePacketsLost: Int32 = 0
     private var interarrivalJitterMilliseconds = 0.0
@@ -166,7 +182,10 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         packetCount: Int,
         byteCount: Int,
         estimatedSocketBacklogBytes: Int = 0,
-        receiveDrainDuration: TimeInterval = 0
+        receiveDrainDuration: TimeInterval = 0,
+        ingressAge: TimeInterval? = nil,
+        receiveBufferOverflowCount: UInt64? = nil,
+        networkPath: AppleVideoNetworkPath = .direct
     ) {
         lock.withPerformanceLock {
             accumulator.networkPackets += packetCount
@@ -179,6 +198,16 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
                 accumulator.maximumReceiveDrainDuration,
                 receiveDrainDuration
             )
+            self.networkPath = networkPath
+            if let ingressAge, ingressAge.isFinite, ingressAge >= 0 {
+                ingressAgeSamples.append(ingressAge)
+            }
+            if let current = receiveBufferOverflowCount {
+                let previous = lastReceiveBufferOverflowCount ?? 0
+                let delta = current >= previous ? current - previous : current
+                accumulator.receiveBufferOverflowPackets &+= delta
+                lastReceiveBufferOverflowCount = current
+            }
         }
     }
 
@@ -434,10 +463,12 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
             let elapsed = max(now - lastSampleTime, 0.000_001)
             let values = accumulator
             let displayFrameTimes = recentDisplayFrameTimes
+            let ingressAge = Self.ingressAgeSnapshot(ingressAgeSamples)
             let pipelineLatency = pipelineDiagnosticsAreEnabled
                 ? pipelineTrace.sample(at: now)
                 : .zero
             accumulator = Accumulator()
+            ingressAgeSamples.removeAll(keepingCapacity: true)
             lastSampleTime = now
             return AppleVideoPerformanceSnapshot(
                 decoderBackend: decoderBackend,
@@ -446,6 +477,9 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
                 socketReceiveBufferBytes: socketReceiveBufferBytes,
                 maximumSocketBacklogBytes: values.maximumSocketBacklogBytes,
                 maximumReceiveDrainMilliseconds: values.maximumReceiveDrainDuration * 1_000,
+                networkPath: networkPath,
+                ingressAge: ingressAge,
+                receiveBufferOverflowPackets: values.receiveBufferOverflowPackets,
                 receiverReportLossPercentage: receiverReportLossPercentage,
                 cumulativePacketsLost: cumulativePacketsLost,
                 interarrivalJitterMilliseconds: interarrivalJitterMilliseconds,
@@ -529,7 +563,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
 #endif
         if shouldLogDiagnostics {
             Self.logger.notice(
-                "[DEBUG-NET-27C4] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s rcvbuf=\(next.socketReceiveBufferBytes)B backlog=\(next.maximumSocketBacklogBytes)B drain=\(next.maximumReceiveDrainMilliseconds, format: .fixed(precision: 2))ms rrLoss=\(next.receiverReportLossPercentage, format: .fixed(precision: 2))% cumulativeLost=\(next.cumulativePacketsLost) rrJitter=\(next.interarrivalJitterMilliseconds, format: .fixed(precision: 2))ms"
+                "[DEBUG-NET-27C4] net=\(next.networkMegabitsPerSecond, format: .fixed(precision: 1))Mbps packets=\(next.networkPacketsPerSecond, format: .fixed(precision: 1))/s path=\(next.networkPath.rawValue, privacy: .public) rcvbuf=\(next.socketReceiveBufferBytes)B backlog=\(next.maximumSocketBacklogBytes)B drain=\(next.maximumReceiveDrainMilliseconds, format: .fixed(precision: 2))ms ingress=\(next.ingressAge.p50Milliseconds, format: .fixed(precision: 2))/\(next.ingressAge.p95Milliseconds, format: .fixed(precision: 2))/\(next.ingressAge.p99Milliseconds, format: .fixed(precision: 2))/\(next.ingressAge.maximumMilliseconds, format: .fixed(precision: 2))ms overflow=\(next.receiveBufferOverflowPackets) rrLoss=\(next.receiverReportLossPercentage, format: .fixed(precision: 2))% cumulativeLost=\(next.cumulativePacketsLost) rrJitter=\(next.interarrivalJitterMilliseconds, format: .fixed(precision: 2))ms"
             )
             Self.logger.notice(
                 "[DEBUG-TEAR-8A7C] stream=\(next.accessUnitsPerSecond, format: .fixed(precision: 1))AU/s auKB=\(next.averageAccessUnitKilobytes, format: .fixed(precision: 2)) irap=\(next.intraRefreshesPerSecond, format: .fixed(precision: 1))/s rctl=\(next.rateControlFeedbacksPerSecond, format: .fixed(precision: 1))/s bwe=\(next.estimatedReceiveBandwidthMegabitsPerSecond, format: .fixed(precision: 1))Mbps decode=\(next.decodedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDecodeMilliseconds, format: .fixed(precision: 2))ms submit=\(next.presentedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averagePresentationMilliseconds, format: .fixed(precision: 2))ms display=\(next.displayedFramesPerSecond, format: .fixed(precision: 1))fps/\(next.averageDisplayMilliseconds, format: .fixed(precision: 2))ms frame=\(next.averageDisplayFrameMilliseconds, format: .fixed(precision: 2))ms p95=\(next.p95DisplayFrameMilliseconds, format: .fixed(precision: 2))ms jitter=\(next.displayCadenceJitterMilliseconds, format: .fixed(precision: 2))ms lead=\(next.averageDisplayLinkLeadMilliseconds, format: .fixed(precision: 2))ms period=\(next.averageDisplayLinkPeriodMilliseconds, format: .fixed(precision: 2))ms tile=\(next.maximumTileSkewMilliseconds, format: .fixed(precision: 2))ms don=\(next.maximumDecodingOrderSpan) nack=\(next.nackCount) fir=\(next.keyFrameRequestCount) busy=\(next.rendererBusyCount)"
@@ -599,6 +633,26 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
         let sorted = values.sorted()
         let rank = max(0, min(sorted.count - 1, Int(ceil(percentile * Double(sorted.count))) - 1))
         return sorted[rank] * 1_000
+    }
+
+    private static func ingressAgeSnapshot(
+        _ samples: [TimeInterval]
+    ) -> AppleVideoIngressAgeSnapshot {
+        guard !samples.isEmpty else { return .zero }
+        let sorted = samples.sorted()
+        func percentile(_ value: Double) -> Double {
+            let rank = max(
+                0,
+                min(sorted.count - 1, Int(ceil(value * Double(sorted.count))) - 1)
+            )
+            return sorted[rank] * 1_000
+        }
+        return AppleVideoIngressAgeSnapshot(
+            p50Milliseconds: percentile(0.50),
+            p95Milliseconds: percentile(0.95),
+            p99Milliseconds: percentile(0.99),
+            maximumMilliseconds: sorted[sorted.count - 1] * 1_000
+        )
     }
 
     private static func standardDeviationMilliseconds(values: [TimeInterval]) -> Double {

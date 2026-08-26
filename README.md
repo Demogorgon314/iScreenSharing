@@ -201,7 +201,10 @@ The following environment variables are intended for local development:
   retaining iScreenSharing's actual semantics: bandwidth is this stream's
   delivered video UDP traffic and loss is the primary RTP receiver-report
   loss. Peer RTT and host encode time are omitted because the client cannot
-  measure them reliably
+  measure them reliably. For embedded Tailscale sessions, Detailed also shows
+  the active route, gVisor ingress-age p50/p95/p99/maximum, and receive-buffer
+  overflow deltas. Ingress age is measured before the Swift receive loop, so it
+  includes time hidden inside the embedded userspace UDP queue
 - `ISHARESCREEN_VIDEO_RCVBUF_BYTES=<bytes>`: in Debug builds only, override the
   video UDP receive buffer for controlled A/B testing; unset it to retain the
   native-aligned system default

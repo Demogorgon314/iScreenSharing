@@ -6,8 +6,24 @@ import TailscaleKit
 final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
     private static let maximumQueuedControlPackets = 16_384
     private static let maximumDatagramLength = 65_535
+    private static let maximumRemoteAddressLength = 128
+    private static let networkPathRefreshInterval: TimeInterval = 5
+
+    private struct PacketReadBuffer {
+        var data = [UInt8](repeating: 0, count: maximumDatagramLength)
+        var remoteAddress = [CChar](repeating: 0, count: maximumRemoteAddressLength)
+    }
+
+    private struct ReceivedPacket {
+        let data: Data
+        let remoteAddress: String
+        let readCompletedAt: TimeInterval
+        let ingressAge: TimeInterval
+        let receiveBufferOverflowCount: UInt64
+    }
 
     private let tailscaleHandle: TailscaleHandle
+    private let nodeProvider: any TailscaleNodeProviding
     private let remoteHost: String
     private let displayCount: Int
     private let lock = NSLock()
@@ -23,6 +39,9 @@ final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
     private var controlPackets = [Data]()
     private var isPunching = true
     private var isClosed = false
+    private var networkPath = AppleVideoNetworkPath.tailscaleUnknown
+    private var lastNetworkPathRefreshAt: TimeInterval = 0
+    private var isNetworkPathRefreshInFlight = false
 
     static func create(
         remoteAddress: ResolvedRemoteAddress,
@@ -45,6 +64,7 @@ final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
         }
         return try TailscaleMediaReceiver(
             tailscaleHandle: handle,
+            nodeProvider: nodeProvider,
             localHost: localHost,
             remoteHost: remoteAddress.numericHost,
             basePort: remoteAddress.port,
@@ -54,12 +74,14 @@ final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
 
     private init(
         tailscaleHandle: TailscaleHandle,
+        nodeProvider: any TailscaleNodeProviding,
         localHost: String,
         remoteHost: String,
         basePort: UInt16,
         displayCount: Int
     ) throws {
         self.tailscaleHandle = tailscaleHandle
+        self.nodeProvider = nodeProvider
         self.remoteHost = remoteHost
         self.displayCount = displayCount
         var openedPackets = [TailscalePacketConnection]()
@@ -239,8 +261,9 @@ final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
     }
 
     private func receiveControlPackets(packet: TailscalePacketConnection) {
+        var readBuffer = PacketReadBuffer()
         while true {
-            guard let received = receive(packet: packet) else { return }
+            guard let received = Self.receive(packet: packet, using: &readBuffer) else { return }
             let expectedTarget = lock.withTailscaleMediaLock { controlTarget }
             guard received.remoteAddress == expectedTarget else { continue }
             lock.withTailscaleMediaLock {
@@ -259,19 +282,26 @@ final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
         deliveryQueue: DispatchQueue,
         handler: @escaping AppleVideoDatagramHandler
     ) {
+        var readBuffer = PacketReadBuffer()
         while true {
-            guard let received = receive(packet: packet) else { return }
+            guard let received = Self.receive(packet: packet, using: &readBuffer) else { return }
             let expectedTarget = lock.withTailscaleMediaLock {
                 guard videoTargets.indices.contains(mediaStreamIndex) else { return "" }
                 return videoTargets[mediaStreamIndex]
             }
             guard received.remoteAddress == expectedTarget else { continue }
-            let arrivalTime = CACurrentMediaTime()
+            refreshNetworkPathIfNeeded(at: received.readCompletedAt)
+            let path = lock.withTailscaleMediaLock { networkPath }
+            let ingressAge = min(received.ingressAge, received.readCompletedAt)
+            let arrivalTime = received.readCompletedAt - ingressAge
             let datagram = AppleReceivedVideoDatagram(
                 data: received.data,
                 arrivalTime: arrivalTime,
-                receiveBatchStartedAt: arrivalTime,
-                estimatedSocketBacklogBytes: 0
+                receiveBatchStartedAt: received.readCompletedAt,
+                estimatedSocketBacklogBytes: 0,
+                ingressAge: ingressAge,
+                receiveBufferOverflowCount: received.receiveBufferOverflowCount,
+                networkPath: path
             )
             deliveryQueue.sync {
                 let isOpen = lock.withTailscaleMediaLock { !isClosed }
@@ -280,29 +310,62 @@ final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
         }
     }
 
-    private func receive(
-        packet: TailscalePacketConnection
-    ) -> (data: Data, remoteAddress: String)? {
-        var buffer = [UInt8](repeating: 0, count: Self.maximumDatagramLength)
-        var remoteAddress = [CChar](repeating: 0, count: 128)
+    private static func receive(
+        packet: TailscalePacketConnection,
+        using buffer: inout PacketReadBuffer
+    ) -> ReceivedPacket? {
         var received = 0
-        let result = buffer.withUnsafeMutableBytes { bytes in
-            remoteAddress.withUnsafeMutableBufferPointer { remote in
-                tailscale_packet_read(
+        var ingressAgeNanoseconds: UInt64 = 0
+        var receiveBufferOverflowCount: UInt64 = 0
+        let result = buffer.data.withUnsafeMutableBytes { bytes in
+            buffer.remoteAddress.withUnsafeMutableBufferPointer { remote in
+                tailscale_packet_read_ex(
                     packet,
                     bytes.baseAddress,
                     bytes.count,
                     &received,
                     remote.baseAddress,
-                    remote.count
+                    remote.count,
+                    &ingressAgeNanoseconds,
+                    &receiveBufferOverflowCount
                 )
             }
         }
         guard result == 0 else { return nil }
-        return (
-            Data(buffer.prefix(received)),
-            String(cString: remoteAddress)
+        let readCompletedAt = CACurrentMediaTime()
+        return ReceivedPacket(
+            data: Data(buffer.data.prefix(received)),
+            remoteAddress: String(cString: buffer.remoteAddress),
+            readCompletedAt: readCompletedAt,
+            ingressAge: TimeInterval(ingressAgeNanoseconds) / 1_000_000_000,
+            receiveBufferOverflowCount: receiveBufferOverflowCount
         )
+    }
+
+    private func refreshNetworkPathIfNeeded(at now: TimeInterval) {
+        let shouldRefresh = lock.withTailscaleMediaLock { () -> Bool in
+            guard !isClosed,
+                  !isNetworkPathRefreshInFlight,
+                  now - lastNetworkPathRefreshAt >= Self.networkPathRefreshInterval else {
+                return false
+            }
+            lastNetworkPathRefreshAt = now
+            isNetworkPathRefreshInFlight = true
+            return true
+        }
+        guard shouldRefresh else { return }
+        let nodeProvider = nodeProvider
+        let remoteHost = remoteHost
+        Task { [weak self] in
+            let path = await nodeProvider.tailscaleVideoNetworkPath(to: remoteHost)
+            self?.lock.withTailscaleMediaLock {
+                guard let self else { return }
+                self.isNetworkPathRefreshInFlight = false
+                if !self.isClosed, let path {
+                    self.networkPath = path
+                }
+            }
+        }
     }
 
     private func send(

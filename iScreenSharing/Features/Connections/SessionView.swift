@@ -506,6 +506,15 @@ private struct AppleVideoPerformanceOverlay: View {
                     stats.maximumReceiveDrainMilliseconds
                 ))
                 Text(String(
+                    format: "Ingress  %@  %.2f/%.2f/%.2f/%.2f ms  overflow %llu",
+                    stats.networkPath.rawValue,
+                    stats.ingressAge.p50Milliseconds,
+                    stats.ingressAge.p95Milliseconds,
+                    stats.ingressAge.p99Milliseconds,
+                    stats.ingressAge.maximumMilliseconds,
+                    stats.receiveBufferOverflowPackets
+                ))
+                Text(String(
                     format: "RR       %.2f%% loss  %d total  %.2f ms jitter",
                     stats.receiverReportLossPercentage,
                     stats.cumulativePacketsLost,

@@ -298,7 +298,10 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             packetCount: 1,
             byteCount: datagram.data.count,
             estimatedSocketBacklogBytes: datagram.estimatedSocketBacklogBytes,
-            receiveDrainDuration: processingTime - datagram.receiveBatchStartedAt
+            receiveDrainDuration: processingTime - datagram.receiveBatchStartedAt,
+            ingressAge: datagram.ingressAge,
+            receiveBufferOverflowCount: datagram.receiveBufferOverflowCount,
+            networkPath: datagram.networkPath
         )
         let accessUnit = processor.process(datagram)
         sendReceiverReportIfNeeded()

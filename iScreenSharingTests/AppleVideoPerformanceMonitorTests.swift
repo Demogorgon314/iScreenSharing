@@ -151,6 +151,45 @@ final class AppleVideoPerformanceMonitorTests: XCTestCase {
         XCTAssertEqual(snapshot.interarrivalJitterMilliseconds, 0.5, accuracy: 0.001)
     }
 
+    func testReportsTailscaleIngressDistributionAndOverflowDeltas() {
+        let monitor = AppleVideoPerformanceMonitor(
+            tileCount: 1,
+            clock: { 0 },
+            automaticallyPublishes: false
+        )
+        for (age, overflow) in [(0.001, UInt64(2)), (0.002, 2), (0.003, 3), (0.100, 3)] {
+            monitor.recordNetwork(
+                packetCount: 1,
+                byteCount: 1_200,
+                ingressAge: age,
+                receiveBufferOverflowCount: overflow,
+                networkPath: .tailscaleDERP
+            )
+        }
+
+        let first = monitor.sample(at: 1)
+
+        XCTAssertEqual(first.networkPath, .tailscaleDERP)
+        XCTAssertEqual(first.ingressAge.p50Milliseconds, 2, accuracy: 0.001)
+        XCTAssertEqual(first.ingressAge.p95Milliseconds, 100, accuracy: 0.001)
+        XCTAssertEqual(first.ingressAge.p99Milliseconds, 100, accuracy: 0.001)
+        XCTAssertEqual(first.ingressAge.maximumMilliseconds, 100, accuracy: 0.001)
+        XCTAssertEqual(first.receiveBufferOverflowPackets, 3)
+
+        monitor.recordNetwork(
+            packetCount: 1,
+            byteCount: 1_200,
+            ingressAge: 0.004,
+            receiveBufferOverflowCount: 5,
+            networkPath: .tailscaleDirect
+        )
+        let second = monitor.sample(at: 2)
+
+        XCTAssertEqual(second.networkPath, .tailscaleDirect)
+        XCTAssertEqual(second.ingressAge.p50Milliseconds, 4, accuracy: 0.001)
+        XCTAssertEqual(second.receiveBufferOverflowPackets, 2)
+    }
+
     func testPipelineDiagnosticsAreOptInAndPublishedThroughTheSnapshot() throws {
         let disabled = AppleVideoPerformanceMonitor(
             tileCount: 1,

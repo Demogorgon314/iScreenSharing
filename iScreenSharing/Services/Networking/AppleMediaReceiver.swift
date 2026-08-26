@@ -2,22 +2,39 @@ import Darwin
 import Foundation
 import QuartzCore
 
+enum AppleVideoNetworkPath: String, Equatable, Sendable {
+    case direct = "Direct"
+    case tailscaleDirect = "Tailscale direct"
+    case tailscalePeerRelay = "Tailscale peer relay"
+    case tailscaleDERP = "Tailscale DERP"
+    case tailscaleUnknown = "Tailscale unknown"
+}
+
 struct AppleReceivedVideoDatagram: Equatable, Sendable {
     let data: Data
     let arrivalTime: TimeInterval
     let receiveBatchStartedAt: TimeInterval
     let estimatedSocketBacklogBytes: Int
+    let ingressAge: TimeInterval?
+    let receiveBufferOverflowCount: UInt64?
+    let networkPath: AppleVideoNetworkPath
 
     init(
         data: Data,
         arrivalTime: TimeInterval,
         receiveBatchStartedAt: TimeInterval? = nil,
-        estimatedSocketBacklogBytes: Int = 0
+        estimatedSocketBacklogBytes: Int = 0,
+        ingressAge: TimeInterval? = nil,
+        receiveBufferOverflowCount: UInt64? = nil,
+        networkPath: AppleVideoNetworkPath = .direct
     ) {
         self.data = data
         self.arrivalTime = arrivalTime
         self.receiveBatchStartedAt = receiveBatchStartedAt ?? arrivalTime
         self.estimatedSocketBacklogBytes = max(0, estimatedSocketBacklogBytes)
+        self.ingressAge = ingressAge.map { max(0, $0) }
+        self.receiveBufferOverflowCount = receiveBufferOverflowCount
+        self.networkPath = networkPath
     }
 }
 
