@@ -2,36 +2,51 @@ import AppKit
 import XCTest
 @testable import iShareScreen
 
+@MainActor
 final class ScreenshotSharingTests: XCTestCase {
-    func testWritesNamedPNGFileForSystemSharingServices() throws {
-        let temporaryDirectory = FileManager.default.temporaryDirectory.appending(
-            path: UUID().uuidString,
-            directoryHint: .isDirectory
+    func testAddsCopyAndSaveCommandsToSystemSharingServices() throws {
+        let image = makeImage(width: 4, height: 2)
+        let coordinator = try ScreenshotSharingCoordinator(
+            image: image,
+            suggestedName: "Screenshot Remote Mac",
+            window: nil
         )
-        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let picker = NSSharingServicePicker(items: [image])
 
-        let url = try ScreenshotFileWriter.write(
-            makeImage(width: 4, height: 2),
-            suggestedName: "Screenshot deepdream’s Mac mini",
-            in: temporaryDirectory
+        let services = coordinator.sharingServicePicker(
+            picker,
+            sharingServicesForItems: [image],
+            proposedSharingServices: []
         )
 
-        XCTAssertEqual(url.lastPathComponent, "Screenshot deepdream’s Mac mini.png")
-        XCTAssertTrue(url.isFileURL)
-        let data = try Data(contentsOf: url)
-        XCTAssertEqual(data.prefix(8), Data([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-        let representation = try XCTUnwrap(NSBitmapImageRep(data: data))
-        XCTAssertEqual(representation.pixelsWide, 4)
-        XCTAssertEqual(representation.pixelsHigh, 2)
+        XCTAssertEqual(services.map(\.title), ["Copy to Clipboard", "Save As…"])
     }
 
-    func testPropagatesTemporaryDirectoryCreationFailure() throws {
-        let fileURL = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try Data().write(to: fileURL)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
+    func testWritesPNGAndTIFFRepresentationsToClipboard() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let image = makeImage(width: 4, height: 2)
+        let pngData = try ScreenshotImageData.png(for: image)
 
-        XCTAssertThrowsError(
-            try ScreenshotFileWriter.write(makeImage(width: 1, height: 1), in: fileURL)
+        XCTAssertTrue(ScreenshotClipboardWriter.write(image, pngData: pngData, to: pasteboard))
+        XCTAssertEqual(pasteboard.data(forType: .png), pngData)
+        XCTAssertNotNil(pasteboard.data(forType: .tiff))
+    }
+
+    func testBuildsSafeSuggestedPNGFilenameWithTimestamp() {
+        let date = Date(timeIntervalSince1970: 1_787_715_030)
+        let timeZone = TimeZone(secondsFromGMT: 8 * 60 * 60)!
+
+        XCTAssertEqual(
+            ScreenshotImageData.filename(
+                for: "Screenshot Mac/Studio:2",
+                date: date,
+                timeZone: timeZone
+            ),
+            "Screenshot Mac-Studio-2 2026-08-26 at 11.30.30.png"
+        )
+        XCTAssertEqual(
+            ScreenshotImageData.filename(for: "/:", date: date, timeZone: timeZone),
+            "Screen Sharing Screenshot 2026-08-26 at 11.30.30.png"
         )
     }
 

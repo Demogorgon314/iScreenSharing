@@ -264,11 +264,11 @@ struct SessionView: View {
             return
         }
         do {
-            let screenshotURL = try ScreenshotFileWriter.write(
+            try ScreenshotSharingCoordinator.show(
                 image,
-                suggestedName: "Screenshot \(endpoint.displayName)"
+                suggestedName: "Screenshot \(endpoint.displayName)",
+                relativeTo: anchorView
             )
-            ScreenshotSharingPicker.show(screenshotURL, relativeTo: anchorView)
         } catch {
             NSSound.beep()
         }
