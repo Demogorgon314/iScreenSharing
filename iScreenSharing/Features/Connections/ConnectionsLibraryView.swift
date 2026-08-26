@@ -577,6 +577,11 @@ private struct TailscalePeerRow: View {
                 Text(peer.dnsName.isEmpty ? peer.preferredAddress ?? "Tailscale" : peer.dnsName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let softwareDescription = peer.softwareDescription {
+                    Text(softwareDescription)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             Spacer()

@@ -26,6 +26,9 @@ struct TailscalePeer: Equatable, Hashable, Identifiable, Sendable {
     let addresses: [String]
     let isOnline: Bool
     let deviceModel: String?
+    let operatingSystem: String?
+    let operatingSystemVersion: String?
+    let tailscaleVersion: String?
 
     init(
         id: String,
@@ -33,7 +36,10 @@ struct TailscalePeer: Equatable, Hashable, Identifiable, Sendable {
         dnsName: String,
         addresses: [String],
         isOnline: Bool,
-        deviceModel: String? = nil
+        deviceModel: String? = nil,
+        operatingSystem: String? = nil,
+        operatingSystemVersion: String? = nil,
+        tailscaleVersion: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +47,9 @@ struct TailscalePeer: Equatable, Hashable, Identifiable, Sendable {
         self.addresses = addresses
         self.isOnline = isOnline
         self.deviceModel = deviceModel
+        self.operatingSystem = operatingSystem
+        self.operatingSystemVersion = operatingSystemVersion
+        self.tailscaleVersion = tailscaleVersion
     }
 
     var preferredAddress: String? {
@@ -58,6 +67,41 @@ struct TailscalePeer: Equatable, Hashable, Identifiable, Sendable {
             return nil
         }
         return AppleRemoteDeviceInfo(modelIdentifier: deviceModel)
+    }
+
+    var softwareDescription: String? {
+        var components = [String]()
+        let operatingSystem = Self.displayName(forOperatingSystem: operatingSystem)
+        let operatingSystemVersion = operatingSystemVersion?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !operatingSystem.isEmpty {
+            components.append(
+                operatingSystemVersion.isEmpty
+                    ? operatingSystem
+                    : "\(operatingSystem) \(operatingSystemVersion)"
+            )
+        } else if !operatingSystemVersion.isEmpty {
+            components.append(operatingSystemVersion)
+        }
+
+        let tailscaleVersion = tailscaleVersion?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !tailscaleVersion.isEmpty {
+            components.append("Tailscale \(tailscaleVersion)")
+        }
+        return components.isEmpty ? nil : components.joined(separator: " · ")
+    }
+
+    private static func displayName(forOperatingSystem value: String?) -> String {
+        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        switch value.lowercased() {
+        case "android": return "Android"
+        case "freebsd": return "FreeBSD"
+        case "ios": return "iOS"
+        case "linux": return "Linux"
+        case "macos", "darwin": return "macOS"
+        case "windows": return "Windows"
+        default: return value
+        }
     }
 }
 
@@ -297,7 +341,10 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding
                 dnsName: $0.Name.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
                 addresses: ($0.Addresses ?? []).map(addressWithoutPrefix),
                 isOnline: $0.Online ?? false,
-                deviceModel: $0.Hostinfo.DeviceModel
+                deviceModel: $0.Hostinfo.DeviceModel,
+                operatingSystem: $0.Hostinfo.OS,
+                operatingSystemVersion: $0.Hostinfo.OSVersion,
+                tailscaleVersion: $0.Hostinfo.IPNVersion
             )
         }
         .filter { !$0.addresses.isEmpty }

@@ -104,6 +104,46 @@ final class TailscaleModelTests: XCTestCase {
 
         XCTAssertEqual(peer.deviceInfo?.modelIdentifier, "Macmini9,1")
     }
+
+    func testPeerDescribesOperatingSystemAndTailscaleVersion() {
+        let peer = TailscalePeer(
+            id: "node-1",
+            name: "Studio Mac",
+            dnsName: "studio.example.ts.net",
+            addresses: ["100.64.0.10"],
+            isOnline: true,
+            operatingSystem: "macOS",
+            operatingSystemVersion: "15.7.7",
+            tailscaleVersion: "1.102.3"
+        )
+
+        XCTAssertEqual(peer.softwareDescription, "macOS 15.7.7 · Tailscale 1.102.3")
+    }
+
+    func testPeerOmitsUnavailableSoftwareMetadata() {
+        let peer = TailscalePeer(
+            id: "node-1",
+            name: "Studio Mac",
+            dnsName: "studio.example.ts.net",
+            addresses: ["100.64.0.10"],
+            isOnline: false
+        )
+
+        XCTAssertNil(peer.softwareDescription)
+    }
+
+    func testPeerNormalizesCommonOperatingSystemNames() {
+        let peer = TailscalePeer(
+            id: "node-1",
+            name: "Server",
+            dnsName: "server.example.ts.net",
+            addresses: ["100.64.0.10"],
+            isOnline: true,
+            operatingSystem: "linux"
+        )
+
+        XCTAssertEqual(peer.softwareDescription, "Linux")
+    }
 }
 
 private actor MockEmbeddedTailscaleRuntime: EmbeddedTailscaleRunning {
