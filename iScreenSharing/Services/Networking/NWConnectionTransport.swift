@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-final class NWConnectionTransport: @unchecked Sendable {
+final class NWConnectionTransport: RFBTransport, @unchecked Sendable {
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "com.isharescreen.rfb-transport")
 
@@ -173,7 +173,7 @@ enum RFBNetworkError: LocalizedError {
         case .invalidReadLength:
             "The host requested an invalid amount of protocol data."
         case .connectionTimedOut:
-            "The connection timed out. Check Local Network access in System Settings and try again."
+            "The connection timed out. Check network access and try again."
         }
     }
 }

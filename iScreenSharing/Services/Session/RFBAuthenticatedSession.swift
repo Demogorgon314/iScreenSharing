@@ -28,7 +28,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var fileTransferService: AppleFileTransferService?
     private(set) var controlState: AppleSessionControlState?
 
-    private let transport: NWConnectionTransport
+    private let transport: any RFBTransport
     private let encryptedWriter: AppleEncryptedRecordWriter
     private let closeLock = NSLock()
     private var hasClosed = false
@@ -40,7 +40,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         securityTypes: [RFBSecurityType],
         masterKey: Data,
         serverInfo: RFBServerInfo,
-        transport: NWConnectionTransport
+        transport: any RFBTransport
     ) {
         self.endpoint = endpoint
         self.remoteAddress = remoteAddress

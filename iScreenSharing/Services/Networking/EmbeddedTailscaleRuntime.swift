@@ -39,7 +39,12 @@ protocol EmbeddedTailscaleRunning: Actor {
     func startLogin() async throws
 }
 
-actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning {
+protocol TailscaleNodeProviding: Actor {
+    func start() async throws
+    func tailscaleHandle() async throws -> TailscaleHandle
+}
+
+actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning, TailscaleNodeProviding {
     static let shared = EmbeddedTailscaleRuntime()
 
     private let keyStore: any TailscaleStateKeyStoring
@@ -105,6 +110,13 @@ actor EmbeddedTailscaleRuntime: EmbeddedTailscaleRunning {
         }
         try await localAPIClient.startLoginInteractive()
         try await publishStatus(from: localAPIClient)
+    }
+
+    func tailscaleHandle() async throws -> TailscaleHandle {
+        guard let node, let handle = await node.tailscale else {
+            throw EmbeddedTailscaleRuntimeError.notStarted
+        }
+        return handle
     }
 
     fileprivate func consume(_ notify: Ipn.Notify) {

@@ -11,9 +11,14 @@ struct RFBAuthenticationService: RFBAuthenticating {
     private static let maximumPublicKeyPacketLength = 64 * 1024
     private static let maximumServerNameLength = 1024 * 1024
     private let addressResolver: RemoteAddressResolver
+    private let tailscaleNodeProvider: any TailscaleNodeProviding
 
-    init(addressResolver: RemoteAddressResolver = RemoteAddressResolver()) {
+    init(
+        addressResolver: RemoteAddressResolver = RemoteAddressResolver(),
+        tailscaleNodeProvider: any TailscaleNodeProviding = EmbeddedTailscaleRuntime.shared
+    ) {
         self.addressResolver = addressResolver
+        self.tailscaleNodeProvider = tailscaleNodeProvider
     }
 
     func connect(
@@ -49,7 +54,19 @@ struct RFBAuthenticationService: RFBAuthenticating {
 
     private func connectTransport(
         to endpoint: ConnectionEndpoint
-    ) async throws -> (NWConnectionTransport, ResolvedRemoteAddress) {
+    ) async throws -> (any RFBTransport, ResolvedRemoteAddress) {
+        if endpoint.route == .tailscale {
+            let remoteAddress = try ResolvedRemoteAddress(
+                numericHost: endpoint.host,
+                port: endpoint.port
+            )
+            let transport = TailscaleTCPTransport(
+                endpoint: endpoint,
+                nodeProvider: tailscaleNodeProvider
+            )
+            try await transport.start()
+            return (transport, remoteAddress)
+        }
         let addresses = try await addressResolver.resolve(endpoint)
         var lastError: Error?
         for address in addresses {
@@ -69,7 +86,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
     }
 
     private func performVersionHandshake(
-        on transport: NWConnectionTransport
+        on transport: any RFBTransport
     ) async throws -> RFBProbeResult {
         let banner = try await transport.receiveExactly(RFBProtocol.bannerLength)
         let version = try RFBProtocol.parseVersion(banner)
@@ -86,7 +103,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
 
     private func authenticateRSA1(
         credentials: ScreenSharingCredentials,
-        transport: NWConnectionTransport
+        transport: any RFBTransport
     ) async throws -> Data {
         try await transport.send(AppleRSA1.publicKeyRequest)
         let packetLengthData = try await transport.receiveExactly(4)
@@ -117,7 +134,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
         return masterKey
     }
 
-    private func initializeSession(on transport: NWConnectionTransport) async throws -> RFBServerInfo {
+    private func initializeSession(on transport: any RFBTransport) async throws -> RFBServerInfo {
         try await transport.send(Data([0xc1]))
         let header = try await transport.receiveExactly(24)
         let nameLength = try Int(header.uint32BE(at: 20))
