@@ -9,6 +9,24 @@ final class ConnectionEndpointTests: XCTestCase {
         XCTAssertEqual(endpoint.port, 5900)
         XCTAssertEqual(endpoint.displayName, "deepdream.local")
         XCTAssertEqual(endpoint.url.absoluteString, "vnc://deepdream.local")
+        XCTAssertEqual(endpoint.route, .direct)
+    }
+
+    func testRepresentsTailscaleRouteInIdentityAndCoding() throws {
+        let endpoint = try ConnectionEndpoint(host: "100.64.0.10", route: .tailscale)
+        let direct = try ConnectionEndpoint(host: "100.64.0.10")
+
+        XCTAssertNotEqual(endpoint, direct)
+        XCTAssertEqual(
+            try JSONDecoder().decode(ConnectionEndpoint.self, from: JSONEncoder().encode(endpoint)),
+            endpoint
+        )
+    }
+
+    func testDecodesLegacyEndpointAsDirectRoute() throws {
+        let data = Data(#"{"host":"legacy.local","port":5900}"#.utf8)
+
+        XCTAssertEqual(try JSONDecoder().decode(ConnectionEndpoint.self, from: data).route, .direct)
     }
 
     func testParsesVNCURLAndCustomPort() throws {
