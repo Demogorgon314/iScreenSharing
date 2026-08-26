@@ -1,7 +1,7 @@
 # Agent Development Guide
 
 This file is the working contract for coding agents contributing to
-iShareScreenSwift. Read it together with `README.md` before making changes.
+iScreenSharing. Read it together with `README.md` before making changes.
 
 ## Mission and scope
 
@@ -183,14 +183,14 @@ by a task needs focused coverage. Prefer:
 Run a focused test while iterating, then the complete suite before handoff:
 
 ```sh
-xcodebuild -project iShareScreen.xcodeproj \
-  -scheme iShareScreen \
+xcodebuild -project iScreenSharing.xcodeproj \
+  -scheme iScreenSharing \
   -destination 'platform=macOS' \
   test \
-  -only-testing:iShareScreenTests/TestClassName
+  -only-testing:iScreenSharingTests/TestClassName
 
-xcodebuild -project iShareScreen.xcodeproj \
-  -scheme iShareScreen \
+xcodebuild -project iScreenSharing.xcodeproj \
+  -scheme iScreenSharing \
   -destination 'platform=macOS' \
   test
 ```
