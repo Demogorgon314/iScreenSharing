@@ -36,6 +36,10 @@ actor AppleDynamicResolutionController {
         )
     }
 
+    func requestFixedResolution() async throws {
+        try await request(displaySizes: [.fixed1080p])
+    }
+
     func request(
         displaySizes: [AppleDynamicResolutionSize],
         backingScale: Double = 2,

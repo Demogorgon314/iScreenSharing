@@ -64,10 +64,11 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let preferences = SessionFeaturePreferences(defaults: defaults)
         preferences.setSharesKeyboardInputSource(true)
         preferences.setUsesDynamicResolution(false)
+        let displaySizes = DisplaySizeRecorder()
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
             authenticator: MockAuthenticator(result: .success(session)),
-            controlChannelNegotiator: MockControlChannelNegotiator(),
+            controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes),
             mediaNegotiator: MockMediaNegotiator(),
             videoStreamStarter: MockVideoStreamStarter(),
             credentialStore: MockCredentialStore(),
@@ -81,6 +82,11 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(session.keyboardInputSourceService?.isSharingEnabled == true)
         XCTAssertFalse(session.dynamicResolutionModel?.isEnabled == true)
+        let initialDisplaySize = await displaySizes.first()
+        XCTAssertEqual(
+            initialDisplaySize,
+            AppleDynamicResolutionSize(width: 1_920, height: 1_080)
+        )
     }
 
     func testAutomaticallySignsInWithSavedCredentials() async throws {

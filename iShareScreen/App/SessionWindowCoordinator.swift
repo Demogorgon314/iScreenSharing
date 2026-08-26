@@ -21,6 +21,8 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
     private var commandStates: [ConnectionEndpoint: SessionCommandState] = [:]
     private var layoutSubscriptions: [ConnectionEndpoint: AnyCancellable] = [:]
     private var toolbarDisplayModeSubscriptions: [ObjectIdentifier: AnyCancellable] = [:]
+    private var windowAspectRatioSubscriptions: [ObjectIdentifier: AnyCancellable] = [:]
+    private var windowVideoAspectRatios: [ObjectIdentifier: CGFloat] = [:]
     private var videoRenderers: [WindowKey: AppleVideoRenderer] = [:]
     private var fullScreenChromeStates: [ObjectIdentifier: FullScreenChromeState] = [:]
     private let toolbarPreferencesDefaults: UserDefaults
@@ -64,6 +66,8 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         let identifier = ObjectIdentifier(window)
         fullScreenChromeStates.removeValue(forKey: identifier)
         toolbarDisplayModeSubscriptions.removeValue(forKey: identifier)?.cancel()
+        windowAspectRatioSubscriptions.removeValue(forKey: identifier)?.cancel()
+        windowVideoAspectRatios.removeValue(forKey: identifier)
         guard let key = key(for: window) else { return }
         commandRouter.deactivate(window: window)
         window.saveFrame(usingName: frameAutosaveName(for: key))
@@ -102,6 +106,20 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         saveFrame(from: notification)
     }
 
+    func windowDidEndLiveResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              windowVideoAspectRatios[ObjectIdentifier(window)] != nil else { return }
+
+        // AppKit 2575.70.56 can trap when a delegate changes the proposed size
+        // from inside its interactive resize stack. Let that stack unwind and
+        // only then restore fixed-mode geometry. Dynamic mode has no stored
+        // ratio and therefore never mutates the window here.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self, let window else { return }
+            self.fitSessionWindowToStoredVideoAspectRatio(window)
+        }
+    }
+
     func applyToolbarPreferences(
         isVisible: Bool,
         displayMode: SessionToolbarDisplayMode
@@ -123,6 +141,82 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             defaults: toolbarPreferencesDefaults
         )
         observeToolbarDisplayMode(in: window)
+    }
+
+    func configureSessionWindowAspectRatio(
+        _ window: NSWindow,
+        videoSize: NSSize,
+        dynamicResolutionEnabled: Bool
+    ) {
+        let identifier = ObjectIdentifier(window)
+        guard !dynamicResolutionEnabled else {
+            windowVideoAspectRatios.removeValue(forKey: identifier)
+            return
+        }
+        guard videoSize.width.isFinite, videoSize.height.isFinite,
+              videoSize.width > 0, videoSize.height > 0 else {
+            windowVideoAspectRatios.removeValue(forKey: identifier)
+            return
+        }
+
+        windowVideoAspectRatios[identifier] = videoSize.width / videoSize.height
+        guard window.contentView?.inLiveResize != true else { return }
+        fitSessionWindowToStoredVideoAspectRatio(window)
+    }
+
+    private func fitSessionWindowToStoredVideoAspectRatio(_ window: NSWindow) {
+        guard let aspectRatio = windowVideoAspectRatios[ObjectIdentifier(window)],
+              aspectRatio.isFinite, aspectRatio > 0 else { return }
+        let currentSize = window.contentView?.bounds.size ?? window.contentLayoutRect.size
+        guard currentSize.width > 0, currentSize.height > 0 else { return }
+
+        var fittedSize: NSSize
+        if currentSize.width / currentSize.height > aspectRatio {
+            fittedSize = NSSize(
+                width: currentSize.height * aspectRatio,
+                height: currentSize.height
+            )
+        } else {
+            fittedSize = NSSize(
+                width: currentSize.width,
+                height: currentSize.width / aspectRatio
+            )
+        }
+        fittedSize = Self.clampContentSize(
+            fittedSize,
+            aspectRatio: aspectRatio,
+            minimum: window.contentMinSize,
+            maximum: window.contentMaxSize
+        )
+        guard abs(fittedSize.width - currentSize.width) > 0.5
+                || abs(fittedSize.height - currentSize.height) > 0.5 else { return }
+        window.setContentSize(fittedSize)
+    }
+
+    private static func clampContentSize(
+        _ size: NSSize,
+        aspectRatio: CGFloat,
+        minimum: NSSize,
+        maximum: NSSize
+    ) -> NSSize {
+        var result = size
+        if result.width < minimum.width {
+            result.width = minimum.width
+            result.height = result.width / aspectRatio
+        }
+        if result.height < minimum.height {
+            result.height = minimum.height
+            result.width = result.height * aspectRatio
+        }
+        if result.width > maximum.width {
+            result.width = maximum.width
+            result.height = result.width / aspectRatio
+        }
+        if result.height > maximum.height {
+            result.height = maximum.height
+            result.width = result.height * aspectRatio
+        }
+        return result
     }
 
     func windowWillEnterFullScreen(_ notification: Notification) {
@@ -274,6 +368,13 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
         let controller = NSWindowController(window: window)
         windowControllers[key] = controller
+        observeWindowAspectRatio(
+            window,
+            displayIndex: key.displayIndex,
+            session: session,
+            displayLayout: displayLayout,
+            dynamicResolution: dynamicResolution
+        )
         controller.showWindow(nil)
         SessionToolbarPreferences.applyStoredPreferences(
             to: window,
@@ -293,6 +394,43 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             .sink { [weak self] displayMode in
                 self?.toolbarDisplayModeDidChange(displayMode)
             }
+    }
+
+    private func observeWindowAspectRatio(
+        _ window: NSWindow,
+        displayIndex: Int,
+        session: RFBAuthenticatedSession,
+        displayLayout: AppleDisplayLayoutModel,
+        dynamicResolution: AppleDynamicResolutionModel
+    ) {
+        guard let stream = session.videoStream(for: displayIndex) else { return }
+        let usesIndependentVideoStreams = session.videoStreams.count > 1
+        let identifier = ObjectIdentifier(window)
+        windowAspectRatioSubscriptions[identifier] = Publishers.CombineLatest3(
+            dynamicResolution.$isEnabled.removeDuplicates(),
+            displayLayout.$layout.removeDuplicates(),
+            stream.$canvas.removeDuplicates()
+        )
+        .sink { [weak self, weak window, weak displayLayout] enabled, _, canvas in
+            guard let self, let window, let displayLayout else { return }
+            let videoSize: NSSize
+            if displayLayout.supportsDynamicResolution {
+                videoSize = NSSize(
+                    width: AppleDynamicResolutionSize.fixed1080p.width,
+                    height: AppleDynamicResolutionSize.fixed1080p.height
+                )
+            } else if !usesIndependentVideoStreams,
+                      let sourceRect = displayLayout.sourceRect(for: displayIndex) {
+                videoSize = sourceRect.size
+            } else {
+                videoSize = NSSize(width: canvas.width, height: canvas.height)
+            }
+            self.configureSessionWindowAspectRatio(
+                window,
+                videoSize: videoSize,
+                dynamicResolutionEnabled: enabled
+            )
+        }
     }
 
     private func toolbarDisplayModeDidChange(

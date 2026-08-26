@@ -5,6 +5,10 @@ struct AppleDynamicResolutionSize: Equatable, Sendable {
     let width: Int
     let height: Int
 
+    /// Screen Sharing's fixed mode is 1080p in logical points. The display
+    /// configuration encoder's default 2x backing scale makes it HiDPI.
+    static let fixed1080p = AppleDynamicResolutionSize(width: 1_920, height: 1_080)
+
     static func normalized(viewport: CGSize) -> AppleDynamicResolutionSize? {
         guard viewport.width.isFinite, viewport.height.isFinite,
               viewport.width > 0, viewport.height > 0 else { return nil }

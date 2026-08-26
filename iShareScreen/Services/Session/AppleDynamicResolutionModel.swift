@@ -6,8 +6,11 @@ final class AppleDynamicResolutionModel: ObservableObject {
     @Published var isEnabled: Bool {
         didSet {
             guard isEnabled != oldValue else { return }
-            if !isEnabled { cancel() }
+            cancel()
+            lastRequestedSizes = nil
+            lastRequestTime = nil
             didChangeEnabled(isEnabled)
+            if !isEnabled { requestFixedResolutionMode() }
         }
     }
     @Published private(set) var errorMessage: String?
@@ -17,6 +20,7 @@ final class AppleDynamicResolutionModel: ObservableObject {
 
     private let displayCount: Int
     private let didChangeEnabled: (Bool) -> Void
+    private let requestFixedResolution: @MainActor () async throws -> Void
     private var task: Task<Void, Never>?
     private var viewportSizes = [Int: AppleDynamicResolutionSize]()
     private var lastRequestedSizes: [AppleDynamicResolutionSize]?
@@ -26,10 +30,12 @@ final class AppleDynamicResolutionModel: ObservableObject {
     init(
         displayCount: Int = 1,
         isEnabled: Bool = true,
-        didChangeEnabled: @escaping (Bool) -> Void = { _ in }
+        didChangeEnabled: @escaping (Bool) -> Void = { _ in },
+        requestFixedResolution: @escaping @MainActor () async throws -> Void = { }
     ) {
         self.displayCount = min(2, max(1, displayCount))
         self.didChangeEnabled = didChangeEnabled
+        self.requestFixedResolution = requestFixedResolution
         self.isEnabled = self.displayCount == 1 && isEnabled
     }
 
@@ -103,5 +109,21 @@ final class AppleDynamicResolutionModel: ObservableObject {
 
     func clearError() {
         errorMessage = nil
+    }
+
+    private func requestFixedResolutionMode() {
+        task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try Task.checkCancellation()
+                try await requestFixedResolution()
+                try Task.checkCancellation()
+                errorMessage = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 }

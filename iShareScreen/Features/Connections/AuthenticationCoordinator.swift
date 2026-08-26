@@ -90,6 +90,10 @@ final class AuthenticationCoordinator: ObservableObject {
                     .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
                     ?? fallbackDisplaySize
             }
+            let requestedDisplaySizes = virtualDisplayCount == .one
+                && !sessionFeaturePreferences.usesDynamicResolution
+                ? [.fixed1080p]
+                : initialDisplaySizes
             guard savedConnection?.sharingType != .standard else {
                 throw AuthenticationCoordinatorError.standardModeUnavailable
             }
@@ -100,7 +104,7 @@ final class AuthenticationCoordinator: ObservableObject {
                     let session = try await authenticator.connect(to: endpoint, credentials: credentials)
                     _ = try await controlChannelNegotiator.enableEncryption(
                         for: session,
-                        displaySizes: initialDisplaySizes
+                        displaySizes: requestedDisplaySizes
                     )
                     let negotiation = try await mediaNegotiator.negotiate(
                         session,
@@ -167,7 +171,10 @@ final class AuthenticationCoordinator: ObservableObject {
                     session.install(dynamicResolutionModel: AppleDynamicResolutionModel(
                         displayCount: virtualDisplayCount.rawValue,
                         isEnabled: sessionFeaturePreferences.usesDynamicResolution,
-                        didChangeEnabled: sessionFeaturePreferences.setUsesDynamicResolution
+                        didChangeEnabled: sessionFeaturePreferences.setUsesDynamicResolution,
+                        requestFixedResolution: {
+                            try await dynamicResolutionController?.requestFixedResolution()
+                        }
                     ))
                     let controlMessages = AppleControlMessageService(
                         session: session,

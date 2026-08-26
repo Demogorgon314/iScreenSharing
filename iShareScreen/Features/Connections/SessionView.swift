@@ -79,7 +79,7 @@ struct SessionView: View {
             Text(dynamicResolution.errorMessage ?? "The remote display resolution could not be changed.")
         }
         .onChange(of: dynamicResolution.isEnabled) { _, enabled in
-            if enabled { scheduleDynamicResolution() } else { dynamicResolution.cancel() }
+            if enabled { scheduleDynamicResolution() }
         }
         .onChange(of: displayLayout.layout) { _, _ in
             if commandState.canUseDynamicResolution {
@@ -222,7 +222,7 @@ struct SessionView: View {
         viewportStore.save(size, for: endpoint, displayIndex: displayIndex)
         isLiveResizing = isResizing
         if isResizing {
-            dynamicResolution.cancel()
+            if dynamicResolution.isEnabled { dynamicResolution.cancel() }
         } else {
             scheduleDynamicResolution(waitsForViewportToSettle: false)
         }

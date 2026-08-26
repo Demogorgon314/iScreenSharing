@@ -12,6 +12,55 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         XCTAssertFalse(AppleDynamicResolutionModel(displayCount: 2).isEnabled)
     }
 
+    @MainActor
+    func testSwitchingModesRequestsFixedResolutionAndCanRestoreTheSameViewport() async throws {
+        let firstDynamicRequest = expectation(description: "First dynamic resolution requested")
+        let fixedRequest = expectation(description: "Fixed resolution requested")
+        let restoredDynamicRequest = expectation(description: "Dynamic resolution restored")
+        let recorder = DynamicResolutionMessageRecorder()
+        let controller = AppleDynamicResolutionController(
+            initialCanvas: AppleCanvas(width: 1_920, height: 1_080, tileCount: 4),
+            mediaConfiguration: Data([0x1c, 0, 0, 0]),
+            sendMessage: { message in
+                let count = await recorder.append(message)
+                switch count {
+                case 1: firstDynamicRequest.fulfill()
+                case 2: fixedRequest.fulfill()
+                case 3: restoredDynamicRequest.fulfill()
+                default: break
+                }
+            },
+            applyCanvas: { _ in },
+            prepareMediaRestart: { }
+        )
+        let model = AppleDynamicResolutionModel(
+            requestFixedResolution: { try await controller.requestFixedResolution() }
+        )
+
+        model.schedule(
+            viewport: CGSize(width: 1_000, height: 700),
+            controller: controller,
+            waitsForViewportToSettle: false
+        )
+        await fulfillment(of: [firstDynamicRequest], timeout: 1)
+        model.isEnabled = false
+        await fulfillment(of: [fixedRequest], timeout: 1)
+        model.isEnabled = true
+        model.schedule(
+            viewport: CGSize(width: 1_000, height: 700),
+            controller: controller,
+            waitsForViewportToSettle: false
+        )
+        await fulfillment(of: [restoredDynamicRequest], timeout: 1)
+
+        let messages = await recorder.allMessages()
+        XCTAssertEqual(messages.count, 3)
+        XCTAssertEqual(try messages[0].uint32BE(at: 12 + 0x9c), 2_000)
+        XCTAssertEqual(try messages[1].uint32BE(at: 12 + 0x9c), 3_840)
+        XCTAssertEqual(try messages[2].uint32BE(at: 12 + 0x9c), 2_000)
+        XCTAssertNil(model.errorMessage)
+    }
+
     func testNormalizesViewportToEvenProtocolBounds() {
         XCTAssertEqual(
             AppleDynamicResolutionSize.normalized(viewport: CGSize(width: 100.9, height: 200.1)),
@@ -132,7 +181,11 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
 private actor DynamicResolutionMessageRecorder {
     private var messages = [Data]()
 
-    func append(_ message: Data) { messages.append(message) }
+    @discardableResult
+    func append(_ message: Data) -> Int {
+        messages.append(message)
+        return messages.count
+    }
     func count() -> Int { messages.count }
     func allMessages() -> [Data] { messages }
 }

@@ -92,6 +92,64 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.tabbingMode, .disallowed)
     }
 
+    func testFixedResolutionWindowFitsAndRestoresTheVideoAspectRatioAfterResize() async {
+        let coordinator = SessionWindowCoordinator()
+        let window = makeWindow(toolbarIsVisible: true)
+        window.setContentSize(NSSize(width: 1_100, height: 700))
+
+        coordinator.configureSessionWindowAspectRatio(
+            window,
+            videoSize: NSSize(width: 1_920, height: 1_080),
+            dynamicResolutionEnabled: false
+        )
+
+        XCTAssertEqual(window.contentAspectRatio, .zero)
+        XCTAssertEqual(
+            window.contentView!.bounds.width / window.contentView!.bounds.height,
+            16 / 9,
+            accuracy: 0.002
+        )
+        XCTAssertLessThanOrEqual(window.contentView!.bounds.width, 1_100)
+        XCTAssertLessThanOrEqual(window.contentView!.bounds.height, 700)
+
+        window.setContentSize(NSSize(width: 1_000, height: 900))
+        coordinator.windowDidEndLiveResize(Notification(
+            name: NSWindow.didEndLiveResizeNotification,
+            object: window
+        ))
+        await waitForMainQueue()
+
+        XCTAssertEqual(
+            window.contentView!.bounds.width / window.contentView!.bounds.height,
+            16 / 9,
+            accuracy: 0.002
+        )
+    }
+
+    func testDynamicResolutionDoesNotInterveneInLiveWindowResize() async {
+        let coordinator = SessionWindowCoordinator()
+        let window = makeWindow(toolbarIsVisible: true)
+
+        coordinator.configureSessionWindowAspectRatio(
+            window,
+            videoSize: NSSize(width: 1_920, height: 1_080),
+            dynamicResolutionEnabled: true
+        )
+
+        XCTAssertEqual(window.contentAspectRatio, .zero)
+        XCTAssertFalse(coordinator.responds(to: NSSelectorFromString("windowWillResize:toFrameSize:")))
+
+        let resizedContentSize = NSSize(width: 1_000, height: 900)
+        window.setContentSize(resizedContentSize)
+        coordinator.windowDidEndLiveResize(Notification(
+            name: NSWindow.didEndLiveResizeNotification,
+            object: window
+        ))
+        await waitForMainQueue()
+
+        XCTAssertEqual(window.contentView!.bounds.size, resizedContentSize)
+    }
+
     func testMapsAppKitToolbarDisplayModesToSupportedPreferences() {
         XCTAssertEqual(
             SessionToolbarDisplayMode(appKitDisplayMode: .iconOnly),
@@ -133,5 +191,13 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         window.toolbar = toolbar
         toolbar.isVisible = toolbarIsVisible
         return window
+    }
+
+    private func waitForMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
     }
 }

@@ -15,6 +15,21 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         XCTAssertEqual(messages[0].first, 0x1d)
     }
 
+    func testFixedResolutionUses1080pLogicalSizeWithHiDPIBackingPixels() async throws {
+        let recorder = MessageRecorder()
+        let controller = makeController(recorder: recorder)
+
+        try await controller.requestFixedResolution()
+
+        let messages = await recorder.messages
+        let message = try XCTUnwrap(messages.first)
+        let firstModeOffset = 12 + 0x9c
+        XCTAssertEqual(try message.uint32BE(at: firstModeOffset), 3_840)
+        XCTAssertEqual(try message.uint32BE(at: firstModeOffset + 4), 2_160)
+        XCTAssertEqual(try message.uint32BE(at: firstModeOffset + 8), 1_920)
+        XCTAssertEqual(try message.uint32BE(at: firstModeOffset + 12), 1_080)
+    }
+
     func testRequestsDifferentResolutionForEachDisplay() async throws {
         let recorder = MessageRecorder()
         let controller = makeController(recorder: recorder)
