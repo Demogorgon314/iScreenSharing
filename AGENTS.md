@@ -151,7 +151,24 @@ defined investigation instead of baking a hypothesis into production code.
 - Private framework expansion requires an explicit reason, runtime availability
   checks, graceful fallback, and tests for the unsupported path.
 
-## Tests and verification
+## Performance optimization
+
+- Every performance optimization must include reproducible, quantitative
+  before-and-after measurements using the same workload and metric definitions.
+
+## Tests and Documentation
+
+- Add tests for realistic observable regressions, non-trivial invariants or
+  boundaries, and concrete bugs. Code changing or coverage increasing is not
+  sufficient justification by itself.
+- Prefer existing coverage at the behavior boundary. Avoid tests that mirror
+  literals, mappings, obvious control flow, implementation details, or removed
+  features unless absence is itself a contract. For concurrency, prefer
+  deterministic coordination or controlled scheduling over sleeps when
+  practical.
+- Comments should explain non-obvious rationale, invariants, safety constraints,
+  or external quirks rather than restating code. Public API documentation should
+  describe observable contracts, not incidental implementation details.
 
 Every public parser, encoder, state transition, and boundary condition changed
 by a task needs focused coverage. Prefer:
