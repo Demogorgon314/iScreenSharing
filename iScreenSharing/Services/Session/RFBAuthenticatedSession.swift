@@ -25,6 +25,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var dynamicResolutionModel: AppleDynamicResolutionModel?
     private(set) var remoteSystemCapabilities: AppleRemoteSystemCapabilities?
     private(set) var keyboardInputSourceService: AppleKeyboardInputSourceService?
+    private(set) var fileTransferService: AppleFileTransferService?
     private(set) var controlState: AppleSessionControlState?
 
     private let transport: NWConnectionTransport
@@ -68,6 +69,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         mediaReceiver?.close()
         let clipboardService = clipboardService
         let keyboardInputSourceService = keyboardInputSourceService
+        let fileTransferService = fileTransferService
         let inputController = inputController
         let recordLayer = recordLayer
         let encryptedWriter = encryptedWriter
@@ -75,6 +77,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         Task { @MainActor in
             clipboardService?.close()
             keyboardInputSourceService?.close()
+            await fileTransferService?.close()
             if let recordLayer {
                 try? await encryptedWriter.send(
                     [AppleClipboardMessage.disable],
@@ -186,6 +189,10 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     func install(keyboardInputSourceService: AppleKeyboardInputSourceService) {
         self.keyboardInputSourceService?.close()
         self.keyboardInputSourceService = keyboardInputSourceService
+    }
+
+    func install(fileTransferService: AppleFileTransferService) {
+        self.fileTransferService = fileTransferService
     }
 
     @MainActor

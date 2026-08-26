@@ -60,7 +60,42 @@ actor AppleInputController {
         displayID: UInt32? = nil,
         clickCount: Int = 0
     ) async {
-        guard isControlling, let session, let recordLayer = session.recordLayer, !isClosed else { return }
+        _ = await sendPointer(
+            buttons: buttons,
+            x: x,
+            y: y,
+            displayID: displayID,
+            clickCount: clickCount
+        )
+    }
+
+    func fileDragPointer(
+        buttons: UInt8,
+        x: Int,
+        y: Int,
+        displayID: UInt32? = nil
+    ) async {
+        // Native HP drag events retain a click count of one through down and up;
+        // Finder drop targets do not accept the otherwise equivalent zero-count sequence.
+        _ = await sendPointer(
+            buttons: buttons,
+            x: x,
+            y: y,
+            displayID: displayID,
+            clickCount: 1
+        )
+    }
+
+    private func sendPointer(
+        buttons: UInt8,
+        x: Int,
+        y: Int,
+        displayID: UInt32?,
+        clickCount: Int
+    ) async -> Bool {
+        guard isControlling, let session, let recordLayer = session.recordLayer, !isClosed else {
+            return false
+        }
         let point = Self.clampedPoint(
             x: x,
             y: y,
@@ -82,9 +117,11 @@ actor AppleInputController {
             messages.append(message)
             try await session.sendEncrypted(messages)
             sentEventCount += 1
+            return true
         } catch {
             displaySelection = AppleInputDisplaySelection()
             // Input is best effort. Session-level failures surface through the active connection.
+            return false
         }
     }
 

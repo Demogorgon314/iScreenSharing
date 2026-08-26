@@ -24,6 +24,7 @@ final class AppleSessionControlState: ObservableObject {
                     AppleRFBMessages.controlMode(observing: newValue)
                 )
                 await session.inputController?.setControlling(!newValue)
+                await session.fileTransferService?.setControlling(!newValue)
                 guard !Task.isCancelled else { return }
                 isObserving = newValue
                 session.clipboardService?.setControlling(!newValue)

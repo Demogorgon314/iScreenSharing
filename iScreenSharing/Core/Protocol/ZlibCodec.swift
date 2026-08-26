@@ -1,5 +1,6 @@
 import Compression
 import Foundation
+import zlib
 
 enum ZlibCodec {
     static let defaultMaximumOutputLength = 16 * 1_024 * 1_024
@@ -18,6 +19,61 @@ enum ZlibCodec {
         var output = Data([0x78, 0x9c])
         output.append(deflate)
         output.appendUInt32BE(adler32(input))
+        return output
+    }
+
+    /// Produces the unterminated zlib stream used by Apple's drag-and-drop
+    /// messages: one level-9 deflate call with `Z_SYNC_FLUSH` and no Adler-32
+    /// trailer. This is intentionally distinct from the completed stream used
+    /// by ordinary clipboard messages.
+    static func compressSyncFlush(
+        _ input: Data,
+        maximumOutputLength: Int = defaultMaximumOutputLength
+    ) throws -> Data {
+        guard !input.isEmpty, maximumOutputLength > 0 else {
+            throw ZlibCodecError.invalidStream
+        }
+        let (growth, growthOverflow) = input.count.addingReportingOverflow(input.count / 512)
+        let (requiredCapacity, capacityOverflow) = growth.addingReportingOverflow(10_006)
+        guard !growthOverflow, !capacityOverflow else { throw ZlibCodecError.outputTooLarge }
+        let capacity = min(requiredCapacity, maximumOutputLength)
+
+        var stream = z_stream()
+        guard deflateInit2_(
+            &stream,
+            9,
+            Z_DEFLATED,
+            15,
+            9,
+            Z_DEFAULT_STRATEGY,
+            ZLIB_VERSION,
+            Int32(MemoryLayout<z_stream>.size)
+        ) == Z_OK else {
+            throw ZlibCodecError.invalidStream
+        }
+        defer { deflateEnd(&stream) }
+
+        var output = Data(count: capacity)
+        let status = input.withUnsafeBytes { inputBuffer in
+            output.withUnsafeMutableBytes { outputBuffer in
+                guard let inputAddress = inputBuffer.bindMemory(to: Bytef.self).baseAddress,
+                      let outputAddress = outputBuffer.bindMemory(to: Bytef.self).baseAddress else {
+                    return Int32(Z_STREAM_ERROR)
+                }
+                stream.next_in = UnsafeMutablePointer(mutating: inputAddress)
+                stream.avail_in = uInt(inputBuffer.count)
+                stream.next_out = outputAddress
+                stream.avail_out = uInt(outputBuffer.count)
+                return deflate(&stream, Z_SYNC_FLUSH)
+            }
+        }
+        guard status == Z_OK, stream.avail_in == 0,
+              stream.total_out <= UInt(maximumOutputLength) else {
+            throw status == Z_BUF_ERROR || stream.avail_out == 0
+                ? ZlibCodecError.outputTooLarge
+                : ZlibCodecError.invalidStream
+        }
+        output.count = Int(stream.total_out)
         return output
     }
 

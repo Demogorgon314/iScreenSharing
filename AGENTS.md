@@ -46,7 +46,7 @@ defined investigation instead of baking a hypothesis into production code.
 ### Session and commands
 
 - `RFBAuthenticatedSession` owns one authenticated connection and its control,
-  input, clipboard, audio, and video resources.
+  input, clipboard, file-transfer, audio, and video resources.
 - `SessionWindowCoordinator` owns manually created AppKit session windows.
 - `SessionCommandState` is the single observable façade for session commands,
   toolbar state, and menu checkmarks.
@@ -133,6 +133,10 @@ defined investigation instead of baking a hypothesis into production code.
   implementation deliberately filters file URLs and file-promise types; do not
   describe it as file transfer or add file semantics to the inline archive
   without tracing the native file-transfer protocol.
+- Viewer-to-host file transfer is a separate type 32/30/34 exchange. Preserve
+  ordered encrypted writes, require both advertised server commands, and let
+  the native `SSFileCopySenderFW` helper own file metadata and payload framing;
+  validate its output before forwarding it.
 - DeviceInfo framebuffer encoding is 1110 (`0x456`); UserInfo is 1102. Bonjour
   hardware metadata comes from the sibling `_device-info._tcp` TXT record, not
   the `_rfb._tcp` service TXT record.

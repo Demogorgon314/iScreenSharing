@@ -35,6 +35,47 @@ final class AppleEncryptedRecordLayerTests: XCTestCase {
         XCTAssertEqual(batchedRecords, sequentialRecords)
     }
 
+    func testFileCopyFrameSpansRecordsAsOneContinuousMessage() throws {
+        var body = Data()
+        body.appendUInt16BE(1)
+        body.appendUInt16BE(102)
+        body.appendUInt32BE(0x1234)
+        body.appendUInt32BE(65_536)
+        body.append(Data(repeating: 0x58, count: 65_536))
+        var message = Data([0x22, 0])
+        message.appendUInt32BE(UInt32(body.count))
+        message.append(body)
+        XCTAssertEqual(message.count, 65_554)
+
+        let fragments = AppleFileTransferMessage.fragments(of: message)
+        XCTAssertEqual(fragments.map(\.count), [60_000, 5_554])
+        XCTAssertNotEqual(fragments[1].first, 0x22)
+
+        let sender = try makeLayer()
+        let receiver = try makeLayer()
+        let records = try sender.encrypt(fragments)
+        var offset = 0
+        var reassembled = Data()
+        while offset < records.count {
+            let ciphertextLength = try Int(records.uint16BE(at: offset))
+            let ciphertextStart = offset + 2
+            let ciphertextEnd = ciphertextStart + ciphertextLength
+            XCTAssertLessThanOrEqual(ciphertextEnd, records.count)
+            reassembled.append(try receiver.decrypt(
+                records.subdata(in: ciphertextStart..<ciphertextEnd)
+            ))
+            offset = ciphertextEnd
+        }
+
+        XCTAssertEqual(reassembled, message)
+        let parsed = try AppleFileTransferMessage.senderFrame(
+            from: reassembled,
+            expectedSessionID: 0x1234
+        )
+        XCTAssertEqual(parsed.command, 102)
+        XCTAssertEqual(parsed.transferredBytes, 65_536)
+    }
+
     func testSerialWriterPreservesEncryptionAndTransportOrder() async throws {
         let sink = BlockingRecordSink()
         let writer = AppleEncryptedRecordWriter { record in

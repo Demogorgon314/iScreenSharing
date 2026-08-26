@@ -28,6 +28,7 @@ struct SessionView: View {
                     renderer: videoRenderer,
                     stream: stream,
                     input: isObserving ? nil : session.inputController,
+                    fileTransfer: isObserving ? nil : session.fileTransferService,
                     cursors: session.cursorStore,
                     displayScale: commandState.displayScale,
                     stretchesVideoToFillBounds:
@@ -101,6 +102,9 @@ struct SessionView: View {
                 ScreenshotButtonAnchor(anchorView: $screenshotButtonAnchor)
             }
             .help("Take Screenshot")
+            if let history = sessions.session(for: endpoint)?.fileTransferService?.history {
+                FileTransferToolbarButton(history: history)
+            }
             Button { commandState.setScalesToFit(!commandState.displayScale.scalesToFit) } label: {
                 Label(
                     commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On",
@@ -335,6 +339,7 @@ private struct ActiveVideoSessionView: View {
     let renderer: AppleVideoRenderer
     @ObservedObject var stream: AppleVideoStream
     let input: AppleInputController?
+    let fileTransfer: AppleFileTransferService?
     let cursors: AppleCursorStore?
     let displayScale: AppleVideoDisplayScale
     let stretchesVideoToFillBounds: Bool
@@ -359,6 +364,7 @@ private struct ActiveVideoSessionView: View {
                 frames: stream.frames,
                 performance: stream.performance,
                 input: input,
+                fileTransfer: fileTransfer,
                 cursors: cursors,
                 displayScale: displayScale,
                 stretchesVideoToFillBounds: stretchesVideoToFillBounds,

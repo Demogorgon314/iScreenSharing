@@ -2,8 +2,8 @@
 
 iScreenSharing is a native macOS client for Apple's proprietary Screen
 Sharing high-performance mode. It targets macOS 15 and implements the Apple RFB
-control channel together with the encrypted HEVC, audio, feedback, input, and
-clipboard protocols used by Screen Sharing.app.
+control channel together with the encrypted HEVC, audio, feedback, input,
+clipboard, and file-transfer protocols used by Screen Sharing.app.
 
 This is not a general-purpose VNC raster client. The project is focused on
 interoperability with modern macOS Screen Sharing hosts and on matching the
@@ -30,8 +30,13 @@ operational.
 - Encrypted keyboard, pointer, high-precision scrolling, observe/control mode,
   and Apple remote system commands
 - Focus-aware, multi-item clipboard synchronization for inline pasteboard
-  flavors, plus keyboard input-source sharing. File URLs, file promises, and
-  file transfer are intentionally excluded
+  flavors, plus keyboard input-source sharing. Clipboard file URLs and file
+  promises remain filtered because file transfer uses a separate protocol
+- Viewer-to-host transfer of one regular file at a time by dragging it onto the
+  remote canvas, with transfer progress and per-session history. The feature is
+  offered only when the host advertises both required server commands; folders,
+  symbolic links, multiple-item drops, and host-to-viewer transfer are not yet
+  exposed
 - AAC-ELD remote audio with persistent mute state
 - Bonjour discovery, Apple device metadata, native device icons, saved
   connections, groups, recent items, and Keychain credentials
@@ -47,7 +52,7 @@ SessionCommandState / SessionManager
         ▼
 RFBAuthenticatedSession
         ├── encrypted RFB control and input
-        ├── clipboard and keyboard-source services
+        ├── clipboard, file-transfer, and keyboard-source services
         └── negotiated UDP media streams
                 │
                 ▼
@@ -76,9 +81,9 @@ Source ownership is divided as follows:
   UDP socket delivery, and control/media channel coordination
 - `Services/Media`: ordered SRTP/RTP processing, feedback, decoding, playout,
   audio, and frame publication
-- `Services/Clipboard`, `Services/Input`, `Services/Security`, and
-  `Services/Session`: focused platform adapters and authenticated-session
-  resource ownership
+- `Services/Clipboard`, `Services/FileTransfer`, `Services/Input`,
+  `Services/Security`, and `Services/Session`: focused platform adapters and
+  authenticated-session resource ownership
 
 Encrypted control writes are serialized because Apple records use chained
 cipher state. For each video stream, UDP draining and ordered per-datagram
@@ -101,6 +106,16 @@ VCP accepts tile identity/order metadata and returns one full-canvas pixel
 buffer after its internal tile assembly completes. If the private framework or
 symbols are unavailable, the app falls back to public VideoToolbox tile output
 and Metal composition.
+
+Viewer-to-host file transfer also launches ScreenSharing.framework's
+`SSFileCopySenderFW` helper when it is available. The helper is the native owner
+of Finder metadata, resource-fork, extended-attribute, and compressed file-copy
+frames; iScreenSharing validates and forwards those frames through its ordered
+encrypted writer. If the helper or the required host commands are unavailable,
+file drops fail closed instead of using an inferred wire format.
+The file-transfer wire contract and helper adapter are verified against macOS
+15.7.7 (24G720); capability checks and strict frame validation remain in place
+on other releases because these interfaces are private.
 
 Private APIs are undocumented and may change between macOS releases. This path
 is not suitable for an App Store distribution without replacing it with a

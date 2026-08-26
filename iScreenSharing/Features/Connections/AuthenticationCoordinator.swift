@@ -118,6 +118,25 @@ final class AuthenticationCoordinator: ObservableObject {
                             try await input.sendClipboard(archive, promises: true)
                         }
                     )
+                    let fileTransferService: AppleFileTransferService?
+                    let fileCopySender = AppleSystemFileCopySender()
+                    if session.serverInfo.supportsViewerToHostFileTransfer,
+                       fileCopySender.isAvailable {
+                        let history = AppleFileTransferHistory()
+                        let service = AppleFileTransferService(
+                            remoteName: session.serverInfo.name,
+                            history: history,
+                            sender: fileCopySender,
+                            send: { [weak session] messages in
+                                guard let session else { throw CancellationError() }
+                                try await session.sendEncrypted(messages)
+                            }
+                        )
+                        session.install(fileTransferService: service)
+                        fileTransferService = service
+                    } else {
+                        fileTransferService = nil
+                    }
                     try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
                     let dynamicResolutionController: AppleDynamicResolutionController?
                     if virtualDisplayCount == .one, let stream = session.videoStream {
@@ -213,6 +232,9 @@ final class AuthenticationCoordinator: ObservableObject {
                             await MainActor.run {
                                 connectionStore.record(endpoint, deviceInfo: info)
                             }
+                        },
+                        receiveFileTransferMessage: { [weak fileTransferService] message in
+                            await fileTransferService?.receive(message) ?? false
                         }
                     )
                     session.install(

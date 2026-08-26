@@ -5,6 +5,36 @@ struct RFBServerInfo: Equatable, Sendable {
     let height: UInt16
     let pixelFormat: Data
     let name: String
+    let serverFlags: UInt32?
+    let commandBitmap: Data?
+
+    init(
+        width: UInt16,
+        height: UInt16,
+        pixelFormat: Data,
+        name: String,
+        serverFlags: UInt32? = nil,
+        commandBitmap: Data? = nil
+    ) {
+        self.width = width
+        self.height = height
+        self.pixelFormat = pixelFormat
+        self.name = name
+        self.serverFlags = serverFlags
+        self.commandBitmap = commandBitmap
+    }
+
+    func supportsServerCommand(_ command: UInt8) -> Bool {
+        guard let commandBitmap, commandBitmap.count == 16 else { return false }
+        let byteIndex = Int(command >> 3)
+        guard byteIndex < commandBitmap.count else { return false }
+        let mask = UInt8(1 << (7 - (command & 7)))
+        return commandBitmap[byteIndex] & mask != 0
+    }
+
+    var supportsViewerToHostFileTransfer: Bool {
+        supportsServerCommand(32) && supportsServerCommand(34)
+    }
 
     static func parse(header: Data, nameData: Data) throws -> Self {
         guard header.count == 24,
@@ -16,11 +46,27 @@ struct RFBServerInfo: Equatable, Sendable {
         guard width > 0, height > 0 else {
             throw RFBServerInitError.invalidDimensions
         }
+        let enhanced: (flags: UInt32?, commands: Data?, name: Data)
+        if nameData.count >= 2, try nameData.uint16BE(at: 0) == 0 {
+            guard nameData.count >= 22 else { throw RFBServerInitError.invalidMessage }
+            enhanced = (
+                try nameData.uint32BE(at: 2),
+                nameData.subdata(in: 6..<22),
+                nameData.subdata(in: 22..<nameData.count)
+            )
+        } else {
+            enhanced = (nil, nil, nameData)
+        }
+        guard let name = String(data: enhanced.name, encoding: .utf8) else {
+            throw RFBServerInitError.invalidMessage
+        }
         return Self(
             width: width,
             height: height,
             pixelFormat: header.subdata(in: 4..<20),
-            name: String(decoding: nameData, as: UTF8.self)
+            name: name,
+            serverFlags: enhanced.flags,
+            commandBitmap: enhanced.commands
         )
     }
 }
@@ -41,4 +87,3 @@ enum RFBServerInitError: LocalizedError, Equatable {
         }
     }
 }
-
