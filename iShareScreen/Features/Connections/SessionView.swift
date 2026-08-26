@@ -12,6 +12,7 @@ struct SessionView: View {
     @State private var viewportSize = CGSize.zero
     @State private var isLiveResizing = false
     @State private var sessionWindowIdentifier = UUID()
+    @State private var screenshotButtonAnchor: NSView?
     let videoRenderer: AppleVideoRenderer
     private let viewportStore = SessionViewportStore()
 
@@ -95,6 +96,9 @@ struct SessionView: View {
         ToolbarItemGroup {
             Button { takeScreenshot() } label: {
                 Label("Take Screenshot", systemImage: "camera")
+            }
+            .background {
+                ScreenshotButtonAnchor(anchorView: $screenshotButtonAnchor)
             }
             .help("Take Screenshot")
             Button { commandState.setScalesToFit(!commandState.displayScale.scalesToFit) } label: {
@@ -253,28 +257,21 @@ struct SessionView: View {
     }
 
     private func takeScreenshot() {
-        guard let image = videoRenderer.snapshot() else {
+        guard let anchorView = screenshotButtonAnchor,
+              anchorView.window != nil,
+              let image = videoRenderer.snapshot() else {
             NSSound.beep()
             return
         }
-        ScreenshotSharingPicker.show(image, for: NSApp.currentEvent)
-    }
-}
-
-@MainActor
-private enum ScreenshotSharingPicker {
-    static func show(_ image: NSImage, for event: NSEvent?) {
-        guard let window = event?.window ?? NSApp.keyWindow,
-              let contentView = window.contentView else { return }
-        let point = event.map {
-            contentView.convert($0.locationInWindow, from: nil)
-        } ?? CGPoint(x: contentView.bounds.midX, y: contentView.bounds.maxY)
-        let anchor = CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2)
-        NSSharingServicePicker(items: [image]).show(
-            relativeTo: anchor,
-            of: contentView,
-            preferredEdge: .minY
-        )
+        do {
+            let screenshotURL = try ScreenshotFileWriter.write(
+                image,
+                suggestedName: "Screenshot \(endpoint.displayName)"
+            )
+            ScreenshotSharingPicker.show(screenshotURL, relativeTo: anchorView)
+        } catch {
+            NSSound.beep()
+        }
     }
 }
 
