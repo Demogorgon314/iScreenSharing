@@ -35,7 +35,9 @@ struct ConnectionEditorView: View {
         VStack(spacing: 16) {
             Form {
                 TextField("Name", text: $name)
+                    .disabled(isTailscaleConnection)
                 TextField("Server Address", text: $serverAddress)
+                    .disabled(isTailscaleConnection)
                 TextField("Username", text: $username)
                 Picker("Screen Sharing Type", selection: $sharingType) {
                     ForEach(ScreenSharingType.allCases, id: \.self) { type in
@@ -50,6 +52,7 @@ struct ConnectionEditorView: View {
                     }
                 }
                 TextField("Port", text: $port)
+                    .disabled(isTailscaleConnection)
             }
             .formStyle(.grouped)
 
@@ -98,6 +101,9 @@ struct ConnectionEditorView: View {
     }
 
     private func editedEndpoint() throws -> ConnectionEndpoint {
+        if isTailscaleConnection {
+            return connection.endpoint
+        }
         let address = serverAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let portNumber = UInt16(port), portNumber > 0 else {
             throw ConnectionEditorError.invalidPort
@@ -112,6 +118,10 @@ struct ConnectionEditorView: View {
     private static func serverAddress(for endpoint: ConnectionEndpoint) -> String {
         guard let service = endpoint.bonjourService else { return endpoint.host }
         return "\(service.name).\(service.type).\(service.domain)"
+    }
+
+    private var isTailscaleConnection: Bool {
+        connection.endpoint.route == .tailscale
     }
 }
 

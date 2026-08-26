@@ -40,6 +40,9 @@ operational.
 - AAC-ELD remote audio with persistent mute state
 - Bonjour discovery, Apple device metadata, native device icons, saved
   connections, groups, recent items, and Keychain credentials
+- An embedded userspace Tailscale node with browser login, peer discovery,
+  encrypted on-disk state, and RFB TCP plus packet-preserving UDP media routed
+  through the tailnet
 
 ## Architecture
 
@@ -67,6 +70,12 @@ RFBAuthenticatedSession
                 ▼
         display scheduler and Metal renderer
 ```
+
+Direct and Tailscale sessions share the same authenticated-session and media
+pipelines. Direct sessions use Network.framework and Darwin UDP sockets;
+Tailscale sessions select the embedded `libtailscale` TCP and packet UDP
+adapters at the transport boundary. The remote Mac must still be signed in to
+the same tailnet and have Screen Sharing enabled.
 
 Source ownership is divided as follows:
 
@@ -128,6 +137,8 @@ public implementation.
 - A remote Mac with Screen Sharing enabled
 - Network access to the remote Screen Sharing service and negotiated UDP media
   ports
+- Go 1.25.5 or later when rebuilding the embedded Tailscale framework
+- Apple silicon for the current embedded Tailscale framework build
 
 The current Xcode project contains a macOS target only. It does not build for
 iPhone, iPad, or Mac Catalyst without adding platform-specific UI, input,
@@ -136,6 +147,8 @@ clipboard, display-link, and decoder adapters.
 ## Build and test
 
 ```sh
+git submodule update --init --recursive
+
 xcodebuild -project iScreenSharing.xcodeproj \
   -scheme iScreenSharing \
   -destination 'platform=macOS' \
@@ -146,6 +159,11 @@ xcodebuild -project iScreenSharing.xcodeproj \
   -destination 'platform=macOS' \
   test
 ```
+
+The app target builds `Dependencies/libtailscale/swift/TailscaleKit.framework`
+on demand and embeds it in the application bundle. Tailscale's persistent node
+state is encrypted with a random 32-byte key stored in the user's Keychain; the
+key and state must be kept together across app updates.
 
 Run one test class while iterating:
 

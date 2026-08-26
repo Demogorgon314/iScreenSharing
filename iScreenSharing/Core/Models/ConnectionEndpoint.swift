@@ -1,13 +1,23 @@
 import Foundation
 
+enum ConnectionRoute: String, Codable, Sendable {
+    case direct
+    case tailscale
+}
+
 struct ConnectionEndpoint: Hashable, Codable, Sendable {
     static let defaultPort: UInt16 = 5900
 
     let host: String
     let port: UInt16
     let bonjourService: BonjourServiceEndpoint?
+    let route: ConnectionRoute
 
-    init(host: String, port: UInt16 = defaultPort) throws {
+    init(
+        host: String,
+        port: UInt16 = defaultPort,
+        route: ConnectionRoute = .direct
+    ) throws {
         let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedHost.isEmpty, !normalizedHost.contains(where: { $0.isWhitespace }) else {
             throw ConnectionEndpointError.invalidHost
@@ -15,12 +25,14 @@ struct ConnectionEndpoint: Hashable, Codable, Sendable {
         self.host = normalizedHost
         self.port = port
         bonjourService = nil
+        self.route = route
     }
 
     init(bonjourService: BonjourServiceEndpoint) {
         host = bonjourService.name
         port = Self.defaultPort
         self.bonjourService = bonjourService
+        route = .direct
     }
 
     init(_ input: String) throws {
@@ -78,6 +90,24 @@ struct ConnectionEndpoint: Hashable, Codable, Sendable {
             components.port = Int(port)
         }
         return components.url!
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case host
+        case port
+        case bonjourService
+        case route
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        host = try container.decode(String.self, forKey: .host)
+        port = try container.decode(UInt16.self, forKey: .port)
+        bonjourService = try container.decodeIfPresent(
+            BonjourServiceEndpoint.self,
+            forKey: .bonjourService
+        )
+        route = try container.decodeIfPresent(ConnectionRoute.self, forKey: .route) ?? .direct
     }
 }
 

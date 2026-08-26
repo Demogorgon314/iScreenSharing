@@ -28,7 +28,24 @@ struct AppleMediaReceiveBufferConfiguration: Equatable, Sendable {
     let actualBytes: Int?
 }
 
-final class AppleMediaReceiver: @unchecked Sendable {
+protocol AppleMediaReceiving: AppleMediaControlSending, AnyObject, Sendable {
+    func startVideoDelivery(
+        mediaStreamIndex: Int,
+        on deliveryQueue: DispatchQueue,
+        handler: @escaping AppleVideoDatagramHandler
+    ) throws
+    func stopVideoDelivery(mediaStreamIndex: Int)
+    func videoReceiveBufferConfiguration(
+        mediaStreamIndex: Int
+    ) -> AppleMediaReceiveBufferConfiguration?
+    func drainControlPackets() -> [Data]
+    func sendVideoControl(_ datagram: Data, mediaStreamIndex: Int) throws
+    func configureRemotePorts(_ ports: AppleMediaPorts) throws
+    func stopPunching()
+    func close()
+}
+
+final class AppleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
     private static let maximumQueuedControlPackets = 16_384
     private static let maximumDatagramLength = 65_535
     private static let controlReceiveBufferBytes = 4 * 1_024 * 1_024
@@ -496,8 +513,6 @@ enum AppleMediaReceiverError: LocalizedError {
 protocol AppleMediaControlSending: Sendable {
     func sendControl(_ datagram: Data) throws
 }
-
-extension AppleMediaReceiver: AppleMediaControlSending {}
 
 private extension NSLock {
     func withLock<T>(_ body: () throws -> T) rethrows -> T {

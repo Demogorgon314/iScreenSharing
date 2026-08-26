@@ -64,13 +64,18 @@ protocol AppleMediaNegotiating: Sendable {
 
 struct AppleMediaNegotiator: AppleMediaNegotiating {
     private static let retryLimit = 16
+    private let receiverFactory: AppleMediaReceiverFactory
+
+    init(receiverFactory: AppleMediaReceiverFactory = AppleMediaReceiverFactory()) {
+        self.receiverFactory = receiverFactory
+    }
 
     func negotiate(
         _ session: RFBAuthenticatedSession,
         displayCount: Int = 1
     ) async throws -> AppleMediaNegotiationResult {
-        let receiver = try AppleMediaReceiver(
-            remoteAddress: session.remoteAddress,
+        let receiver = try await receiverFactory.makeReceiver(
+            for: session,
             displayCount: displayCount
         )
         session.install(mediaReceiver: receiver)
@@ -84,7 +89,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
 
     private func negotiate(
         _ session: RFBAuthenticatedSession,
-        receiver: AppleMediaReceiver,
+        receiver: any AppleMediaReceiving,
         displayCount: Int
     ) async throws -> AppleMediaNegotiationResult {
         let offers = try AppleMediaOffer.create()

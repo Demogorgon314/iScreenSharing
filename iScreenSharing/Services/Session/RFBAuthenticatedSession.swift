@@ -10,7 +10,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var recordLayer: AppleEncryptedRecordLayer?
     private(set) var rekeyGeneration: UInt32?
     private(set) var mediaNegotiation: AppleMediaNegotiationResult?
-    private(set) var mediaReceiver: AppleMediaReceiver?
+    private(set) var mediaReceiver: (any AppleMediaReceiving)?
     private(set) var videoStreams = [AppleVideoStream]()
     var videoStream: AppleVideoStream? {
         videoStreams.first(where: { $0.displayIndex == 0 }) ?? videoStreams.first
@@ -28,7 +28,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var fileTransferService: AppleFileTransferService?
     private(set) var controlState: AppleSessionControlState?
 
-    private let transport: NWConnectionTransport
+    private let transport: any RFBTransport
     private let encryptedWriter: AppleEncryptedRecordWriter
     private let closeLock = NSLock()
     private var hasClosed = false
@@ -40,7 +40,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         securityTypes: [RFBSecurityType],
         masterKey: Data,
         serverInfo: RFBServerInfo,
-        transport: NWConnectionTransport
+        transport: any RFBTransport
     ) {
         self.endpoint = endpoint
         self.remoteAddress = remoteAddress
@@ -125,7 +125,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.mediaNegotiation = mediaNegotiation
     }
 
-    func install(mediaReceiver: AppleMediaReceiver) {
+    func install(mediaReceiver: any AppleMediaReceiving) {
         self.mediaReceiver?.close()
         self.mediaReceiver = mediaReceiver
     }

@@ -5,7 +5,7 @@ import Foundation
 final class AppleAudioStream: ObservableObject, @unchecked Sendable {
     @Published private(set) var isMuted: Bool
 
-    private let receiver: AppleMediaReceiver
+    private let receiver: any AppleMediaReceiving
     private let decryptor: AppleSRTPDecryptor
     private let decoder: AppleAACELDDecoder
     private let player: any AppleAudioPlaying
@@ -19,7 +19,7 @@ final class AppleAudioStream: ObservableObject, @unchecked Sendable {
     private var mutedState = false
 
     init(
-        receiver: AppleMediaReceiver,
+        receiver: any AppleMediaReceiving,
         negotiation: AppleMediaNegotiationResult,
         player: (any AppleAudioPlaying)? = nil,
         isMuted: Bool = false,

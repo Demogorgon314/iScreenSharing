@@ -29,7 +29,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
-    private let receiver: AppleMediaReceiver
+    private let receiver: any AppleMediaReceiving
     let displayIndex: Int
     private let mediaStreamIndex: Int
     private let processor: AppleHEVCStreamProcessor
@@ -75,11 +75,14 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var refreshScheduler = AppleVideoRefreshScheduler()
     private var restartSourceSelectionPending = false
 
-    convenience init(receiver: AppleMediaReceiver, negotiation: AppleMediaNegotiationResult) throws {
+    convenience init(
+        receiver: any AppleMediaReceiving,
+        negotiation: AppleMediaNegotiationResult
+    ) throws {
         try self.init(receiver: receiver, video: negotiation.videos[0])
     }
 
-    init(receiver: AppleMediaReceiver, video: AppleVideoNegotiation) throws {
+    init(receiver: any AppleMediaReceiving, video: AppleVideoNegotiation) throws {
         self.receiver = receiver
         mediaStreamIndex = video.mediaStreamIndex
         displayIndex = video.displayIndex
@@ -757,10 +760,10 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 }
 
 private final class AppleVideoFeedbackSender: AppleMediaControlSending, @unchecked Sendable {
-    private let receiver: AppleMediaReceiver
+    private let receiver: any AppleMediaReceiving
     private let mediaStreamIndex: Int
 
-    init(receiver: AppleMediaReceiver, mediaStreamIndex: Int) {
+    init(receiver: any AppleMediaReceiving, mediaStreamIndex: Int) {
         self.receiver = receiver
         self.mediaStreamIndex = mediaStreamIndex
     }

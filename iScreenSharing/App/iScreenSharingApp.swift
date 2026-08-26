@@ -5,15 +5,17 @@ struct iScreenSharingApp: App {
     @NSApplicationDelegateAdaptor(ScreenSharingAppDelegate.self) private var appDelegate
     @StateObject private var store: ConnectionStore
     @StateObject private var sessions: SessionManager
+    @StateObject private var tailscale: TailscaleModel
 
     init() {
         _store = StateObject(wrappedValue: ConnectionStore())
         _sessions = StateObject(wrappedValue: SessionManager())
+        _tailscale = StateObject(wrappedValue: TailscaleModel())
     }
 
     var body: some Scene {
         Window("All Connections", id: "connections") {
-            ConnectionsLibraryView(store: store)
+            ConnectionsLibraryView(store: store, tailscale: tailscale)
         }
         .defaultSize(width: 715, height: 510)
         .windowToolbarStyle(.unified)
