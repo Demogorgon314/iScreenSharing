@@ -1,13 +1,16 @@
+import AppKit
 import SwiftUI
 
 struct ConnectionsLibraryView: View {
     private enum SidebarItem: Hashable {
         case allConnections
         case network
+        case tailscale
         case group(ConnectionGroup.ID)
     }
 
     @ObservedObject var store: ConnectionStore
+    @ObservedObject var tailscale: TailscaleModel
     @StateObject private var discovery: NetworkDiscoveryModel
     @Environment(\.openWindow) private var openWindow
     @State private var sidebarSelection: SidebarItem? = .allConnections
@@ -16,13 +19,19 @@ struct ConnectionsLibraryView: View {
     @State private var layout: ConnectionLibraryLayout = .list
     @State private var searchText = ""
     @State private var discoveryAttempt = 0
+    @State private var shouldOpenTailscaleLogin = false
     @State private var editingGroupID: ConnectionGroup.ID?
     @State private var groupNameDraft = ""
     @FocusState private var searchFocused: Bool
     @FocusState private var groupNameFocused: Bool
 
-    init(store: ConnectionStore, browser: any BonjourBrowsing = BonjourBrowser()) {
+    init(
+        store: ConnectionStore,
+        tailscale: TailscaleModel,
+        browser: any BonjourBrowsing = BonjourBrowser()
+    ) {
         self.store = store
+        self.tailscale = tailscale
         _discovery = StateObject(wrappedValue: NetworkDiscoveryModel(browser: browser))
     }
 
@@ -42,7 +51,17 @@ struct ConnectionsLibraryView: View {
 
     private var detailTitle: String {
         if sidebarSelection == .network { return "Network" }
+        if sidebarSelection == .tailscale { return "Tailscale" }
         return selectedGroup?.name ?? "All Connections"
+    }
+
+    private var filteredTailscalePeers: [TailscalePeer] {
+        guard !searchText.isEmpty else { return tailscale.peers }
+        return tailscale.peers.filter {
+            $0.name.localizedStandardContains(searchText)
+                || $0.dnsName.localizedStandardContains(searchText)
+                || $0.addresses.contains(where: { $0.localizedStandardContains(searchText) })
+        }
     }
 
     var body: some View {
@@ -52,6 +71,8 @@ struct ConnectionsLibraryView: View {
                     .tag(SidebarItem.allConnections)
                 Label("Network", systemImage: "network")
                     .tag(SidebarItem.network)
+                Label("Tailscale", systemImage: "circle.grid.3x3.fill")
+                    .tag(SidebarItem.tailscale)
                 ForEach(store.groups) { group in
                     groupSidebarRow(group)
                         .tag(SidebarItem.group(group.id))
@@ -85,6 +106,8 @@ struct ConnectionsLibraryView: View {
             Group {
                 if sidebarSelection == .network {
                     networkContent
+                } else if sidebarSelection == .tailscale {
+                    tailscaleContent
                 } else if filteredConnections.isEmpty {
                     ContentUnavailableView {
                         Label("No Connections", systemImage: "display")
@@ -113,6 +136,14 @@ struct ConnectionsLibraryView: View {
         .onOpenURL(perform: openConnection)
         .task(id: discoveryAttempt) {
             await discovery.browse()
+        }
+        .task {
+            tailscale.start()
+        }
+        .onChange(of: tailscale.authenticationURL) { _, url in
+            guard shouldOpenTailscaleLogin, let url else { return }
+            shouldOpenTailscaleLogin = false
+            NSWorkspace.shared.open(url)
         }
         .onChange(of: discovery.state) { _, state in
             guard case .results(let services) = state else { return }
@@ -237,6 +268,104 @@ struct ConnectionsLibraryView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var tailscaleContent: some View {
+        switch tailscale.state {
+        case .starting:
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Starting embedded Tailscale…")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .needsLogin:
+            tailscaleLoginContent
+        case .needsMachineApproval:
+            ContentUnavailableView {
+                Label("Device Approval Required", systemImage: "person.badge.clock")
+            } description: {
+                Text("Approve this embedded iScreenSharing node in your Tailscale admin console.")
+            } actions: {
+                Button("Open Login") { openTailscaleLogin() }
+            }
+        case .running where filteredTailscalePeers.isEmpty:
+            ContentUnavailableView(
+                "No Tailscale Computers",
+                systemImage: "circle.grid.3x3.fill",
+                description: Text("Computers signed in to the same tailnet will appear here.")
+            )
+        case .running:
+            List(filteredTailscalePeers) { peer in
+                TailscalePeerRow(peer: peer)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        connect(to: peer)
+                    }
+                    .contextMenu {
+                        Button("Connect") { connect(to: peer) }
+                            .disabled(peer.endpoint == nil)
+                    }
+            }
+            .listStyle(.inset)
+            .alternatingRowBackgrounds()
+            .environment(\.defaultMinListRowHeight, 50)
+        case .stopped:
+            ContentUnavailableView {
+                Label("Tailscale Is Stopped", systemImage: "pause.circle")
+            } description: {
+                Text("Restart the embedded node to access your tailnet.")
+            } actions: {
+                Button("Restart") { tailscale.retry() }
+            }
+        case .failed(let message):
+            ContentUnavailableView {
+                Label("Can’t Start Tailscale", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            } actions: {
+                Button("Try Again") { tailscale.retry() }
+            }
+        }
+    }
+
+    private var tailscaleLoginContent: some View {
+        VStack(spacing: 22) {
+            Image(systemName: "circle.grid.3x3.fill")
+                .font(.system(size: 76))
+                .foregroundStyle(.primary)
+
+            VStack(spacing: 8) {
+                Text("Access Your Tailscale Computers")
+                    .font(.title.bold())
+                Text("Link your Tailscale account to access computers on your tailnet. The embedded node and its encrypted state stay inside iScreenSharing.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 620)
+            }
+
+            Button("Link Account") { openTailscaleLogin() }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+        }
+        .padding(36)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func openTailscaleLogin() {
+        if let url = tailscale.authenticationURL {
+            NSWorkspace.shared.open(url)
+        } else {
+            shouldOpenTailscaleLogin = true
+        }
+        tailscale.linkAccount()
+    }
+
+    private func connect(to peer: TailscalePeer) {
+        guard let endpoint = peer.endpoint else { return }
+        openWindow(id: "authentication", value: endpoint)
     }
 
     private var connectionList: some View {
@@ -377,6 +506,33 @@ struct ConnectionsLibraryView: View {
                 ConnectionDocumentService.present(error)
             }
         }
+    }
+}
+
+private struct TailscalePeerRow: View {
+    let peer: TailscalePeer
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "desktopcomputer")
+                .font(.title2)
+                .frame(width: 32)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(peer.name)
+                    .font(.body.weight(.medium))
+                Text(peer.dnsName.isEmpty ? peer.preferredAddress ?? "Tailscale" : peer.dnsName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Text(peer.isOnline ? "Online" : "Offline")
+                .font(.caption)
+                .foregroundStyle(peer.isOnline ? .green : .secondary)
+        }
+        .padding(.vertical, 7)
     }
 }
 
