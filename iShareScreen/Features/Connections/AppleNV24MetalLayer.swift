@@ -255,6 +255,58 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         return true
     }
 
+    func snapshot() -> CGImage? {
+        let width = Int(drawableSize.width)
+        let height = Int(drawableSize.height)
+        guard !latestFrames.isEmpty, width > 0, height > 0,
+              let commandBuffer = context.commandQueue.makeCommandBuffer() else { return nil }
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: pixelFormat,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        descriptor.storageMode = .shared
+        descriptor.usage = .renderTarget
+        guard let texture = context.device.makeTexture(descriptor: descriptor),
+              encode(into: commandBuffer, texture: texture) else { return nil }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else { return nil }
+
+        let bytesPerRow = width * 4
+        var pixels = Data(count: bytesPerRow * height)
+        pixels.withUnsafeMutableBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return }
+            texture.getBytes(
+                baseAddress,
+                bytesPerRow: bytesPerRow,
+                from: MTLRegionMake2D(0, 0, width, height),
+                mipmapLevel: 0
+            )
+        }
+        guard let provider = CGDataProvider(data: pixels as CFData) else { return nil }
+        let bitmapInfo: CGBitmapInfo = [
+            .byteOrder32Little,
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue),
+        ]
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
+    }
+
     private func commit(
         _ commandBuffer: MTLCommandBuffer,
         presenting drawable: CAMetalDrawable,
@@ -323,9 +375,13 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     private func encode(into commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) -> Bool {
+        encode(into: commandBuffer, texture: drawable.texture)
+    }
+
+    private func encode(into commandBuffer: MTLCommandBuffer, texture: MTLTexture) -> Bool {
         guard renderingBounds.width > 0, renderingBounds.height > 0 else { return false }
         let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].texture = texture
         pass.colorAttachments[0].loadAction = .clear
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)

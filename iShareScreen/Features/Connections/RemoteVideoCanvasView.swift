@@ -106,6 +106,11 @@ final class AppleVideoRenderer {
         retainedLayer = layer
         return layer
     }
+
+    func snapshot() -> NSImage? {
+        guard let image = retainedLayer?.snapshot() else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+    }
 }
 
 final class RemoteVideoCanvasNSView: NSView {

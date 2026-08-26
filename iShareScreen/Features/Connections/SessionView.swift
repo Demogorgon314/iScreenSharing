@@ -93,6 +93,10 @@ struct SessionView: View {
     @ToolbarContentBuilder
     private var sessionToolbar: some ToolbarContent {
         ToolbarItemGroup {
+            Button { takeScreenshot() } label: {
+                Label("Take Screenshot", systemImage: "camera")
+            }
+            .help("Take Screenshot")
             Button { commandState.setScalesToFit(!commandState.displayScale.scalesToFit) } label: {
                 Label(
                     commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On",
@@ -246,6 +250,31 @@ struct SessionView: View {
 
     private func performRemoteSystemCommand(_ command: AppleRemoteSystemCommand) {
         commandState.perform(command)
+    }
+
+    private func takeScreenshot() {
+        guard let image = videoRenderer.snapshot() else {
+            NSSound.beep()
+            return
+        }
+        ScreenshotSharingPicker.show(image, for: NSApp.currentEvent)
+    }
+}
+
+@MainActor
+private enum ScreenshotSharingPicker {
+    static func show(_ image: NSImage, for event: NSEvent?) {
+        guard let window = event?.window ?? NSApp.keyWindow,
+              let contentView = window.contentView else { return }
+        let point = event.map {
+            contentView.convert($0.locationInWindow, from: nil)
+        } ?? CGPoint(x: contentView.bounds.midX, y: contentView.bounds.maxY)
+        let anchor = CGRect(x: point.x - 1, y: point.y - 1, width: 2, height: 2)
+        NSSharingServicePicker(items: [image]).show(
+            relativeTo: anchor,
+            of: contentView,
+            preferredEdge: .minY
+        )
     }
 }
 
