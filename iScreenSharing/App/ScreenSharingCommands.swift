@@ -53,6 +53,12 @@ struct ScreenSharingCommands: Commands {
                 .disabled(activeSession?.canUseDynamicResolution != true)
             Toggle("Synchronize Video", isOn: videoSyncBinding)
                 .disabled(activeSession == nil)
+            Picker("Video Decoder", selection: videoDecoderModeBinding) {
+                ForEach(AppleVideoDecoderMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .disabled(activeSession == nil)
             Toggle("Mute Audio", isOn: audioMutedBinding)
                 .disabled(activeSession?.hasAudio != true)
             Divider()
@@ -260,6 +266,13 @@ struct ScreenSharingCommands: Commands {
         Binding(
             get: { sessionCommands.active?.videoPerformanceLevel ?? .compact },
             set: { sessionCommands.active?.setVideoPerformanceLevel($0) }
+        )
+    }
+
+    private var videoDecoderModeBinding: Binding<AppleVideoDecoderMode> {
+        Binding(
+            get: { sessionCommands.active?.videoDecoderMode ?? .automatic },
+            set: { sessionCommands.active?.setVideoDecoderMode($0) }
         )
     }
 

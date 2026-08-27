@@ -12,9 +12,24 @@ struct AppleHEVCParameterSets: Equatable, Sendable {
 struct AppleHEVCAccessUnit: Equatable, Sendable {
     struct Timing: Equatable, Sendable {
         let traceSequence: UInt64
+        let observedFrameSequenceNumber: UInt16?
         let firstDatagramObservedAt: TimeInterval
         let completingDatagramObservedAt: TimeInterval
         let assemblyCompletedAt: TimeInterval
+
+        init(
+            traceSequence: UInt64,
+            observedFrameSequenceNumber: UInt16? = nil,
+            firstDatagramObservedAt: TimeInterval,
+            completingDatagramObservedAt: TimeInterval,
+            assemblyCompletedAt: TimeInterval
+        ) {
+            self.traceSequence = traceSequence
+            self.observedFrameSequenceNumber = observedFrameSequenceNumber
+            self.firstDatagramObservedAt = firstDatagramObservedAt
+            self.completingDatagramObservedAt = completingDatagramObservedAt
+            self.assemblyCompletedAt = assemblyCompletedAt
+        }
     }
 
     let synchronizationSource: UInt32
@@ -241,6 +256,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             isLongTermReferenceFrame: group.isLongTermReferenceFrame,
             timing: AppleHEVCAccessUnit.Timing(
                 traceSequence: nextAccessUnitTraceSequence,
+                observedFrameSequenceNumber: group.framePacketInfo?.frameSequenceNumber,
                 firstDatagramObservedAt: group.firstSeenAt ?? arrivalTime,
                 completingDatagramObservedAt: arrivalTime,
                 assemblyCompletedAt: clock()

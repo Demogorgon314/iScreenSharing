@@ -27,6 +27,7 @@ final class SessionCommandStateTests: XCTestCase {
         preferences.setSynchronizesVideoPresentation(false)
         preferences.setShowsVideoPerformanceOverlay(true)
         preferences.setVideoPerformanceLevel(.detailed)
+        preferences.setVideoDecoderMode(.videoProcessing)
         preferences.setShowsMetalPerformanceHUD(true)
         let state = SessionCommandState(
             endpoint: try ConnectionEndpoint(host: "command-state.test"),
@@ -37,12 +38,14 @@ final class SessionCommandStateTests: XCTestCase {
         XCTAssertFalse(state.synchronizesVideoPresentation)
         XCTAssertTrue(state.showsVideoPerformanceOverlay)
         XCTAssertEqual(state.videoPerformanceLevel, .detailed)
+        XCTAssertEqual(state.videoDecoderMode, .videoProcessing)
         XCTAssertTrue(state.showsMetalPerformanceHUD)
 
         state.setScalesToFit(true)
         state.setSynchronizesVideoPresentation(true)
         state.setShowsVideoPerformanceOverlay(false)
         state.setVideoPerformanceLevel(.compact)
+        state.setVideoDecoderMode(.videoToolboxSynchronized)
         state.setShowsMetalPerformanceHUD(false)
 
         let restored = SessionFeaturePreferences(defaults: defaults)
@@ -50,6 +53,7 @@ final class SessionCommandStateTests: XCTestCase {
         XCTAssertTrue(restored.synchronizesVideoPresentation)
         XCTAssertFalse(restored.showsVideoPerformanceOverlay)
         XCTAssertEqual(restored.videoPerformanceLevel, .compact)
+        XCTAssertEqual(restored.videoDecoderMode, .videoToolboxSynchronized)
         XCTAssertFalse(restored.showsMetalPerformanceHUD)
     }
 

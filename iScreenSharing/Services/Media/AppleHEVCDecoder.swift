@@ -32,7 +32,20 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     struct DecodeFailure: Equatable, Sendable {
         let tileIndex: Int
         let rtpTimestamp: UInt32
+        let frameSequenceNumber: UInt16?
         let status: OSStatus
+
+        init(
+            tileIndex: Int,
+            rtpTimestamp: UInt32,
+            frameSequenceNumber: UInt16? = nil,
+            status: OSStatus
+        ) {
+            self.tileIndex = tileIndex
+            self.rtpTimestamp = rtpTimestamp
+            self.frameSequenceNumber = frameSequenceNumber
+            self.status = status
+        }
     }
 
     typealias FrameHandler = @Sendable (DecodedFrame) -> Void
@@ -83,6 +96,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     init(
         parameterSets: AppleHEVCParameterSets,
         tileCount: Int = 1,
+        decoderMode: AppleVideoDecoderMode = .automatic,
         backendHandler: @escaping BackendHandler = { _ in },
         failureHandler: @escaping FailureHandler = { _ in },
         longTermReferenceHandler: @escaping LongTermReferenceHandler = { _ in },
@@ -96,7 +110,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         self.failureHandler = failureHandler
         self.longTermReferenceHandler = longTermReferenceHandler
         self.frameHandler = frameHandler
-        let session = try makeSession(allowsVideoProcessing: true)
+        let session = try makeSession(decoderMode: decoderMode)
         self.session = session
         backendHandler(session.backend)
     }
@@ -111,21 +125,22 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         presentationTime: TimeInterval,
         timing: AppleHEVCAccessUnit.Timing?
     ) throws -> Bool {
+        try Self.validateTileIndex(tileIndex, tileCount: tileCount)
         let validNALUnits = nalUnits.filter { AppleHEVCNALUnit.type(of: $0) != nil }
         guard validNALUnits.contains(where: {
             guard let type = AppleHEVCNALUnit.type(of: $0) else { return false }
             return type < 32
         }) else { return false }
         let decodeEnteredAt = CACurrentMediaTime()
-        let sampleBuffer = try Self.makeSampleBuffer(
-            nalUnits: validNALUnits,
-            formatDescription: formatDescription,
-            presentationTime: presentationTime
-        )
         return try lock.withDecoderLock {
             guard let session else { throw AppleHEVCDecoderError.sessionClosed }
             switch session {
             case let .videoProcessing(session):
+                let sampleBuffer = try Self.makeSampleBuffer(
+                    nalUnits: validNALUnits,
+                    formatDescription: formatDescription,
+                    presentationTime: presentationTime
+                )
                 // AVConference normally forwards DON as TileOrder because its
                 // transmitter and VCP receiver both start at zero. We may join
                 // after the transmitter has advanced, while VCP still requires
@@ -160,6 +175,11 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                     }
                 }
             case let .videoToolbox(session):
+                let sampleBuffer = try Self.makeSampleBuffer(
+                    nalUnits: validNALUnits,
+                    formatDescription: formatDescription,
+                    presentationTime: presentationTime
+                )
                 var decodeInfo = VTDecodeInfoFlags()
                 let decoderSubmittedAt = CACurrentMediaTime()
                 let status = VTDecompressionSessionDecodeFrame(
@@ -179,6 +199,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                             failureHandler(DecodeFailure(
                                 tileIndex: tileIndex,
                                 rtpTimestamp: rtpTimestamp,
+                                frameSequenceNumber: timing?.observedFrameSequenceNumber,
                                 status: status
                             ))
                         }
@@ -240,8 +261,15 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         current.isComplete && current != configured
     }
 
-    static func prefersVideoProcessing(tileCount: Int, isAvailable: Bool) -> Bool {
-        tileCount == 4 && isAvailable
+    static func prefersVideoProcessing(
+        mode: AppleVideoDecoderMode = .automatic,
+        tileCount: Int,
+        isAvailable: Bool
+    ) -> Bool {
+        mode != .videoToolboxLowLatency
+            && mode != .videoToolboxSynchronized
+            && tileCount == 4
+            && isAvailable
     }
 
     static func takeVideoProcessingTileOrder(from nextOrder: inout UInt16) -> UInt16 {
@@ -250,9 +278,15 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         return order
     }
 
-    private func makeSession(allowsVideoProcessing: Bool) throws -> Session {
-        if allowsVideoProcessing,
-           Self.prefersVideoProcessing(
+    static func validateTileIndex(_ tileIndex: Int, tileCount: Int) throws {
+        guard tileIndex >= 0, tileIndex < tileCount else {
+            throw AppleHEVCDecoderError.invalidTileIndex
+        }
+    }
+
+    private func makeSession(decoderMode: AppleVideoDecoderMode) throws -> Session {
+        if Self.prefersVideoProcessing(
+            mode: decoderMode,
             tileCount: tileCount,
             isAvailable: AppleVCPDecompressionSession.isAvailable
         ), let session = AppleVCPDecompressionSession(
@@ -264,6 +298,8 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                 self?.failureHandler(DecodeFailure(
                     tileIndex: metadata.tileIndex,
                     rtpTimestamp: metadata.rtpTimestamp,
+                    frameSequenceNumber:
+                        metadata.accessUnitTiming?.observedFrameSequenceNumber,
                     status: status
                 ))
             },
@@ -279,7 +315,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         }
         if tileCount > 1 {
             Self.logger.warning(
-                "VideoProcessing multi-tile assembly unavailable; using per-tile VideoToolbox fallback"
+                "Using one public VideoToolbox decoder with incremental tile updates and atomic Metal presentation"
             )
         }
         return .videoToolbox(try Self.makeVideoToolboxSession(
@@ -450,6 +486,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
 enum AppleHEVCDecoderError: LocalizedError, Equatable {
     case incompleteParameterSets
     case invalidTileCount
+    case invalidTileIndex
     case invalidNALUnit
     case formatDescriptionCreationFailed(OSStatus)
     case sessionCreationFailed(OSStatus)
@@ -463,6 +500,8 @@ enum AppleHEVCDecoderError: LocalizedError, Equatable {
             "The remote Mac did not provide complete HEVC decoder parameters."
         case .invalidTileCount:
             "The remote Mac provided an invalid HEVC tile count."
+        case .invalidTileIndex:
+            "A video tile was routed outside the configured decoder set."
         case .invalidNALUnit:
             "The remote Mac sent an invalid HEVC video unit."
         case .formatDescriptionCreationFailed, .sessionCreationFailed:

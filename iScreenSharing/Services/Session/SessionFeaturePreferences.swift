@@ -26,6 +26,7 @@ struct SessionFeaturePreferences {
     static let showsDetailedVideoMetricsKey = "showsDetailedVideoMetrics"
     static let showsMoonlightStyleMetricsKey = "showsMoonlightStyleMetrics"
     static let videoPerformanceLevelKey = "videoPerformanceLevel"
+    static let videoDecoderModeKey = "videoDecoderMode"
     static let showsMetalPerformanceHUDKey = "showsMetalPerformanceHUD"
 
     private let defaults: UserDefaults
@@ -78,6 +79,12 @@ struct SessionFeaturePreferences {
         storedBool(forKey: Self.showsMetalPerformanceHUDKey, defaultValue: false)
     }
 
+    var videoDecoderMode: AppleVideoDecoderMode {
+        guard let rawValue = defaults.string(forKey: Self.videoDecoderModeKey),
+              let mode = AppleVideoDecoderMode(rawValue: rawValue) else { return .automatic }
+        return mode
+    }
+
     func setSharesKeyboardInputSource(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.sharesKeyboardInputSourceKey)
     }
@@ -114,6 +121,10 @@ struct SessionFeaturePreferences {
 
     func setShowsMetalPerformanceHUD(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.showsMetalPerformanceHUDKey)
+    }
+
+    func setVideoDecoderMode(_ mode: AppleVideoDecoderMode) {
+        defaults.set(mode.rawValue, forKey: Self.videoDecoderModeKey)
     }
 
     private func storedBool(forKey key: String, defaultValue: Bool) -> Bool {

@@ -56,6 +56,7 @@ final class AppleNV24MetalLayerTests: XCTestCase {
                 container: layer.bounds,
                 content: layer.bounds
             ),
+            canvasSize: layer.bounds.size,
             bounds: layer.bounds
         )
 
@@ -73,6 +74,7 @@ final class AppleNV24MetalLayerTests: XCTestCase {
                 container: layer.bounds,
                 content: layer.bounds
             ),
+            canvasSize: layer.bounds.size,
             bounds: layer.bounds
         )
         layer.update(
@@ -87,6 +89,46 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         let pixels = try XCTUnwrap(image.dataProvider?.data as Data?)
         XCTAssertGreaterThan(pixels[0], 0)
         XCTAssertEqual(pixels[3], 255)
+    }
+
+    func testTiledSnapshotCompositesAtCanvasResolutionBeforeScaling() throws {
+        let context = try XCTUnwrap(AppleNV24MetalContext())
+        let layer = AppleNV24MetalLayer(context: context)
+        let canvas = AppleCanvas(width: 8, height: 4, tileCount: 2)
+        layer.bounds = CGRect(x: 0, y: 0, width: 13, height: 9)
+        layer.contentsScale = 1
+        layer.update(
+            layouts: AppleVideoCanvasLayout.tiles(
+                canvas: canvas,
+                bounds: layer.bounds,
+                slotHeight: 2,
+                fixedScale: nil,
+                stretchesToFillBounds: true
+            ),
+            fullCanvasLayout: AppleVideoCanvasLayout.fullCanvas(
+                canvas: canvas,
+                bounds: layer.bounds,
+                fixedScale: nil,
+                stretchesToFillBounds: true
+            ),
+            canvasSize: CGSize(width: canvas.width, height: canvas.height),
+            bounds: layer.bounds
+        )
+        layer.update(
+            makeFrame(pixelBuffer: try makeNV24PixelBuffer(width: 8, height: 2)),
+            at: 0
+        )
+        layer.update(
+            makeFrame(pixelBuffer: try makeNV24PixelBuffer(width: 8, height: 2)),
+            at: 1
+        )
+
+        let image = try XCTUnwrap(layer.snapshot())
+        let pixels = try XCTUnwrap(image.dataProvider?.data as Data?)
+        for offset in stride(from: 0, to: pixels.count, by: 4) {
+            XCTAssertGreaterThan(pixels[offset], 0)
+            XCTAssertEqual(pixels[offset + 3], 255)
+        }
     }
 
     func testAppEnablesMetalHUDRuntimeForLayerToggle() {

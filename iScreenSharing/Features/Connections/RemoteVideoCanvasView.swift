@@ -362,6 +362,7 @@ final class RemoteVideoCanvasNSView: NSView {
         (displayLayer as? AppleNV24MetalLayer)?.update(
             layouts: layouts,
             fullCanvasLayout: fullCanvasLayout,
+            canvasSize: CGSize(width: canvas.width, height: canvas.height),
             bounds: bounds
         )
     }

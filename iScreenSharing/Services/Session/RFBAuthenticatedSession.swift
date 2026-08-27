@@ -130,6 +130,10 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         videoStreams.first(where: { $0.displayIndex == displayIndex }) ?? videoStream
     }
 
+    func setVideoDecoderMode(_ mode: AppleVideoDecoderMode) {
+        videoStreams.forEach { $0.setDecoderMode(mode) }
+    }
+
     func install(inputController: AppleInputController) {
         if let current = self.inputController { Task { await current.close() } }
         self.inputController = inputController

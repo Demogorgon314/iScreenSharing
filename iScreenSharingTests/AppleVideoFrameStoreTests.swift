@@ -170,6 +170,56 @@ final class AppleVideoFrameStoreTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testPublishesLogicalFrameBatchAsOneAtomicSnapshot() async throws {
+        let store = AppleVideoFrameStore()
+        let firstTile = try makePixelBuffer(width: 8, height: 8)
+        let fourthTile = try makePixelBuffer(width: 8, height: 8)
+        let published = expectation(description: "Logical frame batch published")
+        var receivedBatches = [AppleVideoFrameStore.FrameBatch]()
+        _ = store.addObserver { frames in
+            receivedBatches.append(frames)
+            published.fulfill()
+        }
+
+        store.publish([
+            makeDecodedFrame(firstTile, tileIndex: 0, frameSequenceNumber: 20),
+            makeDecodedFrame(fourthTile, tileIndex: 3, frameSequenceNumber: 20),
+        ], playbackHandledAt: 10)
+
+        await fulfillment(of: [published], timeout: 1)
+        XCTAssertEqual(receivedBatches.count, 1)
+        XCTAssertTrue(receivedBatches[0][0]?.pixelBuffer === firstTile)
+        XCTAssertTrue(receivedBatches[0][3]?.pixelBuffer === fourthTile)
+        XCTAssertEqual(receivedBatches[0][0]?.playbackHandledAt, 10)
+        XCTAssertEqual(receivedBatches[0][3]?.playbackHandledAt, 10)
+    }
+
+    private func makeDecodedFrame(
+        _ pixelBuffer: CVPixelBuffer,
+        tileIndex: Int,
+        frameSequenceNumber: UInt16
+    ) -> AppleHEVCDecoder.DecodedFrame {
+        AppleHEVCDecoder.DecodedFrame(
+            region: .tile(tileIndex),
+            decodingOrderNumber: nil,
+            rtpTimestamp: 0,
+            presentationTime: 0,
+            decodeDuration: 0,
+            accessUnitTiming: AppleHEVCAccessUnit.Timing(
+                traceSequence: UInt64(frameSequenceNumber),
+                observedFrameSequenceNumber: frameSequenceNumber,
+                firstDatagramObservedAt: 0,
+                completingDatagramObservedAt: 0,
+                assemblyCompletedAt: 0
+            ),
+            decodeEnteredAt: 0,
+            decoderSubmittedAt: 0,
+            decoderOutputAt: 0,
+            pixelBuffer: pixelBuffer
+        )
+    }
+
     private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
         var pixelBuffer: CVPixelBuffer?
         let status = CVPixelBufferCreate(

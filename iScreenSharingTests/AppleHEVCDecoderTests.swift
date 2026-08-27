@@ -52,6 +52,17 @@ final class AppleHEVCDecoderTests: XCTestCase {
         }
     }
 
+    func testRejectsTileIndicesOutsideTheConfiguredDecoderSet() {
+        XCTAssertNoThrow(try AppleHEVCDecoder.validateTileIndex(0, tileCount: 4))
+        XCTAssertNoThrow(try AppleHEVCDecoder.validateTileIndex(3, tileCount: 4))
+        XCTAssertThrowsError(try AppleHEVCDecoder.validateTileIndex(-1, tileCount: 4)) {
+            XCTAssertEqual($0 as? AppleHEVCDecoderError, .invalidTileIndex)
+        }
+        XCTAssertThrowsError(try AppleHEVCDecoder.validateTileIndex(4, tileCount: 4)) {
+            XCTAssertEqual($0 as? AppleHEVCDecoderError, .invalidTileIndex)
+        }
+    }
+
     func testUsesVideoProcessingOnlyForMultiTileStreamsWhenAvailable() {
         XCTAssertFalse(AppleHEVCDecoder.prefersVideoProcessing(
             tileCount: 1,
@@ -66,6 +77,21 @@ final class AppleHEVCDecoderTests: XCTestCase {
             isAvailable: false
         ))
         XCTAssertTrue(AppleHEVCDecoder.prefersVideoProcessing(
+            tileCount: 4,
+            isAvailable: true
+        ))
+        XCTAssertFalse(AppleHEVCDecoder.prefersVideoProcessing(
+            mode: .videoToolboxLowLatency,
+            tileCount: 4,
+            isAvailable: true
+        ))
+        XCTAssertFalse(AppleHEVCDecoder.prefersVideoProcessing(
+            mode: .videoToolboxSynchronized,
+            tileCount: 4,
+            isAvailable: true
+        ))
+        XCTAssertTrue(AppleHEVCDecoder.prefersVideoProcessing(
+            mode: .videoProcessing,
             tileCount: 4,
             isAvailable: true
         ))

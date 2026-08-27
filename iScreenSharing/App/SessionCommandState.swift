@@ -10,6 +10,7 @@ final class SessionCommandState: ObservableObject {
     @Published private(set) var synchronizesVideoPresentation: Bool
     @Published private(set) var showsVideoPerformanceOverlay: Bool
     @Published private(set) var videoPerformanceLevel: VideoPerformanceLevel
+    @Published private(set) var videoDecoderMode: AppleVideoDecoderMode
     @Published private(set) var showsMetalPerformanceHUD: Bool
     @Published private(set) var usesDynamicResolution: Bool
     @Published private(set) var canUseDynamicResolution: Bool
@@ -59,6 +60,7 @@ final class SessionCommandState: ObservableObject {
         synchronizesVideoPresentation = preferences.synchronizesVideoPresentation
         showsVideoPerformanceOverlay = preferences.showsVideoPerformanceOverlay
         videoPerformanceLevel = preferences.videoPerformanceLevel
+        videoDecoderMode = preferences.videoDecoderMode
         showsMetalPerformanceHUD = preferences.showsMetalPerformanceHUD
         usesDynamicResolution = dynamicResolution?.isEnabled ?? false
         canUseDynamicResolution = displayLayout?.supportsDynamicResolution == true
@@ -70,6 +72,8 @@ final class SessionCommandState: ObservableObject {
         usesSharedClipboard = clipboardService?.isSharingEnabled ?? false
         isAudioMuted = audioStream?.isMuted ?? false
         supportedRemoteCommands = session?.remoteSystemCapabilities?.supportedCommands ?? []
+
+        session?.setVideoDecoderMode(videoDecoderMode)
 
         observeSessionModels()
     }
@@ -142,6 +146,13 @@ final class SessionCommandState: ObservableObject {
         guard level != videoPerformanceLevel else { return }
         videoPerformanceLevel = level
         preferences.setVideoPerformanceLevel(level)
+    }
+
+    func setVideoDecoderMode(_ mode: AppleVideoDecoderMode) {
+        guard mode != videoDecoderMode else { return }
+        videoDecoderMode = mode
+        preferences.setVideoDecoderMode(mode)
+        session?.setVideoDecoderMode(mode)
     }
 
     func setShowsMetalPerformanceHUD(_ enabled: Bool) {

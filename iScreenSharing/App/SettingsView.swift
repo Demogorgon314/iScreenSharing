@@ -37,6 +37,8 @@ private struct DisplaySettingsView: View {
     private var showsVideoPerformanceOverlay = false
     @AppStorage(SessionFeaturePreferences.videoPerformanceLevelKey)
     private var videoPerformanceLevel = VideoPerformanceLevel.compact
+    @AppStorage(SessionFeaturePreferences.videoDecoderModeKey)
+    private var videoDecoderMode = AppleVideoDecoderMode.automatic
     @AppStorage(SessionFeaturePreferences.showsMetalPerformanceHUDKey)
     private var showsMetalPerformanceHUD = false
 
@@ -54,6 +56,11 @@ private struct DisplaySettingsView: View {
             Section("Video") {
                 Toggle("Adapt the remote resolution to the window", isOn: $usesDynamicResolution)
                 Toggle("Synchronize video presentation", isOn: $synchronizesVideoPresentation)
+                Picker("Decoder", selection: $videoDecoderMode) {
+                    ForEach(AppleVideoDecoderMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
             }
 
             Section {
