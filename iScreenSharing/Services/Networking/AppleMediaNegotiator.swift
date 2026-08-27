@@ -177,7 +177,6 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                     pendingMessages: pendingMessages,
                     videos: videos
                 )
-                session.install(mediaNegotiation: result)
                 receiver.stopPunching()
                 return result
             }

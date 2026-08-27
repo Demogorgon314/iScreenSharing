@@ -40,8 +40,6 @@ struct RFBAuthenticationService: RFBAuthenticating {
             return RFBAuthenticatedSession(
                 endpoint: endpoint,
                 remoteAddress: remoteAddress,
-                serverVersion: probe.serverVersion,
-                securityTypes: probe.securityTypes,
                 masterKey: masterKey,
                 serverInfo: serverInfo,
                 transport: transport

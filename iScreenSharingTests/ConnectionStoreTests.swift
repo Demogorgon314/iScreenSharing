@@ -88,6 +88,24 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: endpoint), existingConfiguration)
     }
 
+    func testCreatesNetworkConfigurationWithoutAddingRecentConnection() throws {
+        let endpoint = ConnectionEndpoint(
+            bonjourService: try BonjourServiceEndpoint(name: "Studio Mac")
+        )
+        let info = AppleRemoteDeviceInfo(modelIdentifier: "Macmini9,1")
+        let store = ConnectionStore(defaults: defaults)
+
+        let configuration = store.networkConfiguration(for: endpoint, deviceInfo: nil)
+        let existingConfiguration = store.networkConfiguration(for: endpoint, deviceInfo: info)
+
+        XCTAssertEqual(configuration.name, "Studio Mac")
+        XCTAssertEqual(existingConfiguration.id, configuration.id)
+        XCTAssertEqual(existingConfiguration.deviceInfo, info)
+        XCTAssertEqual(store.connections.count, 1)
+        XCTAssertTrue(store.recentConnections.isEmpty)
+        XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: endpoint), existingConfiguration)
+    }
+
     func testPersistsDeviceInfoAndKeepsItWhenConnectionIsRecordedAgain() throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let info = AppleRemoteDeviceInfo(

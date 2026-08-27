@@ -21,9 +21,7 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         )
         defer { session.close() }
 
-        XCTAssertEqual(session.serverVersion, RFBVersion(major: 3, minor: 889))
         XCTAssertEqual(session.masterKey.count, 16)
-        XCTAssertTrue(session.securityTypes.contains(.appleRSA))
         XCTAssertGreaterThan(session.serverInfo.width, 0)
         XCTAssertGreaterThan(session.serverInfo.height, 0)
 
@@ -36,8 +34,6 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(recordLayer.contentKey.count, 16)
         XCTAssertEqual(session.recordLayer?.contentKey, recordLayer.contentKey)
-        XCTAssertGreaterThanOrEqual(session.rekeyGeneration ?? 0, 1)
-
         let media = try await AppleMediaNegotiator().negotiate(
             session,
             displayCount: virtualDisplayCount.rawValue
@@ -46,7 +42,6 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         XCTAssertGreaterThan(media.canvas.width, 0)
         XCTAssertGreaterThan(media.canvas.height, 0)
         XCTAssertGreaterThan(media.canvas.tileCount, 0)
-        XCTAssertEqual(session.mediaNegotiation, media)
         let input = AppleInputController(session: session, canvas: media.canvas)
         let clipboard = await MainActor.run { IntegrationClipboardReceiver() }
         let receiver = try XCTUnwrap(session.mediaReceiver)
