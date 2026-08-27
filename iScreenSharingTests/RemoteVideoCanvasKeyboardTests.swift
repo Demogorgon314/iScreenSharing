@@ -137,8 +137,6 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
         return RFBAuthenticatedSession(
             endpoint: endpoint,
             remoteAddress: remoteAddress,
-            serverVersion: RFBVersion(major: 3, minor: 889),
-            securityTypes: [.appleRSA],
             masterKey: Data(repeating: 0, count: 16),
             serverInfo: RFBServerInfo(
                 width: 1_920,

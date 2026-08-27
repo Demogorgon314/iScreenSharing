@@ -249,24 +249,11 @@ struct ConnectionsLibraryView: View {
                     description: Text("Macs advertising Screen Sharing on your local network will appear here.")
                 )
             case .results(let services):
-                List(services, id: \.self) { service in
-                    NetworkConnectionRow(
-                        endpoint: service.endpoint,
-                        deviceInfo: service.deviceInfo
-                    )
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        openWindow(id: "authentication", value: service.endpoint)
-                    }
-                    .contextMenu {
-                        Button("Connect") {
-                            openWindow(id: "authentication", value: service.endpoint)
-                        }
-                    }
+                if layout == .list {
+                    networkList(services)
+                } else {
+                    networkGrid(services)
                 }
-                .listStyle(.inset)
-                .alternatingRowBackgrounds()
-                .environment(\.defaultMinListRowHeight, 50)
             case .failed(let message):
                 ContentUnavailableView {
                     Label("Can’t Browse Network", systemImage: "exclamationmark.triangle")
@@ -307,27 +294,11 @@ struct ConnectionsLibraryView: View {
                 description: Text("Computers signed in to the same tailnet will appear here.")
             )
         case .running:
-            List(filteredTailscalePeers) { peer in
-                TailscalePeerRow(
-                    peer: peer,
-                    deviceInfo: deviceInfo(for: peer),
-                    onConnect: { connect(to: peer) },
-                    onEdit: { edit(peer) }
-                )
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        connect(to: peer)
-                    }
-                    .contextMenu {
-                        Button("Connect") { connect(to: peer) }
-                            .disabled(peer.endpoint == nil)
-                        Button("Edit") { edit(peer) }
-                            .disabled(peer.endpoint == nil)
-                    }
+            if layout == .list {
+                tailscaleList
+            } else {
+                tailscaleGrid
             }
-            .listStyle(.inset)
-            .alternatingRowBackgrounds()
-            .environment(\.defaultMinListRowHeight, 50)
         case .stopped:
             ContentUnavailableView {
                 Label("Tailscale Is Stopped", systemImage: "pause.circle")
@@ -409,6 +380,113 @@ struct ConnectionsLibraryView: View {
             ?? peer.deviceInfo
     }
 
+    private func networkList(_ services: [DiscoveredScreenSharingService]) -> some View {
+        List(services, id: \.self) { service in
+            NetworkConnectionRow(
+                endpoint: service.endpoint,
+                deviceInfo: service.deviceInfo,
+                onEdit: { edit(service) }
+            )
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                openWindow(id: "authentication", value: service.endpoint)
+            }
+            .contextMenu {
+                Button("Connect") {
+                    openWindow(id: "authentication", value: service.endpoint)
+                }
+                Button("Edit") { edit(service) }
+            }
+        }
+        .listStyle(.inset)
+        .alternatingRowBackgrounds()
+        .environment(\.defaultMinListRowHeight, 50)
+    }
+
+    private func networkGrid(_ services: [DiscoveredScreenSharingService]) -> some View {
+        ScrollView {
+            connectionGrid {
+                ForEach(services, id: \.self) { service in
+                    RemoteDeviceGridCard(
+                        deviceInfo: service.deviceInfo,
+                        title: service.endpoint.displayName,
+                        subtitle: screenSharingServiceDescription(for: service.endpoint),
+                        onInfo: { edit(service) }
+                    )
+                    .onTapGesture(count: 2) {
+                        openWindow(id: "authentication", value: service.endpoint)
+                    }
+                    .contextMenu {
+                        Button("Connect") {
+                            openWindow(id: "authentication", value: service.endpoint)
+                        }
+                        Button("Edit") { edit(service) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var tailscaleList: some View {
+        List(filteredTailscalePeers) { peer in
+            TailscalePeerRow(
+                peer: peer,
+                deviceInfo: deviceInfo(for: peer),
+                onConnect: { connect(to: peer) },
+                onEdit: { edit(peer) }
+            )
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    connect(to: peer)
+                }
+                .contextMenu {
+                    Button("Connect") { connect(to: peer) }
+                        .disabled(peer.endpoint == nil)
+                    Button("Edit") { edit(peer) }
+                        .disabled(peer.endpoint == nil)
+                }
+        }
+        .listStyle(.inset)
+        .alternatingRowBackgrounds()
+        .environment(\.defaultMinListRowHeight, 50)
+    }
+
+    private func edit(_ service: DiscoveredScreenSharingService) {
+        editingConnection = store.networkConfiguration(
+            for: service.endpoint,
+            deviceInfo: service.deviceInfo
+        )
+    }
+
+    private var tailscaleGrid: some View {
+        ScrollView {
+            connectionGrid {
+                ForEach(filteredTailscalePeers) { peer in
+                    RemoteDeviceGridCard(
+                        deviceInfo: deviceInfo(for: peer),
+                        title: peer.name,
+                        subtitle: peer.dnsName.isEmpty
+                            ? peer.preferredAddress ?? "Tailscale"
+                            : peer.dnsName,
+                        detail: peer.softwareDescription,
+                        statusColor: peer.isOnline ? .green : .secondary,
+                        onInfo: { edit(peer) },
+                        infoIsEnabled: peer.endpoint != nil
+                    )
+                    .onTapGesture(count: 2) {
+                        connect(to: peer)
+                    }
+                    .contextMenu {
+                        Button("Connect") { connect(to: peer) }
+                            .disabled(peer.endpoint == nil)
+                        Button("Edit") { edit(peer) }
+                            .disabled(peer.endpoint == nil)
+                    }
+                }
+            }
+        }
+    }
+
     private var connectionList: some View {
         List(filteredConnections, selection: $selectedConnection) { connection in
             ConnectionRow(
@@ -442,19 +520,14 @@ struct ConnectionsLibraryView: View {
 
     private var connectionGrid: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 18)], spacing: 24) {
+            connectionGrid {
                 ForEach(filteredConnections) { connection in
-                    VStack(spacing: 8) {
-                        RemoteDeviceIcon(deviceInfo: connection.deviceInfo, size: 58)
-                        Text(connection.name)
-                            .lineLimit(1)
-                        Text(connection.endpoint.displayName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .padding(10)
-                    .contentShape(Rectangle())
+                    RemoteDeviceGridCard(
+                        deviceInfo: connection.deviceInfo,
+                        title: connection.name,
+                        subtitle: connection.endpoint.displayName,
+                        onInfo: { editingConnection = connection }
+                    )
                     .onTapGesture {
                         selectedConnection = connection.id
                     }
@@ -470,8 +543,16 @@ struct ConnectionsLibraryView: View {
                     }
                 }
             }
-            .padding(24)
         }
+    }
+
+    private func connectionGrid<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 18)], spacing: 24) {
+            content()
+        }
+        .padding(24)
     }
 
     private func deleteSelectedConnection() {
@@ -550,6 +631,74 @@ struct ConnectionsLibraryView: View {
     }
 }
 
+private struct RemoteDeviceGridCard: View {
+    let deviceInfo: AppleRemoteDeviceInfo?
+    let title: String
+    let subtitle: String
+    var detail: String? = nil
+    var statusColor: Color? = nil
+    var onInfo: (() -> Void)? = nil
+    var infoIsEnabled = true
+
+    @State private var isHovered = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 8) {
+                RemoteDeviceIcon(deviceInfo: deviceInfo, size: 58)
+                    .overlay(alignment: .bottomTrailing) {
+                        if let statusColor {
+                            Circle()
+                                .fill(statusColor)
+                                .frame(width: 10, height: 10)
+                                .overlay {
+                                    Circle()
+                                        .stroke(.background, lineWidth: 2)
+                                }
+                        }
+                    }
+
+                Text(title)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                if let detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 112)
+
+            if isHovered, let onInfo {
+                Button(action: onInfo) {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(!infoIsEnabled)
+                .accessibilityLabel("Edit \(title)")
+                .help("Info")
+            }
+        }
+        .padding(10)
+        .background {
+            if isHovered {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.primary.opacity(0.06))
+            }
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onHover { isHovered = $0 }
+    }
+}
+
 private struct TailscalePeerRow: View {
     let peer: TailscalePeer
     let deviceInfo: AppleRemoteDeviceInfo?
@@ -596,6 +745,7 @@ private struct TailscalePeerRow: View {
             }
             .buttonStyle(.plain)
             .disabled(peer.endpoint == nil)
+            .accessibilityLabel("Edit \(peer.name)")
             .help("Info")
         }
         .padding(.vertical, 7)
@@ -606,6 +756,7 @@ private struct TailscalePeerRow: View {
 private struct NetworkConnectionRow: View {
     let endpoint: ConnectionEndpoint
     let deviceInfo: AppleRemoteDeviceInfo?
+    let onEdit: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -618,15 +769,29 @@ private struct NetworkConnectionRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            Button(action: onEdit) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Edit \(endpoint.displayName)")
+            .help("Info")
         }
         .padding(.vertical, 4)
     }
 
     private var serviceDescription: String {
-        guard let service = endpoint.bonjourService else { return endpoint.displayName }
-        let domain = service.domain.hasSuffix(".") ? String(service.domain.dropLast()) : service.domain
-        return "\(service.name).\(service.type).\(domain)"
+        screenSharingServiceDescription(for: endpoint)
     }
+}
+
+private func screenSharingServiceDescription(for endpoint: ConnectionEndpoint) -> String {
+    guard let service = endpoint.bonjourService else { return endpoint.displayName }
+    let domain = service.domain.hasSuffix(".") ? String(service.domain.dropLast()) : service.domain
+    return "\(service.name).\(service.type).\(domain)"
 }
 
 private struct ConnectionRow: View {
@@ -661,6 +826,7 @@ private struct ConnectionRow: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Edit \(connection.name)")
             .help("Info")
         }
         .padding(.vertical, 7)

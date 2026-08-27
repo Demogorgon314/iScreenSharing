@@ -3,13 +3,9 @@ import Foundation
 final class RFBAuthenticatedSession: @unchecked Sendable {
     let endpoint: ConnectionEndpoint
     let remoteAddress: ResolvedRemoteAddress
-    let serverVersion: RFBVersion
-    let securityTypes: [RFBSecurityType]
     let masterKey: Data
     let serverInfo: RFBServerInfo
     private(set) var recordLayer: AppleEncryptedRecordLayer?
-    private(set) var rekeyGeneration: UInt32?
-    private(set) var mediaNegotiation: AppleMediaNegotiationResult?
     private(set) var mediaReceiver: (any AppleMediaReceiving)?
     private(set) var videoStreams = [AppleVideoStream]()
     var videoStream: AppleVideoStream? {
@@ -36,16 +32,12 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     init(
         endpoint: ConnectionEndpoint,
         remoteAddress: ResolvedRemoteAddress,
-        serverVersion: RFBVersion,
-        securityTypes: [RFBSecurityType],
         masterKey: Data,
         serverInfo: RFBServerInfo,
         transport: any RFBTransport
     ) {
         self.endpoint = endpoint
         self.remoteAddress = remoteAddress
-        self.serverVersion = serverVersion
-        self.securityTypes = securityTypes
         self.masterKey = masterKey
         self.serverInfo = serverInfo
         self.transport = transport
@@ -97,9 +89,8 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         try await transport.receiveExactly(length)
     }
 
-    func install(recordLayer: AppleEncryptedRecordLayer, generation: UInt32) {
+    func install(recordLayer: AppleEncryptedRecordLayer) {
         self.recordLayer = recordLayer
-        rekeyGeneration = generation
     }
 
     func sendEncrypted(_ message: Data) async throws {
@@ -119,10 +110,6 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
             throw AppleEncryptedRecordError.invalidCiphertext
         }
         return try recordLayer.decrypt(try await receiveExactly(length))
-    }
-
-    func install(mediaNegotiation: AppleMediaNegotiationResult) {
-        self.mediaNegotiation = mediaNegotiation
     }
 
     func install(mediaReceiver: any AppleMediaReceiving) {

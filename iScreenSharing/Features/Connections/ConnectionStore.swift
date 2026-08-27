@@ -75,6 +75,29 @@ final class ConnectionStore: ObservableObject {
         connections.first { $0.endpoint == endpoint }
     }
 
+    func networkConfiguration(
+        for endpoint: ConnectionEndpoint,
+        deviceInfo: AppleRemoteDeviceInfo?
+    ) -> SavedConnection {
+        if let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
+            if connections[index].deviceInfo == nil, let deviceInfo {
+                connections[index].deviceInfo = deviceInfo
+                persist()
+            }
+            return connections[index]
+        }
+
+        let connection = SavedConnection(
+            endpoint: endpoint,
+            name: endpoint.displayName,
+            deviceInfo: deviceInfo
+        )
+        connections.append(connection)
+        connections.sort { $0.lastConnectedAt > $1.lastConnectedAt }
+        persist()
+        return connection
+    }
+
     func tailscaleConfiguration(
         for endpoint: ConnectionEndpoint,
         name: String,

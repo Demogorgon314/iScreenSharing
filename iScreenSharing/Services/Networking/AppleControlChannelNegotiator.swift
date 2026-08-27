@@ -21,7 +21,7 @@ struct AppleControlChannelNegotiator: AppleControlChannelNegotiating {
         let rekey = try await AppleRekeyReader().read(from: session)
         let keys = try rekey.unwrap(using: session.masterKey)
         let recordLayer = AppleEncryptedRecordLayer(keys: keys)
-        session.install(recordLayer: recordLayer, generation: rekey.generation)
+        session.install(recordLayer: recordLayer)
 
         try await session.send(AppleRFBMessages.postEncryptionToggle)
         try await Task.sleep(for: .milliseconds(200))

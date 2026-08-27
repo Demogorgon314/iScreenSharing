@@ -338,8 +338,6 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         return RFBAuthenticatedSession(
             endpoint: endpoint,
             remoteAddress: remoteAddress,
-            serverVersion: RFBVersion(major: 3, minor: 889),
-            securityTypes: [.appleRSA],
             masterKey: Data(repeating: 0, count: 16),
             serverInfo: RFBServerInfo(
                 width: 1920,
@@ -465,7 +463,7 @@ private struct MockControlChannelNegotiator: AppleControlChannelNegotiating {
                 initializationVector: Data(repeating: 0x22, count: 16)
             )
         )
-        session.install(recordLayer: layer, generation: 1)
+        session.install(recordLayer: layer)
         return layer
     }
 }
@@ -502,7 +500,6 @@ private struct MockMediaNegotiator: AppleMediaNegotiating {
             configuration: Data([0x1c]),
             pendingMessages: pendingMessages
         )
-        session.install(mediaNegotiation: result)
         return result
     }
 }
