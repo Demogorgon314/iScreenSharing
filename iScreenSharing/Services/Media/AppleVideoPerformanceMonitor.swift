@@ -236,7 +236,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
 
     func recordReceivedFrame(rtpTimestamp: UInt32) {
         lock.withPerformanceLock {
-            accumulator.receivedSourceTimestamps.insert(rtpTimestamp)
+            _ = accumulator.receivedSourceTimestamps.insert(rtpTimestamp)
         }
     }
 

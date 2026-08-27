@@ -27,7 +27,7 @@ final class AppleVideoRateControlTests: XCTestCase {
         XCTAssertEqual(overridden.receivedPacketCount, original.receivedPacketCount)
         XCTAssertEqual(overridden.feedbackDelayMilliseconds, original.feedbackDelayMilliseconds)
         XCTAssertEqual(overridden.echoTimestamp, original.echoTimestamp)
-        XCTAssertEqual(overridden.oneWayReceiveDelay, 0)
+        XCTAssertEqual(overridden.oneWayReceiveDelay, original.oneWayReceiveDelay)
     }
 
     func testDisabledRateControlModeSuppressesFeedback() {
@@ -52,16 +52,16 @@ final class AppleVideoRateControlTests: XCTestCase {
             receivedPacketCount: 67,
             feedbackDelayMilliseconds: 66,
             echoTimestamp: AppleVideoRateControlInfo.echoTimestamp(at: 1_000.25),
-            oneWayReceiveDelay: 0
+            oneWayReceiveDelay: 0.0136
         )
 
         XCTAssertEqual(
             feedback.serialized().hex,
-            "85000004a004000000000042a100000000437d01"
+            "8500000401a0000000000042a100006f00437d01"
         )
     }
 
-    func testClampsBoundedFieldsAndPacksDelay() throws {
+    func testClampsBoundedFieldsAndPacksOneWayReceiveDelay() throws {
         let payload = AppleVideoRateControlInfo(
             rtpTimestamp: 1,
             estimatedBandwidthKilobitsPerSecond: 2,
@@ -75,6 +75,44 @@ final class AppleVideoRateControlTests: XCTestCase {
         XCTAssertEqual(try payload.uint16BE(at: 10), UInt16.max)
         XCTAssertEqual(try payload.uint16BE(at: 14), 4_096)
         XCTAssertEqual(try payload.uint16BE(at: 16), 0xfabc)
+    }
+
+    func testPacksNativeRuntimeOneWayReceiveDelayAndClampsLargeValues() throws {
+        let runtimeValue = AppleVideoRateControlInfo(
+            rtpTimestamp: 0,
+            estimatedBandwidthKilobitsPerSecond: 0,
+            burstyLoss: 0,
+            receivedPacketCount: 0,
+            feedbackDelayMilliseconds: 0,
+            echoTimestamp: 0,
+            oneWayReceiveDelay: 0.0136
+        ).serialized()
+        let largeValue = AppleVideoRateControlInfo(
+            rtpTimestamp: 0,
+            estimatedBandwidthKilobitsPerSecond: 0,
+            burstyLoss: 0,
+            receivedPacketCount: 0,
+            feedbackDelayMilliseconds: 0,
+            echoTimestamp: 0,
+            oneWayReceiveDelay: 8
+        ).serialized()
+
+        XCTAssertEqual(try runtimeValue.uint16BE(at: 14), 111)
+        XCTAssertEqual(try largeValue.uint16BE(at: 14), UInt16.max)
+    }
+
+    func testSerializesNativeLowPrecisionTimestampAcrossLowWordBoundary() throws {
+        let payload = AppleVideoRateControlInfo(
+            rtpTimestamp: 0x1234_abcd,
+            estimatedBandwidthKilobitsPerSecond: 0,
+            burstyLoss: 0,
+            receivedPacketCount: 0,
+            feedbackDelayMilliseconds: 0,
+            echoTimestamp: 0,
+            oneWayReceiveDelay: 0
+        ).serialized()
+
+        XCTAssertEqual(try payload.uint16BE(at: 4), 0x34ab)
     }
 
     func testInvalidTimesDegradeToZero() throws {
@@ -98,7 +136,7 @@ final class AppleVideoRateControlTests: XCTestCase {
 
         XCTAssertEqual(
             feedback.serialized().hex,
-            "8500000418d4000000000042a833000002cb7d01"
+            "850000040418000000000042a833000002cb7d01"
         )
     }
 
@@ -109,7 +147,7 @@ final class AppleVideoRateControlTests: XCTestCase {
 
         XCTAssertEqual(
             feedback.serialized().hex,
-            "8500000418d4000000000042a833000002cbea61"
+            "850000040418000000000042a833000002cbea61"
         )
     }
 
@@ -121,7 +159,7 @@ final class AppleVideoRateControlTests: XCTestCase {
 
         XCTAssertEqual(
             feedback.serialized().hex,
-            "8500000418d4000000000042a833000001dd4b01"
+            "850000040418000000000042a833000001dd4b01"
         )
     }
 
@@ -133,7 +171,7 @@ final class AppleVideoRateControlTests: XCTestCase {
 
         XCTAssertEqual(
             feedback.serialized().hex,
-            "8500000418d4000000000042a833000002cc7d01"
+            "850000040418000000000042a833000002cc7d01"
         )
     }
 
@@ -271,6 +309,32 @@ final class AppleVideoRateControlTests: XCTestCase {
         XCTAssertEqual(try bandwidth(in: estimator), initialBandwidth)
     }
 
+    func testFirstSuppressedPacketFinalizesTheActiveProbeWindow() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        let timestamp: UInt32 = 24_000
+        for packetIndex in 0..<6 {
+            estimator.observe(
+                AppleVideoPacketObservation(
+                    rtpTimestamp: timestamp,
+                    arrivalTime: 1_000 + Double(packetIndex) * 0.002,
+                    packetSize: 1_200
+                ),
+                bandwidthProbeActivity: .active
+            )
+        }
+
+        estimator.observe(
+            AppleVideoPacketObservation(
+                rtpTimestamp: timestamp + 400,
+                arrivalTime: 1_000.02,
+                packetSize: 400
+            ),
+            bandwidthProbeActivity: .suppressed
+        )
+
+        XCTAssertEqual(try bandwidth(in: estimator), 4_800)
+    }
+
     func testRequiresThreeProbeGroupsBeforeCommittingSuddenBandwidthChange() throws {
         var estimator = AppleVideoRateControlEstimator()
         feedGroup(&estimator, frame: 0, spacing: 0.0003, packetCount: 33)
@@ -294,8 +358,19 @@ final class AppleVideoRateControlTests: XCTestCase {
         feedGroup(&estimator, frame: 1, spacing: 0.0003, packetCount: 33)
 
         for frame in 2..<12 {
-            let spacing = frame.isMultiple(of: 2) ? 0.002 : 0.0001
-            feedGroup(&estimator, frame: frame, spacing: spacing)
+            if frame.isMultiple(of: 2) {
+                feedGroup(&estimator, frame: frame, spacing: 0.002)
+            } else {
+                // Keep the opposing high candidate above the native 8 ms
+                // qualification window so it is an accepted direction
+                // change rather than a deliberately skipped short probe.
+                feedGroup(
+                    &estimator,
+                    frame: frame,
+                    spacing: 0.000165,
+                    packetCount: 50
+                )
+            }
         }
 
         XCTAssertEqual(try bandwidth(in: estimator), 32_000)
@@ -324,6 +399,23 @@ final class AppleVideoRateControlTests: XCTestCase {
 
         feedGroup(&estimator, frame: 10, spacing: 0.0014)
         XCTAssertEqual(try bandwidth(in: estimator), 6_856)
+    }
+
+    func testSkippedShortProbePreservesPendingSuddenChange() throws {
+        var estimator = AppleVideoRateControlEstimator()
+        feedGroup(&estimator, frame: 0, spacing: 0.0003, packetCount: 33)
+        feedGroup(&estimator, frame: 1, spacing: 0.0003, packetCount: 33)
+        feedGroup(&estimator, frame: 2, spacing: 0.002)
+        feedGroup(&estimator, frame: 3, spacing: 0.0014)
+        XCTAssertEqual(estimator.diagnostics.pendingSampleCount, 1)
+
+        feedGroup(&estimator, frame: 4, spacing: 0.002)
+        XCTAssertEqual(estimator.diagnostics.pendingSampleCount, 1)
+        feedGroup(&estimator, frame: 5, spacing: 0.002)
+        XCTAssertEqual(estimator.diagnostics.pendingSampleCount, 2)
+        feedGroup(&estimator, frame: 6, spacing: 0.002)
+
+        XCTAssertEqual(try bandwidth(in: estimator), 4_800)
     }
 
     func testNeutralCandidatesUseNativeExponentialMovingAverage() throws {

@@ -11,12 +11,14 @@ struct AppleVideoRateControlInfo: Equatable, Sendable {
 
     func serialized() -> Data {
         var payload = Data([0x85, 0, 0, 4])
-        payload.appendUInt16BE(UInt16(truncatingIfNeeded: rtpTimestamp))
+        // Native HP streams enable the low-precision timestamp form before
+        // serializing RCTL feedback, so the wire field carries bits 8...23.
+        payload.appendUInt16BE(UInt16(truncatingIfNeeded: rtpTimestamp >> 8))
         payload.appendUInt16BE(0)
         payload.appendUInt16BE(0)
         payload.appendUInt16BE(UInt16(clamping: feedbackDelayMilliseconds))
         payload.appendUInt16BE(echoTimestamp)
-        payload.appendUInt16BE(UInt16(clamping: Self.packedRTPTime(oneWayReceiveDelay)))
+        payload.appendUInt16BE(Self.packedOneWayReceiveDelay(oneWayReceiveDelay))
         payload.appendUInt16BE(
             min(burstyLoss, 15) << 12
                 | UInt16(truncatingIfNeeded: receivedPacketCount) & 0x0fff
@@ -32,11 +34,11 @@ struct AppleVideoRateControlInfo: Equatable, Sendable {
         return UInt16(truncatingIfNeeded: UInt64(scaled.rounded(.towardZero)))
     }
 
-    private static func packedRTPTime(_ seconds: TimeInterval) -> UInt32 {
+    private static func packedOneWayReceiveDelay(_ seconds: TimeInterval) -> UInt16 {
         guard seconds.isFinite, seconds > 0 else { return 0 }
         let scaled = seconds * 8_192
-        guard scaled < Double(UInt32.max) else { return UInt32.max }
-        return UInt32(scaled.rounded(.down))
+        guard scaled < Double(UInt16.max) else { return UInt16.max }
+        return UInt16(scaled.rounded(.towardZero))
     }
 }
 
@@ -121,7 +123,7 @@ enum AppleVideoRateControlMode: Equatable, Sendable {
                 receivedPacketCount: info.receivedPacketCount,
                 feedbackDelayMilliseconds: info.feedbackDelayMilliseconds,
                 echoTimestamp: info.echoTimestamp,
-                oneWayReceiveDelay: 0
+                oneWayReceiveDelay: info.oneWayReceiveDelay
             )
         case .disabled:
             return nil
@@ -204,10 +206,11 @@ struct AppleVideoRateControlEstimator: Sendable {
         switch bandwidthProbeActivity {
         case .active:
             updateBandwidthEstimate(observation)
-        case .boundary:
+        case .boundary, .suppressed:
+            // Native continues feeding type-4 statistics while probe
+            // detection is cooling down, with isProbing cleared. The first
+            // such packet therefore closes the preceding probe window.
             finalizeBandwidthProbe()
-        case .suppressed:
-            break
         }
     }
 
@@ -316,7 +319,10 @@ struct AppleVideoRateControlEstimator: Sendable {
         if duration < Self.minimumProbeDuration {
             consecutiveShortProbeCount += 1
             guard consecutiveShortProbeCount >= Self.shortProbeConfirmationCount else {
-                clearPendingEstimate(state: .insufficientProbeWindow)
+                // A skipped short window does not invalidate an already
+                // established sudden-change direction in the native
+                // estimator; it only withholds this candidate.
+                estimateState = .insufficientProbeWindow
                 return
             }
         } else {

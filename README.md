@@ -187,7 +187,8 @@ The following environment variables are intended for local development:
 
 - `ISHARESCREEN_DISABLE_VCP=1`: force the public VideoToolbox fallback
 - `ISHARESCREEN_RCTL_MODE=estimated|fixed-lan|disabled`: use the native-style
-  estimate (the default), force a 60.001 Mbps LAN report, or suppress RCTL
+  estimate (the default), force a diagnostic 60.001 Mbps report, or suppress
+  RCTL
 - `ISHARESCREEN_QUALITY_DIAGNOSTICS=1`: enable additional quality logging
 - `ISHARESCREEN_FREEZE_DIAGNOSTICS=1`: enable decode/freeze recovery logging
 - `ISHARESCREEN_PIPELINE_DIAGNOSTICS=1`: correlate decoder output, playback and
