@@ -182,7 +182,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                 let shouldFlush = tileFrameSynchronizer?.recordSubmission(
                     frameSequenceNumber:
                         accessUnit.timing?.observedFrameSequenceNumber,
-                    tileIndex: tileIndex
+                    tileIndex: tileIndex,
+                    subframeBoundary: accessUnit.subframeBoundary
                 ) == true
                 if shouldFlush { scheduleSynchronizedFlush(generation: decoderGeneration) }
                 _ = try decoder?.decode(

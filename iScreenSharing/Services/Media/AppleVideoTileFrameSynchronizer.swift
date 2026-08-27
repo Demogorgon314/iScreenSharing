@@ -22,7 +22,8 @@ final class AppleVideoTileFrameSynchronizer: @unchecked Sendable {
     /// decoder callbacks are not frame-boundary evidence.
     func recordSubmission(
         frameSequenceNumber: UInt16?,
-        tileIndex: Int
+        tileIndex: Int,
+        subframeBoundary: AppleHEVCSubframeBoundaryParser.Boundary = .unknown
     ) -> Bool {
         guard let frameSequenceNumber else { return false }
         return lock.withTileFrameSynchronizerLock {
@@ -40,6 +41,9 @@ final class AppleVideoTileFrameSynchronizer: @unchecked Sendable {
             guard var group = groups[frameSequenceNumber] else { return false }
             if group.submittedTileSet.insert(tileIndex).inserted {
                 group.submittedTiles.append(tileIndex)
+            }
+            if subframeBoundary == .last {
+                group.isClosed = true
             }
             groups[frameSequenceNumber] = group
             return scheduleFlushIfReady()

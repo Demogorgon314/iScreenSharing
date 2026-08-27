@@ -307,6 +307,60 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         pipeline.close()
     }
 
+    func testSynchronizedVideoToolboxPublishesOnLastSubframeWithoutNextSequence() throws {
+        let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.last-subframe")
+        let decoder = FakeDecoder()
+        var batches = [[AppleHEVCDecoder.DecodedFrame]]()
+        let pipeline = try AppleHEVCDecodePipeline(
+            tileCount: sources.count,
+            sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
+            callbackQueue: callbackQueue,
+            decoderFactory: { failure, frame, longTermReference in
+                decoder.failureHandler = failure
+                decoder.frameHandler = frame
+                decoder.longTermReferenceHandler = longTermReference
+                return decoder
+            },
+            frameHandler: { _ in XCTFail("Expected an atomic batch") },
+            frameBatchHandler: { batches.append($0) },
+            synchronizesTileFrames: true,
+            refreshHandler: { _ in },
+            errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
+        )
+
+        pipeline.submit([
+            accessUnit(
+                source: 100,
+                timestamp: 90_000,
+                order: 10,
+                frameSequenceNumber: 0x1682,
+                subframeBoundary: .notLast
+            ),
+            accessUnit(
+                source: 400,
+                timestamp: 90_000,
+                order: 11,
+                frameSequenceNumber: 0x1682,
+                subframeBoundary: .last
+            ),
+        ])
+        decoder.emitFrame(
+            timestamp: 90_000,
+            region: .tile(0),
+            frameSequenceNumber: 0x1682
+        )
+        decoder.emitFrame(
+            timestamp: 90_000,
+            region: .tile(3),
+            frameSequenceNumber: 0x1682
+        )
+        callbackQueue.sync {}
+        callbackQueue.sync {}
+
+        XCTAssertEqual(batches.map { $0.map(\.region) }, [[.tile(0), .tile(3)]])
+        pipeline.close()
+    }
+
     func testCanEnableSynchronizedTilePresentationWithoutReplacingDecoder() throws {
         let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.mode-change")
         let decoder = FakeDecoder()
@@ -424,7 +478,8 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         order: UInt16,
         isRefresh: Bool = false,
         isLongTermReferenceFrame: Bool = false,
-        frameSequenceNumber: UInt16? = nil
+        frameSequenceNumber: UInt16? = nil,
+        subframeBoundary: AppleHEVCSubframeBoundaryParser.Boundary = .unknown
     ) -> AppleHEVCAccessUnit {
         AppleHEVCAccessUnit(
             synchronizationSource: source,
@@ -432,6 +487,7 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
             decodingOrderNumber: order,
             nalUnits: [Data([isRefresh ? 0x26 : 0x02, 0x01])],
             isLongTermReferenceFrame: isLongTermReferenceFrame,
+            subframeBoundary: subframeBoundary,
             timing: frameSequenceNumber.map {
                 AppleHEVCAccessUnit.Timing(
                     traceSequence: UInt64($0),

@@ -143,6 +143,26 @@ final class AppleHEVCStreamProcessorTests: XCTestCase {
         XCTAssertEqual(unit.timing?.observedFrameSequenceNumber, 0x1682)
     }
 
+    func testClassifiesNegotiatedFLSEndOfDataBit() throws {
+        let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
+
+        let intermediate = try XCTUnwrap(processor.process(packet(
+            sequence: 10,
+            marker: true,
+            payload: Data([0x02, 0x01, 0, 1, 0xaa, 0x80]),
+            timestamp: 1
+        )))
+        let final = try XCTUnwrap(processor.process(packet(
+            sequence: 11,
+            marker: true,
+            payload: Data([0x02, 0x01, 0, 2, 0xbb, 0x82]),
+            timestamp: 2
+        )))
+
+        XCTAssertEqual(intermediate.subframeBoundary, .notLast)
+        XCTAssertEqual(final.subframeBoundary, .last)
+    }
+
     func testDropsIncompleteAccessUnitInsteadOfFeedingCorruptTile() throws {
         let processor = try AppleHEVCStreamProcessor(keyBlob: Data(repeating: 0, count: 46))
         let payload = Data([0x42, 0x01, 0, 1, 0xaa])

@@ -64,6 +64,50 @@ final class AppleVideoTileFrameSynchronizerTests: XCTestCase {
         XCTAssertEqual(batches[0].map(\.region), [.tile(0)])
     }
 
+    func testLastSubframeClosesSparseFrameWithoutWaitingForNextSequence() throws {
+        let synchronizer = AppleVideoTileFrameSynchronizer()
+        synchronizer.recordSubmission(
+            frameSequenceNumber: 100,
+            tileIndex: 0,
+            subframeBoundary: .notLast
+        )
+        XCTAssertFalse(synchronizer.recordDecodedFrame(
+            try makeFrame(tileIndex: 0, frameSequenceNumber: 100)
+        ))
+        XCTAssertTrue(synchronizer.drainReadyBatches().isEmpty)
+
+        synchronizer.recordSubmission(
+            frameSequenceNumber: 100,
+            tileIndex: 3,
+            subframeBoundary: .last
+        )
+        XCTAssertTrue(synchronizer.recordDecodedFrame(
+            try makeFrame(tileIndex: 3, frameSequenceNumber: 100)
+        ))
+
+        XCTAssertEqual(
+            synchronizer.drainReadyBatches().map { $0.map(\.region) },
+            [[.tile(0), .tile(3)]]
+        )
+    }
+
+    func testUnknownBoundaryRetainsSequenceAdvanceFallback() throws {
+        let synchronizer = AppleVideoTileFrameSynchronizer()
+        synchronizer.recordSubmission(frameSequenceNumber: 5, tileIndex: 2)
+        XCTAssertFalse(synchronizer.recordDecodedFrame(
+            try makeFrame(tileIndex: 2, frameSequenceNumber: 5)
+        ))
+
+        XCTAssertTrue(synchronizer.recordSubmission(
+            frameSequenceNumber: 6,
+            tileIndex: 1
+        ))
+        XCTAssertEqual(
+            synchronizer.drainReadyBatches().map { $0.map(\.region) },
+            [[.tile(2)]]
+        )
+    }
+
     func testResetDiscardsPendingLogicalFrames() throws {
         let synchronizer = AppleVideoTileFrameSynchronizer()
         synchronizer.recordSubmission(frameSequenceNumber: 7, tileIndex: 0)
