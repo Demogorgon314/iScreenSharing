@@ -384,7 +384,8 @@ struct ConnectionsLibraryView: View {
         List(services, id: \.self) { service in
             NetworkConnectionRow(
                 endpoint: service.endpoint,
-                deviceInfo: service.deviceInfo
+                deviceInfo: service.deviceInfo,
+                onEdit: { edit(service) }
             )
             .contentShape(Rectangle())
             .onTapGesture(count: 2) {
@@ -394,6 +395,7 @@ struct ConnectionsLibraryView: View {
                 Button("Connect") {
                     openWindow(id: "authentication", value: service.endpoint)
                 }
+                Button("Edit") { edit(service) }
             }
         }
         .listStyle(.inset)
@@ -418,6 +420,7 @@ struct ConnectionsLibraryView: View {
                         Button("Connect") {
                             openWindow(id: "authentication", value: service.endpoint)
                         }
+                        Button("Edit") { edit(service) }
                     }
                 }
             }
@@ -680,6 +683,7 @@ private struct RemoteDeviceGridCard: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!infoIsEnabled)
+                .accessibilityLabel("Edit \(title)")
                 .help("Info")
             }
         }
@@ -741,6 +745,7 @@ private struct TailscalePeerRow: View {
             }
             .buttonStyle(.plain)
             .disabled(peer.endpoint == nil)
+            .accessibilityLabel("Edit \(peer.name)")
             .help("Info")
         }
         .padding(.vertical, 7)
@@ -751,6 +756,7 @@ private struct TailscalePeerRow: View {
 private struct NetworkConnectionRow: View {
     let endpoint: ConnectionEndpoint
     let deviceInfo: AppleRemoteDeviceInfo?
+    let onEdit: () -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -763,6 +769,16 @@ private struct NetworkConnectionRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            Spacer()
+
+            Button(action: onEdit) {
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Edit \(endpoint.displayName)")
+            .help("Info")
         }
         .padding(.vertical, 4)
     }
@@ -810,6 +826,7 @@ private struct ConnectionRow: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Edit \(connection.name)")
             .help("Info")
         }
         .padding(.vertical, 7)
