@@ -131,6 +131,64 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         }
     }
 
+    func testSwitchingFromPaddedFullCanvasToTilesRestoresCanvasGeometry() async throws {
+        let frames = AppleVideoFrameStore()
+        let view = RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 8, height: 4, tileCount: 2),
+            frames: frames,
+            input: nil,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: false,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+        view.frame = CGRect(x: 0, y: 0, width: 8, height: 4)
+        view.layoutSubtreeIfNeeded()
+        let metalLayer = try XCTUnwrap(
+            view.layer?.sublayers?.compactMap { $0 as? AppleNV24MetalLayer }.first
+        )
+        metalLayer.contentsScale = 1
+        view.needsLayout = true
+        view.layoutSubtreeIfNeeded()
+
+        let fullCanvasDelivered = expectation(description: "padded VCP frame delivered")
+        let fullCanvasObserver = frames.addObserver { batch in
+            if batch[AppleVideoFrameStore.fullCanvasIndex] != nil {
+                fullCanvasDelivered.fulfill()
+            }
+        }
+        frames.publish(
+            try makeNV24PixelBuffer(width: 8, height: 6),
+            at: AppleVideoFrameStore.fullCanvasIndex
+        )
+        await fulfillment(of: [fullCanvasDelivered], timeout: 1)
+        frames.removeObserver(fullCanvasObserver)
+
+        let tilesDelivered = expectation(description: "VideoToolbox tiles delivered")
+        let tileObserver = frames.addObserver { batch in
+            if batch[0] != nil, batch[1] != nil { tilesDelivered.fulfill() }
+        }
+        frames.publish(try makeNV24PixelBuffer(width: 8, height: 2, luma: 32), at: 0)
+        frames.publish(try makeNV24PixelBuffer(width: 8, height: 2, luma: 224), at: 1)
+        await fulfillment(of: [tilesDelivered], timeout: 1)
+        frames.removeObserver(tileObserver)
+
+        let image = try XCTUnwrap(metalLayer.snapshot())
+        XCTAssertEqual(image.height, 4)
+        let pixels = try XCTUnwrap(image.dataProvider?.data as Data?)
+        let rowAverages = (0..<image.height).map { row in
+            let rowStart = row * image.bytesPerRow
+            let blueValues = stride(from: rowStart, to: rowStart + image.width * 4, by: 4)
+                .map { Int(pixels[$0]) }
+            return blueValues.reduce(0, +) / blueValues.count
+        }
+        XCTAssertEqual(rowAverages.filter { $0 > 128 }.count, 2)
+        XCTAssertEqual(rowAverages.filter { $0 < 128 }.count, 2)
+    }
+
     func testAppEnablesMetalHUDRuntimeForLayerToggle() {
         XCTAssertEqual(
             Bundle.main.object(forInfoDictionaryKey: "MetalHudEnabled") as? Bool,
@@ -447,7 +505,11 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertTrue(performance.sample(at: 1).recentDisplayFrameMilliseconds.isEmpty)
     }
 
-    private func makeNV24PixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
+    private func makeNV24PixelBuffer(
+        width: Int,
+        height: Int,
+        luma: UInt8 = 128
+    ) throws -> CVPixelBuffer {
         var pixelBuffer: CVPixelBuffer?
         let attributes = [
             kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
@@ -467,7 +529,7 @@ final class AppleNV24MetalLayerTests: XCTestCase {
             guard let baseAddress = CVPixelBufferGetBaseAddressOfPlane(result, plane) else { continue }
             memset(
                 baseAddress,
-                128,
+                plane == 0 ? Int32(luma) : 128,
                 CVPixelBufferGetBytesPerRowOfPlane(result, plane)
                     * CVPixelBufferGetHeightOfPlane(result, plane)
             )

@@ -273,6 +273,10 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
             tileIndex: failure.tileIndex
         ) == true
         if shouldFlush { scheduleSynchronizedFlush(generation: generation) }
+        logFreezeDiagnostic(
+            "asynchronous reason=\(failure.reason.rawValue) status=\(failure.status) rtp=\(failure.rtpTimestamp); continuing submissions"
+        )
+        guard failure.reason == .decoderStatus else { return }
         var shouldLog = true
         if failure.status == kVTVideoDecoderReferenceMissingErr {
             shouldLog = beginRefreshRecoveryIfNeeded(
@@ -281,11 +285,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
             )
         }
         if shouldLog {
-            logFreezeDiagnostic(
-                "asynchronous reason=\(failure.reason.rawValue) status=\(failure.status) rtp=\(failure.rtpTimestamp); continuing submissions"
-            )
             Self.logger.notice(
-                "Asynchronous video decode completion without output tile=\(failure.tileIndex, privacy: .public) reason=\(failure.reason.rawValue, privacy: .public) status=\(failure.status, privacy: .public); continuing submissions"
+                "Asynchronous video decode failure tile=\(failure.tileIndex, privacy: .public) reason=\(failure.reason.rawValue, privacy: .public) status=\(failure.status, privacy: .public); continuing submissions"
             )
         }
     }
