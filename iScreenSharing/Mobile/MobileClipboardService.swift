@@ -1,5 +1,6 @@
 import Combine
 import UIKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class MobileClipboardService: ObservableObject, AppleClipboardReceiving {
@@ -60,7 +61,21 @@ final class MobileClipboardService: ObservableObject, AppleClipboardReceiving {
     }
 
     func localArchive() -> AppleClipboardArchive? {
-        pasteboard.string.map(AppleClipboardArchive.text)
+        let items = pasteboard.items.enumerated().compactMap {
+            index, pasteboardItem -> AppleClipboardItem? in
+            let itemSet = IndexSet(integer: index)
+            let flavors = pasteboardItem.keys.compactMap {
+                type -> AppleClipboardFlavor? in
+                guard Self.shouldSynchronize(type),
+                      let value = pasteboard.data(
+                          forPasteboardType: type,
+                          inItemSet: itemSet
+                      )?.first else { return nil }
+                return AppleClipboardFlavor(type: type, aliases: [], value: value)
+            }
+            return flavors.isEmpty ? nil : AppleClipboardItem(flavors: flavors)
+        }
+        return items.isEmpty ? nil : AppleClipboardArchive(items: items)
     }
 
     func archiveForRemoteRequest() -> AppleClipboardArchive? {
@@ -76,10 +91,19 @@ final class MobileClipboardService: ObservableObject, AppleClipboardReceiving {
     }
 
     func receive(_ archive: AppleClipboardArchive) {
-        guard let text = archive.preferredText else { return }
-        pasteboard.string = text
+        let pasteboardItems = archive.items.compactMap { archiveItem -> [String: Any]? in
+            var item = [String: Any]()
+            for flavor in archiveItem.flavors {
+                guard let identifier = Self.resolvedTypeIdentifier(for: flavor),
+                      Self.shouldSynchronize(identifier) else { continue }
+                item[identifier] = flavor.value
+            }
+            return item.isEmpty ? nil : item
+        }
+        guard !pasteboardItems.isEmpty else { return }
+        pasteboard.setItems(pasteboardItems, options: [:])
         ignoredChangeCount = pasteboard.changeCount
-        lastReceivedText = text
+        lastReceivedText = archive.preferredText
         hasUnfulfilledPromises = false
     }
 
@@ -149,4 +173,48 @@ final class MobileClipboardService: ObservableObject, AppleClipboardReceiving {
             await updateRemoteSharingEnabled(enabled)
         }
     }
+
+    private static func shouldSynchronize(_ identifier: String) -> Bool {
+        !identifier.hasPrefix("dyn.")
+            && !pasteboardPeekerTypes.contains(identifier)
+            && !excludedTypes.contains(identifier)
+    }
+
+    private static func resolvedTypeIdentifier(for flavor: AppleClipboardFlavor) -> String? {
+        if !flavor.type.isEmpty { return flavor.type }
+        for alias in flavor.aliases {
+            switch alias.tagClass {
+            case "com.apple.nspboard-type":
+                return alias.preferredTag
+            case "public.mime-type":
+                if let type = UTType(mimeType: alias.preferredTag) { return type.identifier }
+            case "public.filename-extension":
+                if let type = UTType(filenameExtension: alias.preferredTag) { return type.identifier }
+            default:
+                let tagClass = UTTagClass(rawValue: alias.tagClass)
+                if let type = UTType(
+                    tag: alias.preferredTag,
+                    tagClass: tagClass,
+                    conformingTo: nil
+                ) {
+                    return type.identifier
+                }
+            }
+        }
+        return nil
+    }
+
+    private static let pasteboardPeekerTypes: Set<String> = [
+        "com.apple.pasteboardpeeker.lowercasetext",
+        "com.apple.pasteboardpeeker.uppercasetext",
+    ]
+
+    private static let excludedTypes: Set<String> = [
+        UTType.fileURL.identifier,
+        "com.apple.pasteboard.NSFilePromiseID",
+        "com.apple.pasteboard.NSFilePromiseContent",
+        "com.apple.pasteboard.promised-file-url",
+        "com.apple.pasteboard.promised-file-content-type",
+        "com.ilm.openexr-image",
+    ]
 }

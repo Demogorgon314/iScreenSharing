@@ -143,6 +143,7 @@ private struct MobileConnectionPlaceholderView: View {
                 MobileVideoCanvasView(
                     stream: stream,
                     input: session.inputController,
+                    cursors: session.cursorStore,
                     requestsKeyboard: $requestsKeyboard
                 )
                 .ignoresSafeArea(edges: .bottom)

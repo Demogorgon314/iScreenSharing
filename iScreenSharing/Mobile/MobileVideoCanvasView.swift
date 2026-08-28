@@ -4,14 +4,15 @@ import UIKit
 struct MobileVideoCanvasView: UIViewRepresentable {
     let stream: AppleVideoStream
     let input: AppleInputController?
+    let cursors: AppleCursorStore?
     @Binding var requestsKeyboard: Bool
 
     func makeUIView(context: Context) -> MobileVideoCanvasUIView {
-        MobileVideoCanvasUIView(stream: stream, input: input)
+        MobileVideoCanvasUIView(stream: stream, input: input, cursors: cursors)
     }
 
     func updateUIView(_ view: MobileVideoCanvasUIView, context: Context) {
-        view.update(stream: stream, input: input)
+        view.update(stream: stream, input: input, cursors: cursors)
         view.setKeyboardVisible(requestsKeyboard)
     }
 
@@ -21,20 +22,42 @@ struct MobileVideoCanvasView: UIViewRepresentable {
 }
 
 @MainActor
+private final class MobileVideoDisplayLinkTarget: NSObject {
+    weak var view: MobileVideoCanvasUIView?
+
+    init(view: MobileVideoCanvasUIView) {
+        self.view = view
+    }
+
+    @objc func displayLinkDidFire(_ displayLink: CADisplayLink) {
+        view?.displayLinkDidFire(displayLink)
+    }
+}
+
+@MainActor
 final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     private var stream: AppleVideoStream
     private var input: AppleInputController?
+    private var cursors: AppleCursorStore?
     private let metalLayer: AppleNV24MetalLayer?
+    private let cursorLayer = CALayer()
     private var frameObserver: UUID?
+    private var cursorObserver: UUID?
+    private var displayLink: CADisplayLink?
+    private var displayLinkTarget: MobileVideoDisplayLinkTarget?
+    private var displayScheduler = AppleVideoDisplayScheduler()
     private var lastRemotePoint: (x: Int, y: Int)?
+    private var lastLocalPoint: CGPoint?
+    private var cursorHotspot = CGPoint.zero
     private var inputTail = Task<Void, Never> {}
 
     override var canBecomeFirstResponder: Bool { true }
     var hasText: Bool { true }
 
-    init(stream: AppleVideoStream, input: AppleInputController?) {
+    init(stream: AppleVideoStream, input: AppleInputController?, cursors: AppleCursorStore?) {
         self.stream = stream
         self.input = input
+        self.cursors = cursors
         if let context = AppleNV24MetalContext() {
             metalLayer = AppleNV24MetalLayer(
                 context: context,
@@ -48,8 +71,12 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         backgroundColor = .black
         isMultipleTouchEnabled = true
         if let metalLayer { layer.addSublayer(metalLayer) }
+        cursorLayer.isHidden = true
+        cursorLayer.contentsGravity = .resize
+        layer.addSublayer(cursorLayer)
         installGestures()
         observeFrames()
+        observeCursor()
     }
 
     @available(*, unavailable)
@@ -63,21 +90,43 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         metalLayer.frame = bounds
         metalLayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         updateLayout()
-        _ = metalLayer.present()
+        displayScheduler.markNeedsPresentation()
     }
 
-    func update(stream: AppleVideoStream, input: AppleInputController?) {
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        configureDisplayLink()
+    }
+
+    func update(
+        stream: AppleVideoStream,
+        input: AppleInputController?,
+        cursors: AppleCursorStore?
+    ) {
         self.input = input
-        guard self.stream !== stream else { return }
-        if let frameObserver { self.stream.frames.removeObserver(frameObserver) }
-        self.stream = stream
-        observeFrames()
-        setNeedsLayout()
+        if self.cursors !== cursors {
+            if let cursorObserver { self.cursors?.removeObserver(cursorObserver) }
+            self.cursors = cursors
+            observeCursor()
+        }
+        if self.stream !== stream {
+            if let frameObserver { self.stream.frames.removeObserver(frameObserver) }
+            self.stream = stream
+            displayScheduler.reset()
+            observeFrames()
+            setNeedsLayout()
+        }
     }
 
     func close() {
         if let frameObserver { stream.frames.removeObserver(frameObserver) }
+        if let cursorObserver { cursors?.removeObserver(cursorObserver) }
         frameObserver = nil
+        cursorObserver = nil
+        displayLink?.invalidate()
+        displayLink = nil
+        displayLinkTarget = nil
+        displayScheduler.reset()
         inputTail.cancel()
         metalLayer?.prepareForInactivity()
     }
@@ -143,12 +192,73 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
 
     private func observeFrames() {
         frameObserver = stream.frames.addObserver { [weak self] frames in
-            guard let self, let metalLayer = self.metalLayer else { return }
-            for (tileIndex, frame) in frames {
+            guard let self else { return }
+            if let update = self.displayScheduler.enqueue(frames) {
+                self.applyAndPresent(update)
+            }
+        }
+        enqueueCurrentFrames()
+    }
+
+    private func observeCursor() {
+        cursorObserver = cursors?.addObserver { [weak self] image in
+            self?.applyCursor(image)
+        }
+        applyCursor(cursors?.currentImage())
+    }
+
+    private func enqueueCurrentFrames() {
+        let frames = ([AppleVideoFrameStore.fullCanvasIndex] + Array(0..<stream.canvas.tileCount))
+            .reduce(into: AppleVideoFrameStore.FrameBatch()) { result, tileIndex in
+                result[tileIndex] = stream.frames.storedFrame(at: tileIndex)
+            }
+        if let update = displayScheduler.enqueue(frames) {
+            applyAndPresent(update)
+        }
+    }
+
+    private func configureDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+        displayLinkTarget = nil
+        displayScheduler.invalidateDisplayTarget()
+        guard window != nil, metalLayer != nil else { return }
+        let target = MobileVideoDisplayLinkTarget(view: self)
+        let displayLink = CADisplayLink(target: target, selector: #selector(target.displayLinkDidFire(_:)))
+        let maximumFramesPerSecond = Float(max(1, window?.screen.maximumFramesPerSecond ?? 60))
+        displayLink.preferredFrameRateRange = CAFrameRateRange(
+            minimum: maximumFramesPerSecond,
+            maximum: maximumFramesPerSecond,
+            preferred: maximumFramesPerSecond
+        )
+        displayLink.add(to: .main, forMode: .common)
+        displayLinkTarget = target
+        self.displayLink = displayLink
+        enqueueCurrentFrames()
+    }
+
+    fileprivate func displayLinkDidFire(_ displayLink: CADisplayLink) {
+        let period = displayLink.targetTimestamp - displayLink.timestamp
+        applyAndPresent(displayScheduler.displayLinkDidFire(
+            targetTimestamp: displayLink.targetTimestamp,
+            period: period
+        ))
+    }
+
+    private func applyAndPresent(_ update: AppleVideoDisplayScheduler.DisplayUpdate) {
+        if !update.frames.isEmpty, let metalLayer {
+            for (tileIndex, frame) in update.frames {
                 metalLayer.update(frame, at: tileIndex)
             }
-            self.updateLayout()
-            _ = metalLayer.present()
+            updateLayout()
+        }
+        guard update.requiresPresentation, let metalLayer else { return }
+        if !metalLayer.present(
+            targetTimestamp: update.targetTimestamp,
+            displayPeriod: update.displayPeriod,
+            isDisplayLinkTriggered: update.trigger == .displayLinkTick
+        ) {
+            displayScheduler.presentationDidFail()
         }
     }
 
@@ -173,7 +283,9 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     }
 
     @objc private func didTap(_ recognizer: UITapGestureRecognizer) {
-        guard let point = remotePoint(for: recognizer.location(in: self)) else { return }
+        let location = recognizer.location(in: self)
+        guard let point = remotePoint(for: location) else { return }
+        updateCursorPosition(location)
         lastRemotePoint = point
         enqueueInput { input in
             await input.pointer(buttons: AppleInputController.leftButton, x: point.x, y: point.y, clickCount: 1)
@@ -183,8 +295,10 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
 
     @objc private func didDrag(_ recognizer: UIPanGestureRecognizer) {
         let isEnding = recognizer.state == .ended || recognizer.state == .cancelled
-        guard let point = remotePoint(for: recognizer.location(in: self))
+        let location = recognizer.location(in: self)
+        guard let point = remotePoint(for: location)
             ?? (isEnding ? lastRemotePoint : nil) else { return }
+        if bounds.contains(location) { updateCursorPosition(location) }
         lastRemotePoint = point
         let buttons: UInt8 = recognizer.state == .ended || recognizer.state == .cancelled
             ? 0
@@ -213,7 +327,9 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     }
 
     @objc private func didRightClick(_ recognizer: UITapGestureRecognizer) {
-        guard let point = remotePoint(for: recognizer.location(in: self)) else { return }
+        let location = recognizer.location(in: self)
+        guard let point = remotePoint(for: location) else { return }
+        updateCursorPosition(location)
         lastRemotePoint = point
         enqueueInput { input in
             await input.pointer(buttons: AppleInputController.rightButton, x: point.x, y: point.y, clickCount: 1)
@@ -222,7 +338,9 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     }
 
     @objc private func didHover(_ recognizer: UIHoverGestureRecognizer) {
-        guard let point = remotePoint(for: recognizer.location(in: self)) else { return }
+        let location = recognizer.location(in: self)
+        guard let point = remotePoint(for: location) else { return }
+        updateCursorPosition(location)
         lastRemotePoint = point
         enqueueInput { input in
             await input.pointer(buttons: 0, x: point.x, y: point.y)
@@ -231,6 +349,55 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
 
     private func remotePoint(for location: CGPoint) -> (x: Int, y: Int)? {
         AppleVideoCanvasLayout.remotePoint(location: location, canvas: stream.canvas, bounds: bounds)
+    }
+
+    private func applyCursor(_ image: AppleCursorImage?) {
+        guard let image, let cgImage = Self.cursorImage(from: image) else {
+            cursorLayer.isHidden = true
+            cursorLayer.contents = nil
+            return
+        }
+        cursorHotspot = CGPoint(x: image.hotspotX, y: image.hotspotY)
+        cursorLayer.bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        cursorLayer.contents = cgImage
+        cursorLayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+        if let lastLocalPoint { updateCursorPosition(lastLocalPoint) }
+    }
+
+    private func updateCursorPosition(_ point: CGPoint) {
+        lastLocalPoint = point
+        guard cursorLayer.contents != nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        cursorLayer.position = CGPoint(
+            x: point.x - cursorHotspot.x + cursorLayer.bounds.width / 2,
+            y: point.y - cursorHotspot.y + cursorLayer.bounds.height / 2
+        )
+        cursorLayer.isHidden = false
+        CATransaction.commit()
+    }
+
+    private static func cursorImage(from image: AppleCursorImage) -> CGImage? {
+        let (pixelCount, pixelOverflow) = image.width.multipliedReportingOverflow(by: image.height)
+        let (byteCount, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
+        guard image.width > 0, image.height > 0, !pixelOverflow, !byteOverflow,
+              image.hotspotX >= 0, image.hotspotX < image.width,
+              image.hotspotY >= 0, image.hotspotY < image.height,
+              image.rgba.count == byteCount,
+              let provider = CGDataProvider(data: image.rgba as CFData) else { return nil }
+        return CGImage(
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: image.width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
     }
 
     private func sendKey(symbol: UInt32) {

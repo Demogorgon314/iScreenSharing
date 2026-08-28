@@ -80,7 +80,6 @@
 				App/SettingsView.swift,
 				Features/Connections/AppleFileTransferHistoryView.swift,
 				Features/Connections/AppleVideoDisplayScale.swift,
-				Features/Connections/AppleVideoDisplayScheduler.swift,
 				Features/Connections/AuthenticationCoordinator.swift,
 				Features/Connections/AuthenticationView.swift,
 				Features/Connections/ConnectionCoordinator.swift,
@@ -631,7 +630,7 @@
 				DEVELOPMENT_TEAM = GX4T5HF5N9;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = iScreenSharing/Mobile/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobile;
 				PRODUCT_MODULE_NAME = iScreenSharingMobile;
@@ -654,7 +653,7 @@
 				DEVELOPMENT_TEAM = GX4T5HF5N9;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = iScreenSharing/Mobile/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobile;
 				PRODUCT_MODULE_NAME = iScreenSharingMobile;
@@ -675,7 +674,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = GX4T5HF5N9;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobileTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -694,7 +693,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = GX4T5HF5N9;
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobileTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
