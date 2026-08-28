@@ -1,19 +1,13 @@
 import SwiftUI
 
 struct MobileConnectionsView: View {
+    @StateObject private var discovery = NetworkDiscoveryModel()
     @State private var path = [ConnectionEndpoint]()
     @State private var showsNewConnection = false
 
     var body: some View {
         NavigationStack(path: $path) {
-            ContentUnavailableView {
-                Label("No Connections", systemImage: "rectangle.connected.to.line.below")
-            } description: {
-                Text("Connect directly to a Mac running Screen Sharing.")
-            } actions: {
-                Button("New Connection") { showsNewConnection = true }
-                    .buttonStyle(.borderedProminent)
-            }
+            connectionList
             .navigationTitle("Connections")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -31,6 +25,44 @@ struct MobileConnectionsView: View {
                 showsNewConnection = false
                 path.append(endpoint)
             }
+        }
+        .task { await discovery.browse() }
+    }
+
+    @ViewBuilder
+    private var connectionList: some View {
+        switch discovery.state {
+        case .searching:
+            List {
+                Section("Nearby") {
+                    HStack(spacing: 12) {
+                        ProgressView()
+                        Text("Looking for Macs…")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        case .results(let services) where services.isEmpty:
+            ContentUnavailableView {
+                Label("No Macs Found", systemImage: "rectangle.connected.to.line.below")
+            } description: {
+                Text("Enter a hostname or IP address to connect directly.")
+            } actions: {
+                Button("New Connection") { showsNewConnection = true }
+                    .buttonStyle(.borderedProminent)
+            }
+        case .results(let services):
+            List(services, id: \.endpoint) { service in
+                NavigationLink(value: service.endpoint) {
+                    Label(service.endpoint.displayName, systemImage: "desktopcomputer")
+                }
+            }
+        case .failed(let message):
+            ContentUnavailableView(
+                "Discovery Unavailable",
+                systemImage: "wifi.exclamationmark",
+                description: Text(message)
+            )
         }
     }
 }
@@ -87,13 +119,42 @@ private struct MobileNewConnectionView: View {
 private struct MobileConnectionPlaceholderView: View {
     let endpoint: ConnectionEndpoint
 
+    @StateObject private var probeModel: MobileConnectionProbeModel
+
+    init(endpoint: ConnectionEndpoint) {
+        self.endpoint = endpoint
+        _probeModel = StateObject(wrappedValue: MobileConnectionProbeModel(endpoint: endpoint))
+    }
+
     var body: some View {
-        ContentUnavailableView {
-            Label(endpoint.displayName, systemImage: "display")
-        } description: {
-            Text("Connection setup is ready. Authentication and video are added in the next milestone.")
+        Group {
+            switch probeModel.state {
+            case .idle, .probing:
+                ProgressView("Contacting \(endpoint.displayName)…")
+            case .ready:
+                ContentUnavailableView {
+                    Label(endpoint.displayName, systemImage: "checkmark.circle")
+                } description: {
+                    Text("This Mac supports Apple high-performance Screen Sharing authentication.")
+                }
+            case .unsupported:
+                ContentUnavailableView {
+                    Label("Unsupported Mac", systemImage: "xmark.circle")
+                } description: {
+                    Text("The host did not advertise Apple RSA Screen Sharing authentication.")
+                }
+            case .failed(let message):
+                ContentUnavailableView {
+                    Label("Connection Failed", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(message)
+                } actions: {
+                    Button("Try Again") { Task { await probeModel.start() } }
+                }
+            }
         }
         .navigationTitle(endpoint.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .task { await probeModel.start() }
     }
 }

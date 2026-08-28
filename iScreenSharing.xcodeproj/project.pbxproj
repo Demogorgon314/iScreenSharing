@@ -55,7 +55,9 @@
 		A10000000000000000000040 /* Exceptions for "iScreenSharing" folder in "iScreenSharing" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Mobile/Info.plist,
 				Mobile/MobileConnectionDraft.swift,
+				Mobile/MobileConnectionProbeModel.swift,
 				Mobile/MobileConnectionsView.swift,
 				Mobile/iScreenSharingMobileApp.swift,
 				Resources/Info.plist,
@@ -83,7 +85,6 @@
 				Features/Connections/ConnectionLibraryLayout.swift,
 				Features/Connections/ConnectionStore.swift,
 				Features/Connections/ConnectionsLibraryView.swift,
-				Features/Connections/NetworkDiscoveryModel.swift,
 				Features/Connections/NewConnectionView.swift,
 				Features/Connections/RemoteDeviceIcon.swift,
 				Features/Connections/RemoteVideoCanvasView.swift,
@@ -92,6 +93,7 @@
 				Features/Connections/SessionView.swift,
 				Features/Connections/SessionViewportStore.swift,
 				Features/Connections/TailscaleModel.swift,
+				Mobile/Info.plist,
 				Resources/Assets.xcassets,
 				Services/Clipboard/AppleClipboardExchange.swift,
 				Services/Clipboard/AppleClipboardService.swift,
@@ -121,14 +123,8 @@
 				Services/Networking/AppleMediaReceiver.swift,
 				Services/Networking/AppleMediaReceiverFactory.swift,
 				Services/Networking/AppleRekeyReader.swift,
-				Services/Networking/BonjourBrowser.swift,
-				Services/Networking/BonjourDeviceInfoResolver.swift,
 				Services/Networking/EmbeddedTailscaleRuntime.swift,
-				Services/Networking/NWConnectionTransport.swift,
 				Services/Networking/RFBAuthenticationService.swift,
-				Services/Networking/RFBProbeService.swift,
-				Services/Networking/RFBTransport.swift,
-				Services/Networking/RemoteAddressResolver.swift,
 				Services/Networking/TailscaleMediaReceiver.swift,
 				Services/Networking/TailscaleTCPTransport.swift,
 				Services/Security/KeychainCredentialStore.swift,
@@ -662,10 +658,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = GX4T5HF5N9;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = iScreenSharing;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Screen Sharing uses your local network to connect to Macs you choose.";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iScreenSharing/Mobile/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobile;
@@ -687,10 +681,8 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = GX4T5HF5N9;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = iScreenSharing;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Screen Sharing uses your local network to connect to Macs you choose.";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = iScreenSharing/Mobile/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobile;
