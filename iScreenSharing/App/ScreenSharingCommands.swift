@@ -51,8 +51,12 @@ struct ScreenSharingCommands: Commands {
                 .disabled(activeSession?.canToggleObservationMode != true)
             Toggle("Dynamic Resolution", isOn: dynamicResolutionBinding)
                 .disabled(activeSession?.canUseDynamicResolution != true)
-            Toggle("Synchronize Video", isOn: videoSyncBinding)
-                .disabled(activeSession == nil)
+            Picker("Video Decoder", selection: videoDecoderModeBinding) {
+                ForEach(AppleVideoDecoderMode.standardCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .disabled(activeSession == nil)
             Toggle("Mute Audio", isOn: audioMutedBinding)
                 .disabled(activeSession?.hasAudio != true)
             Divider()
@@ -155,11 +159,6 @@ struct ScreenSharingCommands: Commands {
                 .disabled(activeSession == nil)
             Toggle("Dynamic Resolution", isOn: dynamicResolutionBinding)
                 .disabled(activeSession?.canUseDynamicResolution != true)
-            Toggle(
-                "Synchronize Video",
-                isOn: videoSyncBinding
-            )
-            .disabled(activeSession == nil)
             Button("High Dynamic Range") { }
                 .disabled(true)
             Divider()
@@ -198,13 +197,6 @@ struct ScreenSharingCommands: Commands {
 
     private var activeSession: SessionCommandState? {
         sessionCommands.active
-    }
-
-    private var videoSyncBinding: Binding<Bool> {
-        Binding(
-            get: { sessionCommands.active?.synchronizesVideoPresentation ?? false },
-            set: { sessionCommands.active?.setSynchronizesVideoPresentation($0) }
-        )
     }
 
     private var dynamicResolutionBinding: Binding<Bool> {
@@ -260,6 +252,13 @@ struct ScreenSharingCommands: Commands {
         Binding(
             get: { sessionCommands.active?.videoPerformanceLevel ?? .compact },
             set: { sessionCommands.active?.setVideoPerformanceLevel($0) }
+        )
+    }
+
+    private var videoDecoderModeBinding: Binding<AppleVideoDecoderMode> {
+        Binding(
+            get: { sessionCommands.active?.videoDecoderMode ?? .videoProcessing },
+            set: { sessionCommands.active?.setVideoDecoderMode($0) }
         )
     }
 

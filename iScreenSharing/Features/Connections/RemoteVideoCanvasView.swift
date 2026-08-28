@@ -362,6 +362,7 @@ final class RemoteVideoCanvasNSView: NSView {
         (displayLayer as? AppleNV24MetalLayer)?.update(
             layouts: layouts,
             fullCanvasLayout: fullCanvasLayout,
+            canvasSize: CGSize(width: canvas.width, height: canvas.height),
             bounds: bounds
         )
     }
@@ -872,11 +873,16 @@ final class RemoteVideoCanvasNSView: NSView {
             return
         }
         guard decodedTileHeights.indices.contains(tileIndex) else { return }
+        let switchedFromFullCanvas = decodedFullCanvasSize != nil
+        decodedFullCanvasSize = nil
         let pixelBuffer = frame.pixelBuffer
         let height = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
         if decodedTileHeights[tileIndex] != height {
             decodedTileHeights[tileIndex] = height
             needsLayout = true
+        }
+        if switchedFromFullCanvas {
+            updateDisplayLayerGeometry()
         }
 
         (displayLayer as? AppleNV24MetalLayer)?.update(frame, at: tileIndex)

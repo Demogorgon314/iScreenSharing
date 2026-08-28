@@ -27,6 +27,7 @@ final class AppleNV24MetalContext {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
+    let rgbaPipeline: MTLRenderPipelineState
     let textureCache: CVMetalTextureCache
 
     init?() {
@@ -34,13 +35,18 @@ final class AppleNV24MetalContext {
               let commandQueue = device.makeCommandQueue(),
               let library = try? device.makeLibrary(source: Self.shaderSource, options: nil),
               let vertex = library.makeFunction(name: "nv24Vertex"),
-              let fragment = library.makeFunction(name: "nv24Fragment") else { return nil }
+              let fragment = library.makeFunction(name: "nv24Fragment"),
+              let rgbaFragment = library.makeFunction(name: "rgbaFragment") else { return nil }
 
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = vertex
         descriptor.fragmentFunction = fragment
         descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
         guard let pipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else { return nil }
+        descriptor.fragmentFunction = rgbaFragment
+        guard let rgbaPipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else {
+            return nil
+        }
 
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess,
@@ -49,6 +55,7 @@ final class AppleNV24MetalContext {
         self.device = device
         self.commandQueue = commandQueue
         self.pipeline = pipeline
+        self.rgbaPipeline = rgbaPipeline
         textureCache = cache
     }
 
@@ -89,6 +96,13 @@ final class AppleNV24MetalContext {
         );
         return float4(rgb, 1.0);
     }
+
+    fragment float4 rgbaFragment(
+        VertexOutput input [[stage_in]],
+        texture2d<float> texture [[texture(0)]]) {
+        constexpr sampler textureSampler(address::clamp_to_edge, filter::linear);
+        return texture.sample(textureSampler, input.textureCoordinate);
+    }
     """
 }
 
@@ -107,6 +121,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private var tileLayouts = [AppleVideoCanvasLayout.Tile]()
     private var fullCanvasLayout = AppleVideoCanvasLayout.Tile(container: .zero, content: .zero)
     private var renderingBounds = CGRect.zero
+    private var canvasSize = CGSize.zero
+    private var compositedCanvas: MTLTexture?
     private let inFlightGate = AppleMetalInFlightGate()
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
@@ -147,6 +163,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         tileLayouts = source.tileLayouts
         fullCanvasLayout = source.fullCanvasLayout
         renderingBounds = source.renderingBounds
+        canvasSize = source.canvasSize
+        compositedCanvas = source.compositedCanvas
         synchronizesPresentation = source.synchronizesPresentation
         showsDeveloperHUD = false
         super.init(layer: layer)
@@ -173,10 +191,15 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     func update(
         layouts: [AppleVideoCanvasLayout.Tile],
         fullCanvasLayout: AppleVideoCanvasLayout.Tile,
+        canvasSize: CGSize,
         bounds: CGRect
     ) {
         tileLayouts = layouts
         self.fullCanvasLayout = fullCanvasLayout
+        if self.canvasSize != canvasSize {
+            self.canvasSize = canvasSize
+            compositedCanvas = nil
+        }
         renderingBounds = bounds
         updateDrawableSize()
     }
@@ -191,6 +214,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         tileLayouts.removeAll()
         fullCanvasLayout = AppleVideoCanvasLayout.Tile(container: .zero, content: .zero)
         renderingBounds = .zero
+        canvasSize = .zero
+        compositedCanvas = nil
         self.performance = performance
         self.synchronizesPresentation = synchronizesPresentation
         self.showsDeveloperHUD = showsDeveloperHUD
@@ -202,6 +227,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         tileLayouts.removeAll()
         fullCanvasLayout = AppleVideoCanvasLayout.Tile(container: .zero, content: .zero)
         renderingBounds = .zero
+        canvasSize = .zero
+        compositedCanvas = nil
         performance = nil
     }
 
@@ -380,6 +407,36 @@ final class AppleNV24MetalLayer: CAMetalLayer {
 
     private func encode(into commandBuffer: MTLCommandBuffer, texture: MTLTexture) -> Bool {
         guard renderingBounds.width > 0, renderingBounds.height > 0 else { return false }
+        if let frame = latestFrames[AppleVideoFrameStore.fullCanvasIndex] {
+            return encodeNV24Frames(
+                [(frame, fullCanvasLayout)],
+                into: texture,
+                bounds: renderingBounds,
+                commandBuffer: commandBuffer
+            )
+        }
+        guard let compositedCanvas = canvasTexture(),
+              encodeNV24Frames(
+                  nativeTileFrames(),
+                  into: compositedCanvas,
+                  bounds: CGRect(origin: .zero, size: canvasSize),
+                  commandBuffer: commandBuffer
+              ) else { return false }
+        return encodeRGBA(
+            compositedCanvas,
+            layout: fullCanvasLayout,
+            into: texture,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    private func encodeNV24Frames(
+        _ frames: [(AppleVideoFrameStore.Frame, AppleVideoCanvasLayout.Tile)],
+        into texture: MTLTexture,
+        bounds: CGRect,
+        commandBuffer: MTLCommandBuffer
+    ) -> Bool {
+        guard !frames.isEmpty else { return false }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
         pass.colorAttachments[0].loadAction = .clear
@@ -387,14 +444,34 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encoder.setRenderPipelineState(context.pipeline)
-        if let frame = latestFrames[AppleVideoFrameStore.fullCanvasIndex] {
-            encode(frame, layout: fullCanvasLayout, using: encoder)
-        } else {
-            for (tileIndex, frame) in latestFrames.sorted(by: { $0.key < $1.key }) {
-                guard tileLayouts.indices.contains(tileIndex) else { continue }
-                encode(frame, layout: tileLayouts[tileIndex], using: encoder)
-            }
+        for (frame, layout) in frames {
+            encode(frame, layout: layout, bounds: bounds, using: encoder)
         }
+        encoder.endEncoding()
+        return true
+    }
+
+    private func encodeRGBA(
+        _ source: MTLTexture,
+        layout: AppleVideoCanvasLayout.Tile,
+        into texture: MTLTexture,
+        commandBuffer: MTLCommandBuffer
+    ) -> Bool {
+        guard let vertices = vertices(for: layout, bounds: renderingBounds) else { return false }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = texture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1)
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        encoder.setRenderPipelineState(context.rgbaPipeline)
+        encoder.setVertexBytes(
+            vertices,
+            length: MemoryLayout<Vertex>.stride * vertices.count,
+            index: 0
+        )
+        encoder.setFragmentTexture(source, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
         return true
     }
@@ -402,11 +479,12 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private func encode(
         _ frame: AppleVideoFrameStore.Frame,
         layout: AppleVideoCanvasLayout.Tile,
+        bounds: CGRect,
         using encoder: MTLRenderCommandEncoder
     ) {
         let pixelBuffer = frame.pixelBuffer
         guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 2,
-              let vertices = vertices(for: layout),
+              let vertices = vertices(for: layout, bounds: bounds),
               let luma = texture(from: pixelBuffer, plane: 0, format: .r8Unorm),
               let chroma = texture(from: pixelBuffer, plane: 1, format: .rg8Unorm) else { return }
         encoder.setVertexBytes(
@@ -464,15 +542,19 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         drawableSize = nextDrawableSize
     }
 
-    private func vertices(for layout: AppleVideoCanvasLayout.Tile) -> [Vertex]? {
+    private func vertices(
+        for layout: AppleVideoCanvasLayout.Tile,
+        bounds: CGRect
+    ) -> [Vertex]? {
         let container = layout.container
         let content = layout.content
-        guard !container.isEmpty, !content.isEmpty else { return nil }
+        guard !container.isEmpty, !content.isEmpty,
+              bounds.width > 0, bounds.height > 0 else { return nil }
 
-        let left = Float((container.minX - renderingBounds.minX) / renderingBounds.width * 2 - 1)
-        let right = Float((container.maxX - renderingBounds.minX) / renderingBounds.width * 2 - 1)
-        let bottom = Float((container.minY - renderingBounds.minY) / renderingBounds.height * 2 - 1)
-        let top = Float((container.maxY - renderingBounds.minY) / renderingBounds.height * 2 - 1)
+        let left = Float((container.minX - bounds.minX) / bounds.width * 2 - 1)
+        let right = Float((container.maxX - bounds.minX) / bounds.width * 2 - 1)
+        let bottom = Float((container.minY - bounds.minY) / bounds.height * 2 - 1)
+        let top = Float((container.maxY - bounds.minY) / bounds.height * 2 - 1)
         let u0 = Float((0 - content.minX) / content.width)
         let u1 = Float((container.width - content.minX) / content.width)
         let vBottom = Float(1 - (0 - content.minY) / content.height)
@@ -483,6 +565,59 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             Vertex(position: SIMD2(left, top), textureCoordinate: SIMD2(u0, vTop)),
             Vertex(position: SIMD2(right, top), textureCoordinate: SIMD2(u1, vTop)),
         ]
+    }
+
+    private func canvasTexture() -> MTLTexture? {
+        let width = Int(canvasSize.width)
+        let height = Int(canvasSize.height)
+        guard width > 0, height > 0 else { return nil }
+        if let compositedCanvas,
+           compositedCanvas.width == width,
+           compositedCanvas.height == height {
+            return compositedCanvas
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        descriptor.storageMode = .private
+        descriptor.usage = [.renderTarget, .shaderRead]
+        compositedCanvas = context.device.makeTexture(descriptor: descriptor)
+        return compositedCanvas
+    }
+
+    private func nativeTileFrames()
+        -> [(AppleVideoFrameStore.Frame, AppleVideoCanvasLayout.Tile)] {
+        return latestFrames.sorted(by: { $0.key < $1.key }).compactMap { tileIndex, frame in
+            guard tileLayouts.indices.contains(tileIndex) else { return nil }
+            let pixelBuffer = frame.pixelBuffer
+            let width = CGFloat(CVPixelBufferGetWidth(pixelBuffer))
+            let slotHeight = CGFloat(CVPixelBufferGetHeight(pixelBuffer))
+            let fallbackHeight = ceil(canvasSize.height / CGFloat(max(1, tileLayouts.count)))
+            let logicalStart = (0..<tileIndex).reduce(CGFloat.zero) { result, index in
+                guard let preceding = latestFrames[index]?.pixelBuffer else {
+                    return result + fallbackHeight
+                }
+                return result + CGFloat(CVPixelBufferGetHeight(preceding))
+            }
+            let validHeight = min(slotHeight, max(0, canvasSize.height - logicalStart))
+            guard width > 0, validHeight > 0 else { return nil }
+            let container = CGRect(
+                x: 0,
+                y: canvasSize.height - logicalStart - validHeight,
+                width: min(width, canvasSize.width),
+                height: validHeight
+            )
+            let content = CGRect(
+                x: 0,
+                y: validHeight - slotHeight,
+                width: width,
+                height: slotHeight
+            )
+            return (frame, AppleVideoCanvasLayout.Tile(container: container, content: content))
+        }
     }
 
     private func texture(

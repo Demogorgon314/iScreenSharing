@@ -13,6 +13,41 @@ final class AppleHEVCDecoderTests: XCTestCase {
         )
     }
 
+    func testClassifiesDroppedAndMissingVideoToolboxOutputAsCompletedFailures() {
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: noErr,
+                infoFlags: [.frameDropped],
+                hasImageBuffer: false
+            ),
+            .failure(.frameDropped)
+        )
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: noErr,
+                infoFlags: [],
+                hasImageBuffer: false
+            ),
+            .failure(.missingImageBuffer)
+        )
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: kVTVideoDecoderBadDataErr,
+                infoFlags: [],
+                hasImageBuffer: false
+            ),
+            .failure(.decoderStatus)
+        )
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: noErr,
+                infoFlags: [],
+                hasImageBuffer: true
+            ),
+            .frame
+        )
+    }
+
     func testBuildsFourByteLengthPrefixedPayload() throws {
         let unit = Data([0x26, 0x01, 0xaa, 0xbb])
         XCTAssertEqual(
@@ -52,6 +87,17 @@ final class AppleHEVCDecoderTests: XCTestCase {
         }
     }
 
+    func testRejectsTileIndicesOutsideTheConfiguredDecoderSet() {
+        XCTAssertNoThrow(try AppleHEVCDecoder.validateTileIndex(0, tileCount: 4))
+        XCTAssertNoThrow(try AppleHEVCDecoder.validateTileIndex(3, tileCount: 4))
+        XCTAssertThrowsError(try AppleHEVCDecoder.validateTileIndex(-1, tileCount: 4)) {
+            XCTAssertEqual($0 as? AppleHEVCDecoderError, .invalidTileIndex)
+        }
+        XCTAssertThrowsError(try AppleHEVCDecoder.validateTileIndex(4, tileCount: 4)) {
+            XCTAssertEqual($0 as? AppleHEVCDecoderError, .invalidTileIndex)
+        }
+    }
+
     func testUsesVideoProcessingOnlyForMultiTileStreamsWhenAvailable() {
         XCTAssertFalse(AppleHEVCDecoder.prefersVideoProcessing(
             tileCount: 1,
@@ -69,6 +115,32 @@ final class AppleHEVCDecoderTests: XCTestCase {
             tileCount: 4,
             isAvailable: true
         ))
+        XCTAssertFalse(AppleHEVCDecoder.prefersVideoProcessing(
+            mode: .videoToolboxLowLatency,
+            tileCount: 4,
+            isAvailable: true
+        ))
+        XCTAssertFalse(AppleHEVCDecoder.prefersVideoProcessing(
+            mode: .videoToolboxSynchronized,
+            tileCount: 4,
+            isAvailable: true
+        ))
+        XCTAssertTrue(AppleHEVCDecoder.prefersVideoProcessing(
+            mode: .videoProcessing,
+            tileCount: 4,
+            isAvailable: true
+        ))
+    }
+
+    func testAllProductModesExceptLowLatencySynchronizeVideoToolboxTiles() {
+        XCTAssertTrue(AppleVideoDecoderMode.automatic.synchronizesVideoToolboxTiles)
+        XCTAssertTrue(AppleVideoDecoderMode.videoProcessing.synchronizesVideoToolboxTiles)
+        XCTAssertTrue(
+            AppleVideoDecoderMode.videoToolboxSynchronized.synchronizesVideoToolboxTiles
+        )
+        XCTAssertFalse(
+            AppleVideoDecoderMode.videoToolboxLowLatency.synchronizesVideoToolboxTiles
+        )
     }
 
     func testBuildsNativeSubframeIdentifierFromIndependentTileAndOrderFields() {

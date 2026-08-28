@@ -4,6 +4,8 @@ import QuartzCore
 import VideoToolbox
 
 protocol AppleHEVCDecodeSubmitting: AnyObject {
+    var backend: AppleHEVCDecoder.Backend { get }
+
     @discardableResult
     func decode(
         _ nalUnits: [Data],
@@ -34,21 +36,23 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         @escaping AppleHEVCDecoder.LongTermReferenceHandler
     ) throws -> any AppleHEVCDecodeSubmitting
 
-    typealias FrameHandler = @Sendable (AppleHEVCDecoder.DecodedFrame) -> Void
+    typealias OutputHandler = @Sendable ([AppleHEVCDecoder.DecodedFrame]) -> Void
     typealias LongTermReferenceHandler = @Sendable (UInt16) -> Void
     typealias RefreshHandler = @Sendable (UInt32) -> Void
     typealias ErrorHandler = @Sendable (Error) -> Void
 
     private final class CallbackBridge: @unchecked Sendable {
+        typealias Generation = UInt64
+
         private let lock = NSLock()
-        private var frameHandler: AppleHEVCDecoder.FrameHandler?
-        private var failureHandler: AppleHEVCDecoder.FailureHandler?
-        private var longTermReferenceHandler: AppleHEVCDecoder.LongTermReferenceHandler?
+        private var frameHandler: ((Generation, AppleHEVCDecoder.DecodedFrame) -> Void)?
+        private var failureHandler: ((Generation, AppleHEVCDecoder.DecodeFailure) -> Void)?
+        private var longTermReferenceHandler: ((Generation, UInt16) -> Void)?
 
         func install(
-            frameHandler: @escaping AppleHEVCDecoder.FrameHandler,
-            failureHandler: @escaping AppleHEVCDecoder.FailureHandler,
-            longTermReferenceHandler: @escaping AppleHEVCDecoder.LongTermReferenceHandler
+            frameHandler: @escaping (Generation, AppleHEVCDecoder.DecodedFrame) -> Void,
+            failureHandler: @escaping (Generation, AppleHEVCDecoder.DecodeFailure) -> Void,
+            longTermReferenceHandler: @escaping (Generation, UInt16) -> Void
         ) {
             lock.lock()
             self.frameHandler = frameHandler
@@ -57,19 +61,22 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
             lock.unlock()
         }
 
-        func emit(_ frame: AppleHEVCDecoder.DecodedFrame) {
+        func emit(_ frame: AppleHEVCDecoder.DecodedFrame, generation: Generation) {
             let handler = locked { frameHandler }
-            handler?(frame)
+            handler?(generation, frame)
         }
 
-        func emit(_ failure: AppleHEVCDecoder.DecodeFailure) {
+        func emit(_ failure: AppleHEVCDecoder.DecodeFailure, generation: Generation) {
             let handler = locked { failureHandler }
-            handler?(failure)
+            handler?(generation, failure)
         }
 
-        func emitLongTermReference(_ decodingOrderNumber: UInt16) {
+        func emitLongTermReference(
+            _ decodingOrderNumber: UInt16,
+            generation: Generation
+        ) {
             let handler = locked { longTermReferenceHandler }
-            handler?(decodingOrderNumber)
+            handler?(generation, decodingOrderNumber)
         }
 
         func clear() {
@@ -89,15 +96,19 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
 
     private let sourceToTile: [UInt32: Int]
     private let callbackQueue: DispatchQueue
-    private let frameHandler: FrameHandler
+    private let outputHandler: OutputHandler
     private let longTermReferenceHandler: LongTermReferenceHandler
     private let refreshHandler: RefreshHandler
     private let errorHandler: ErrorHandler
     private let callbackBridge: CallbackBridge
+    private var synchronizesVideoToolboxTiles: Bool
+    private var tileFrameSynchronizer: AppleVideoTileFrameSynchronizer?
     private var decoder: (any AppleHEVCDecodeSubmitting)?
     private var admission = AppleHEVCDecodingOrderQueue()
     private var playoutClock = AppleVideoPlayoutClock()
     private var lastRefreshRequestTimestamp: UInt32?
+    private var tilesAwaitingRefresh = Set<Int>()
+    private var decoderGeneration: UInt64 = 0
     private var isClosed = false
     private let freezeDiagnosticsEnabled = ProcessInfo.processInfo.environment[
         "ISHARESCREEN_FREEZE_DIAGNOSTICS"
@@ -108,7 +119,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         sourceToTile: [UInt32: Int],
         callbackQueue: DispatchQueue,
         decoderFactory: DecoderFactory,
-        frameHandler: @escaping FrameHandler,
+        outputHandler: @escaping OutputHandler,
+        synchronizesVideoToolboxTiles: Bool = false,
         longTermReferenceHandler: @escaping LongTermReferenceHandler = { _ in },
         refreshHandler: @escaping RefreshHandler,
         errorHandler: @escaping ErrorHandler
@@ -117,28 +129,35 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         precondition(sourceToTile.count == tileCount)
         self.sourceToTile = sourceToTile
         self.callbackQueue = callbackQueue
-        self.frameHandler = frameHandler
+        self.outputHandler = outputHandler
         self.longTermReferenceHandler = longTermReferenceHandler
         self.refreshHandler = refreshHandler
         self.errorHandler = errorHandler
         callbackBridge = CallbackBridge()
+        self.synchronizesVideoToolboxTiles = synchronizesVideoToolboxTiles
+        tileFrameSynchronizer = nil
         decoder = nil
 
         decoder = try makeDecoder(using: decoderFactory)
+        updateTileFrameSynchronizer()
         callbackBridge.install(
-            frameHandler: { [weak self, callbackQueue] frame in
+            frameHandler: { [weak self, callbackQueue] generation, frame in
                 callbackQueue.async { [weak self] in
-                    self?.handleDecodedFrame(frame)
+                    self?.handleDecodedFrame(frame, generation: generation)
                 }
             },
-            failureHandler: { [weak self, callbackQueue] failure in
+            failureHandler: { [weak self, callbackQueue] generation, failure in
                 callbackQueue.async { [weak self] in
-                    self?.handleDecodeFailure(failure)
+                    self?.handleDecodeFailure(failure, generation: generation)
                 }
             },
-            longTermReferenceHandler: { [weak self, callbackQueue] decodingOrderNumber in
+            longTermReferenceHandler: {
+                [weak self, callbackQueue] generation, decodingOrderNumber in
                 callbackQueue.async { [weak self] in
-                    self?.handleLongTermReference(decodingOrderNumber)
+                    self?.handleLongTermReference(
+                        decodingOrderNumber,
+                        generation: generation
+                    )
                 }
             }
         )
@@ -159,6 +178,13 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                 hostTime: CACurrentMediaTime()
             )
             do {
+                let shouldFlush = tileFrameSynchronizer?.recordSubmission(
+                    frameSequenceNumber:
+                        accessUnit.timing?.observedFrameSequenceNumber,
+                    tileIndex: tileIndex,
+                    subframeBoundary: accessUnit.subframeBoundary
+                ) == true
+                if shouldFlush { scheduleSynchronizedFlush(generation: decoderGeneration) }
                 _ = try decoder?.decode(
                     accessUnit.nalUnits,
                     tileIndex: tileIndex,
@@ -169,15 +195,27 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                     timing: accessUnit.timing
                 )
             } catch let AppleHEVCDecoderError.decodeFailed(status) {
+                let shouldFlush = tileFrameSynchronizer?.recordDecodeFailure(
+                    frameSequenceNumber:
+                        accessUnit.timing?.observedFrameSequenceNumber,
+                    tileIndex: tileIndex
+                ) == true
+                if shouldFlush { scheduleSynchronizedFlush(generation: decoderGeneration) }
+                var shouldLog = true
                 if status == kVTVideoDecoderReferenceMissingErr {
-                    requestRefreshIfNeeded(for: accessUnit.timestamp)
+                    shouldLog = beginRefreshRecoveryIfNeeded(
+                        forTile: tileIndex,
+                        timestamp: accessUnit.timestamp
+                    )
                 }
-                logFreezeDiagnostic(
-                    "synchronous status=\(status) rtp=\(accessUnit.timestamp); continuing submissions"
-                )
-                Self.logger.notice(
-                    "Synchronous video decode failure status=\(status, privacy: .public); continuing submissions"
-                )
+                if shouldLog {
+                    logFreezeDiagnostic(
+                        "synchronous status=\(status) rtp=\(accessUnit.timestamp); continuing submissions"
+                    )
+                    Self.logger.notice(
+                        "Synchronous video decode failure status=\(status, privacy: .public); continuing submissions"
+                    )
+                }
             } catch {
                 errorHandler(error)
                 break
@@ -192,19 +230,31 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         admission.reset()
     }
 
+    /// Changes only the public VideoToolbox presentation policy. The decoder
+    /// session and playout clock remain stable across a menu-driven mode change.
+    func setSynchronizesVideoToolboxTiles(_ enabled: Bool) {
+        guard !isClosed else { return }
+        synchronizesVideoToolboxTiles = enabled
+        updateTileFrameSynchronizer()
+    }
+
     /// Replaces only the decompression session for a new video format. RTP
     /// admission and playout anchoring remain continuous across the change.
     func replaceDecoder(using decoderFactory: DecoderFactory) throws {
         guard !isClosed else { throw AppleHEVCDecoderError.sessionClosed }
         decoder?.close()
         decoder = nil
+        tileFrameSynchronizer?.reset()
+        tilesAwaitingRefresh.removeAll(keepingCapacity: true)
         decoder = try makeDecoder(using: decoderFactory)
+        updateTileFrameSynchronizer()
     }
 
     func close() {
         guard !isClosed else { return }
         isClosed = true
         callbackBridge.clear()
+        tileFrameSynchronizer?.reset()
         decoder?.close()
         decoder = nil
     }
@@ -213,48 +263,124 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         close()
     }
 
-    private func handleDecodeFailure(_ failure: AppleHEVCDecoder.DecodeFailure) {
-        guard !isClosed else { return }
-        if failure.status == kVTVideoDecoderReferenceMissingErr {
-            requestRefreshIfNeeded(for: failure.rtpTimestamp)
-        }
+    private func handleDecodeFailure(
+        _ failure: AppleHEVCDecoder.DecodeFailure,
+        generation: UInt64
+    ) {
+        guard !isClosed, generation == decoderGeneration else { return }
+        let shouldFlush = tileFrameSynchronizer?.recordDecodeFailure(
+            frameSequenceNumber: failure.frameSequenceNumber,
+            tileIndex: failure.tileIndex
+        ) == true
+        if shouldFlush { scheduleSynchronizedFlush(generation: generation) }
         logFreezeDiagnostic(
-            "asynchronous status=\(failure.status) rtp=\(failure.rtpTimestamp); continuing submissions"
+            "asynchronous reason=\(failure.reason.rawValue) status=\(failure.status) rtp=\(failure.rtpTimestamp); continuing submissions"
         )
-        Self.logger.notice(
-            "Asynchronous video decode failure tile=\(failure.tileIndex, privacy: .public) status=\(failure.status, privacy: .public); continuing submissions"
-        )
+        guard failure.reason == .decoderStatus else { return }
+        var shouldLog = true
+        if failure.status == kVTVideoDecoderReferenceMissingErr {
+            shouldLog = beginRefreshRecoveryIfNeeded(
+                forTile: failure.tileIndex,
+                timestamp: failure.rtpTimestamp
+            )
+        }
+        if shouldLog {
+            Self.logger.notice(
+                "Asynchronous video decode failure tile=\(failure.tileIndex, privacy: .public) reason=\(failure.reason.rawValue, privacy: .public) status=\(failure.status, privacy: .public); continuing submissions"
+            )
+        }
     }
 
     private func makeDecoder(using decoderFactory: DecoderFactory) throws
         -> any AppleHEVCDecodeSubmitting {
-        try decoderFactory(
+        decoderGeneration &+= 1
+        let generation = decoderGeneration
+        return try decoderFactory(
             { [callbackBridge] failure in
-                callbackBridge.emit(failure)
+                callbackBridge.emit(failure, generation: generation)
             },
             { [callbackBridge] frame in
-                callbackBridge.emit(frame)
+                callbackBridge.emit(frame, generation: generation)
             },
             { [callbackBridge] decodingOrderNumber in
-                callbackBridge.emitLongTermReference(decodingOrderNumber)
+                callbackBridge.emitLongTermReference(
+                    decodingOrderNumber,
+                    generation: generation
+                )
             }
         )
     }
 
-    private func handleDecodedFrame(_ frame: AppleHEVCDecoder.DecodedFrame) {
-        guard !isClosed else { return }
-        frameHandler(frame)
+    private func updateTileFrameSynchronizer() {
+        let shouldSynchronize = synchronizesVideoToolboxTiles
+            && decoder?.backend == .videoToolbox
+        guard shouldSynchronize != (tileFrameSynchronizer != nil) else { return }
+        tileFrameSynchronizer?.reset()
+        tileFrameSynchronizer = shouldSynchronize
+            ? AppleVideoTileFrameSynchronizer()
+            : nil
     }
 
-    private func handleLongTermReference(_ decodingOrderNumber: UInt16) {
-        guard !isClosed else { return }
+    private func handleDecodedFrame(
+        _ frame: AppleHEVCDecoder.DecodedFrame,
+        generation: UInt64
+    ) {
+        guard !isClosed, generation == decoderGeneration else { return }
+        switch frame.region {
+        case let .tile(tileIndex):
+            tilesAwaitingRefresh.remove(tileIndex)
+        case .fullCanvas:
+            tilesAwaitingRefresh.removeAll(keepingCapacity: true)
+        }
+        guard let tileFrameSynchronizer else {
+            outputHandler([frame])
+            return
+        }
+        guard case .tile = frame.region,
+              frame.accessUnitTiming?.observedFrameSequenceNumber != nil else {
+            outputHandler([frame])
+            return
+        }
+        if tileFrameSynchronizer.recordDecodedFrame(frame) {
+            scheduleSynchronizedFlush(generation: generation)
+        }
+    }
+
+    private func scheduleSynchronizedFlush(generation: UInt64) {
+        callbackQueue.async { [weak self] in
+            self?.flushSynchronizedFrames(generation: generation)
+        }
+    }
+
+    private func flushSynchronizedFrames(generation: UInt64) {
+        guard !isClosed, generation == decoderGeneration,
+              let tileFrameSynchronizer else { return }
+        for batch in tileFrameSynchronizer.drainReadyBatches() {
+            outputHandler(batch)
+        }
+    }
+
+    private func handleLongTermReference(
+        _ decodingOrderNumber: UInt16,
+        generation: UInt64
+    ) {
+        guard !isClosed, generation == decoderGeneration else { return }
         longTermReferenceHandler(decodingOrderNumber)
     }
 
-    private func requestRefreshIfNeeded(for timestamp: UInt32) {
-        guard timestamp != lastRefreshRequestTimestamp else { return }
-        lastRefreshRequestTimestamp = timestamp
-        refreshHandler(timestamp)
+    @discardableResult
+    private func beginRefreshRecoveryIfNeeded(
+        forTile tileIndex: Int,
+        timestamp: UInt32
+    ) -> Bool {
+        let wasRecovering = !tilesAwaitingRefresh.isEmpty
+        tilesAwaitingRefresh.insert(tileIndex)
+        guard !wasRecovering else { return false }
+        if timestamp != lastRefreshRequestTimestamp {
+            lastRefreshRequestTimestamp = timestamp
+            refreshHandler(timestamp)
+        }
+        return true
     }
 
     private func logFreezeDiagnostic(_ message: String) {

@@ -54,6 +54,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private var rateControlTimer: DispatchSourceTimer?
     private var decodePipeline: AppleHEVCDecodePipeline?
     private var decoderParameterSets: AppleHEVCParameterSets?
+    private var decoderMode: AppleVideoDecoderMode = .automatic
     private var sourceToTile = [UInt32: Int]()
     private var restartSourceToTile = [UInt32: Int]()
     private var abandonedSources = Set<UInt32>()
@@ -110,6 +111,31 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
 
     var decodedFrameCount: Int {
         countLock.withVideoStreamLock { frameCount }
+    }
+
+    func setDecoderMode(_ mode: AppleVideoDecoderMode) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let isOpen = self.lifecycleLock.withVideoStreamLock { !self.isClosed }
+            guard isOpen, mode != self.decoderMode else { return }
+            self.decoderMode = mode
+            guard let decodePipeline = self.decodePipeline,
+                  let parameterSets = self.decoderParameterSets else { return }
+            do {
+                decodePipeline.setSynchronizesVideoToolboxTiles(
+                    mode.synchronizesVideoToolboxTiles
+                )
+                try decodePipeline.replaceDecoder(using: self.makeDecoderFactory(
+                    parameterSets: parameterSets,
+                    tileCount: self.mediaCanvas.tileCount,
+                    decoderMode: mode,
+                    performanceMonitor: self.performance
+                ))
+                self.scheduleKeyFramesForAllTiles()
+            } catch {
+                self.fail(error)
+            }
+        }
     }
 
     /// Updates presentation geometry without disturbing the active media
@@ -435,27 +461,14 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                 decoderFactory: makeDecoderFactory(
                     parameterSets: parameterSets,
                     tileCount: tileCount,
+                    decoderMode: decoderMode,
                     performanceMonitor: performanceMonitor
                 ),
-                frameHandler: { [weak self] decodedFrame in
-                    self?.performance.recordDecode(duration: decodedFrame.decodeDuration)
-                    if let timing = decodedFrame.accessUnitTiming {
-                        self?.performance.recordAccessUnitToDecoderOutput(
-                            duration: decodedFrame.decoderOutputAt - timing.assemblyCompletedAt
-                        )
-                    }
-                    self?.publish(
-                        decodedFrame.pixelBuffer,
-                        region: decodedFrame.region,
-                        decodingOrderNumber: decodedFrame.decodingOrderNumber,
-                        rtpTimestamp: decodedFrame.rtpTimestamp,
-                        presentationTime: decodedFrame.presentationTime,
-                        accessUnitTiming: decodedFrame.accessUnitTiming,
-                        decodeEnteredAt: decodedFrame.decodeEnteredAt,
-                        decoderSubmittedAt: decodedFrame.decoderSubmittedAt,
-                        decoderOutputAt: decodedFrame.decoderOutputAt
-                    )
+                outputHandler: { [weak self] decodedFrames in
+                    self?.publish(decodedFrames)
                 },
+                synchronizesVideoToolboxTiles:
+                    decoderMode.synchronizesVideoToolboxTiles,
                 longTermReferenceHandler: { [weak self] decodingOrderNumber in
                     do {
                         try self?.feedback.acknowledgeLongTermReference(
@@ -540,6 +553,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             try decodePipeline.replaceDecoder(using: makeDecoderFactory(
                 parameterSets: parameterSets,
                 tileCount: mediaCanvas.tileCount,
+                decoderMode: decoderMode,
                 performanceMonitor: performance
             ))
             self.decoderParameterSets = parameterSets
@@ -551,12 +565,14 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private func makeDecoderFactory(
         parameterSets: AppleHEVCParameterSets,
         tileCount: Int,
+        decoderMode: AppleVideoDecoderMode,
         performanceMonitor: AppleVideoPerformanceMonitor
     ) -> AppleHEVCDecodePipeline.DecoderFactory {
         { failureHandler, frameHandler, longTermReferenceHandler in
             try AppleHEVCDecoder(
                 parameterSets: parameterSets,
                 tileCount: tileCount,
+                decoderMode: decoderMode,
                 backendHandler: { backend in
                     performanceMonitor.setDecoderBackend(backend)
                 },
@@ -687,49 +703,35 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private func publish(
-        _ frame: CVPixelBuffer,
-        region: AppleHEVCDecoder.FrameRegion,
-        decodingOrderNumber: UInt16?,
-        rtpTimestamp: UInt32,
-        presentationTime: TimeInterval,
-        accessUnitTiming: AppleHEVCAccessUnit.Timing?,
-        decodeEnteredAt: TimeInterval,
-        decoderSubmittedAt: TimeInterval,
-        decoderOutputAt: TimeInterval
-    ) {
+    private func publish(_ decodedFrames: [AppleHEVCDecoder.DecodedFrame]) {
+        guard !decodedFrames.isEmpty else { return }
         let playbackHandledAt = CACurrentMediaTime()
-        let frameIndex: Int
-        switch region {
-        case let .tile(tileIndex):
-            frameIndex = tileIndex
-        case .fullCanvas:
-            frameIndex = AppleVideoFrameStore.fullCanvasIndex
+        for decodedFrame in decodedFrames {
+            performance.recordDecode(duration: decodedFrame.decodeDuration)
+            if let timing = decodedFrame.accessUnitTiming {
+                performance.recordAccessUnitToDecoderOutput(
+                    duration: decodedFrame.decoderOutputAt - timing.assemblyCompletedAt
+                )
+            }
+            performance.recordDecodedFrame(rtpTimestamp: decodedFrame.rtpTimestamp)
         }
         frames.publish(
-            frame,
-            at: frameIndex,
-            decodingOrderNumber: decodingOrderNumber,
-            rtpTimestamp: rtpTimestamp,
-            accessUnitTiming: accessUnitTiming,
-            decodeEnteredAt: decodeEnteredAt,
-            decoderSubmittedAt: decoderSubmittedAt,
-            decoderOutputAt: decoderOutputAt,
-            playbackHandledAt: playbackHandledAt,
-            decodedAt: playbackHandledAt,
-            presentationTime: presentationTime
+            decodedFrames,
+            playbackHandledAt: playbackHandledAt
         )
-        performance.recordDecodedFrame(rtpTimestamp: rtpTimestamp)
         countLock.withVideoStreamLock {
             self.lastDecodedFrameTime = playbackHandledAt
         }
         let becameReady = countLock.withVideoStreamLock {
-            frameCount += 1
+            frameCount += decodedFrames.count
             let wasReady = decodedTiles.count == mediaCanvas.tileCount
-            if region == .fullCanvas {
-                decodedTiles = Set(0..<mediaCanvas.tileCount)
-            } else {
-                decodedTiles.insert(frameIndex)
+            for decodedFrame in decodedFrames {
+                switch decodedFrame.region {
+                case let .tile(tileIndex):
+                    decodedTiles.insert(tileIndex)
+                case .fullCanvas:
+                    decodedTiles = Set(0..<mediaCanvas.tileCount)
+                }
             }
             return !wasReady && decodedTiles.count == mediaCanvas.tileCount
         }

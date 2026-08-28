@@ -12,9 +12,24 @@ struct AppleHEVCParameterSets: Equatable, Sendable {
 struct AppleHEVCAccessUnit: Equatable, Sendable {
     struct Timing: Equatable, Sendable {
         let traceSequence: UInt64
+        let observedFrameSequenceNumber: UInt16?
         let firstDatagramObservedAt: TimeInterval
         let completingDatagramObservedAt: TimeInterval
         let assemblyCompletedAt: TimeInterval
+
+        init(
+            traceSequence: UInt64,
+            observedFrameSequenceNumber: UInt16? = nil,
+            firstDatagramObservedAt: TimeInterval,
+            completingDatagramObservedAt: TimeInterval,
+            assemblyCompletedAt: TimeInterval
+        ) {
+            self.traceSequence = traceSequence
+            self.observedFrameSequenceNumber = observedFrameSequenceNumber
+            self.firstDatagramObservedAt = firstDatagramObservedAt
+            self.completingDatagramObservedAt = completingDatagramObservedAt
+            self.assemblyCompletedAt = assemblyCompletedAt
+        }
     }
 
     let synchronizationSource: UInt32
@@ -22,6 +37,7 @@ struct AppleHEVCAccessUnit: Equatable, Sendable {
     let decodingOrderNumber: UInt16?
     let nalUnits: [Data]
     let isLongTermReferenceFrame: Bool
+    let subframeBoundary: AppleHEVCSubframeBoundaryParser.Boundary
     let timing: Timing?
 
     init(
@@ -30,6 +46,7 @@ struct AppleHEVCAccessUnit: Equatable, Sendable {
         decodingOrderNumber: UInt16?,
         nalUnits: [Data],
         isLongTermReferenceFrame: Bool = false,
+        subframeBoundary: AppleHEVCSubframeBoundaryParser.Boundary = .unknown,
         timing: Timing? = nil
     ) {
         self.synchronizationSource = synchronizationSource
@@ -37,6 +54,7 @@ struct AppleHEVCAccessUnit: Equatable, Sendable {
         self.decodingOrderNumber = decodingOrderNumber
         self.nalUnits = nalUnits
         self.isLongTermReferenceFrame = isLongTermReferenceFrame
+        self.subframeBoundary = subframeBoundary
         self.timing = timing
     }
 
@@ -97,6 +115,7 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
 
     private let lock = NSLock()
     private let decryptor: AppleSRTPDecryptor
+    private let subframeBoundaryParser: AppleHEVCSubframeBoundaryParser?
     private let clock: @Sendable () -> TimeInterval
     private var groups = [GroupKey: PendingAccessUnit]()
     private var sourcePacketCounts = [UInt32: Int]()
@@ -113,6 +132,9 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
         clock: @escaping @Sendable () -> TimeInterval = { CACurrentMediaTime() }
     ) throws {
         decryptor = try AppleSRTPDecryptor(keyBlob: keyBlob)
+        subframeBoundaryParser = AppleHEVCSubframeBoundaryParser(
+            negotiationDetails: AppleMediaOffer.videoDecoderNegotiationDetails
+        )
         self.clock = clock
     }
 
@@ -239,8 +261,10 @@ final class AppleHEVCStreamProcessor: @unchecked Sendable {
             decodingOrderNumber: group.decodingOrderNumber,
             nalUnits: units,
             isLongTermReferenceFrame: group.isLongTermReferenceFrame,
+            subframeBoundary: subframeBoundaryParser?.classify(nalUnits: units) ?? .unknown,
             timing: AppleHEVCAccessUnit.Timing(
                 traceSequence: nextAccessUnitTraceSequence,
+                observedFrameSequenceNumber: group.framePacketInfo?.frameSequenceNumber,
                 firstDatagramObservedAt: group.firstSeenAt ?? arrivalTime,
                 completingDatagramObservedAt: arrivalTime,
                 assemblyCompletedAt: clock()

@@ -74,15 +74,9 @@ final class AppleVideoFrameStore: @unchecked Sendable {
         presentationTime: TimeInterval? = nil
     ) {
         let shouldSchedule = lock.withFrameStoreLock {
-            if tileIndex == Self.fullCanvasIndex {
-                frames.removeAll(keepingCapacity: true)
-                pendingFrames.removeAll(keepingCapacity: true)
-            } else if frames.removeValue(forKey: Self.fullCanvasIndex) != nil {
-                pendingFrames.removeValue(forKey: Self.fullCanvasIndex)
-            }
-            nextSequence &+= 1
-            let frame = Frame(
+            store(
                 pixelBuffer: pixelBuffer,
+                at: tileIndex,
                 decodingOrderNumber: decodingOrderNumber,
                 rtpTimestamp: rtpTimestamp,
                 accessUnitTiming: accessUnitTiming,
@@ -91,14 +85,83 @@ final class AppleVideoFrameStore: @unchecked Sendable {
                 decoderOutputAt: decoderOutputAt ?? decodedAt,
                 playbackHandledAt: playbackHandledAt ?? decodedAt,
                 decodedAt: decodedAt,
-                presentationTime: presentationTime ?? decodedAt,
-                sequence: nextSequence
+                presentationTime: presentationTime ?? decodedAt
             )
-            frames[tileIndex] = frame
-            pendingFrames[tileIndex] = frame
             return scheduleDeliveryIfNeeded()
         }
         if shouldSchedule { scheduleDelivery() }
+    }
+
+    /// Publishes every tile in one logical sender frame as one observable
+    /// snapshot. Observers can never see an intermediate subset of this batch.
+    func publish(
+        _ decodedFrames: [AppleHEVCDecoder.DecodedFrame],
+        playbackHandledAt: TimeInterval
+    ) {
+        guard !decodedFrames.isEmpty else { return }
+        let shouldSchedule = lock.withFrameStoreLock {
+            for decodedFrame in decodedFrames {
+                let tileIndex: Int
+                switch decodedFrame.region {
+                case let .tile(index):
+                    tileIndex = index
+                case .fullCanvas:
+                    tileIndex = Self.fullCanvasIndex
+                }
+                store(
+                    pixelBuffer: decodedFrame.pixelBuffer,
+                    at: tileIndex,
+                    decodingOrderNumber: decodedFrame.decodingOrderNumber,
+                    rtpTimestamp: decodedFrame.rtpTimestamp,
+                    accessUnitTiming: decodedFrame.accessUnitTiming,
+                    decodeEnteredAt: decodedFrame.decodeEnteredAt,
+                    decoderSubmittedAt: decodedFrame.decoderSubmittedAt,
+                    decoderOutputAt: decodedFrame.decoderOutputAt,
+                    playbackHandledAt: playbackHandledAt,
+                    decodedAt: playbackHandledAt,
+                    presentationTime: decodedFrame.presentationTime
+                )
+            }
+            return scheduleDeliveryIfNeeded()
+        }
+        if shouldSchedule { scheduleDelivery() }
+    }
+
+    private func store(
+        pixelBuffer: CVPixelBuffer,
+        at tileIndex: Int,
+        decodingOrderNumber: UInt16?,
+        rtpTimestamp: UInt32?,
+        accessUnitTiming: AppleHEVCAccessUnit.Timing?,
+        decodeEnteredAt: TimeInterval,
+        decoderSubmittedAt: TimeInterval,
+        decoderOutputAt: TimeInterval,
+        playbackHandledAt: TimeInterval,
+        decodedAt: TimeInterval,
+        presentationTime: TimeInterval
+    ) {
+        if tileIndex == Self.fullCanvasIndex {
+            frames.removeAll(keepingCapacity: true)
+            pendingFrames.removeAll(keepingCapacity: true)
+        } else if frames.removeValue(forKey: Self.fullCanvasIndex) != nil {
+            pendingFrames.removeValue(forKey: Self.fullCanvasIndex)
+        }
+        nextSequence &+= 1
+        let frame = Frame(
+            pixelBuffer: pixelBuffer,
+            decodingOrderNumber: decodingOrderNumber,
+            rtpTimestamp: rtpTimestamp,
+            accessUnitTiming: accessUnitTiming,
+            decodeEnteredAt: decodeEnteredAt,
+            decoderSubmittedAt: decoderSubmittedAt,
+            decoderOutputAt: decoderOutputAt,
+            playbackHandledAt: playbackHandledAt,
+            decodedAt: decodedAt,
+            presentationTime: presentationTime,
+            sequence: nextSequence
+        )
+        frames[tileIndex] = frame
+        pendingFrames[tileIndex] = frame
     }
 
     private func scheduleDeliveryIfNeeded() -> Bool {
