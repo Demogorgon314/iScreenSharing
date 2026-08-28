@@ -158,11 +158,6 @@ struct SessionView: View {
             .toggleStyle(.button)
             .help("Dynamic Resolution")
             .disabled(!commandState.canUseDynamicResolution)
-            Toggle(isOn: videoSynchronizationBinding) {
-                Label("Synchronize Video", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .toggleStyle(.button)
-            .help("Synchronize Video")
             Toggle(isOn: videoPerformanceBinding) {
                 Label("Video Performance", systemImage: "chart.xyaxis.line")
             }
@@ -191,13 +186,6 @@ struct SessionView: View {
             }
             .foregroundStyle(.white)
         }
-    }
-
-    private var videoSynchronizationBinding: Binding<Bool> {
-        Binding(
-            get: { commandState.synchronizesVideoPresentation },
-            set: { commandState.setSynchronizesVideoPresentation($0) }
-        )
     }
 
     private var videoPerformanceBinding: Binding<Bool> {

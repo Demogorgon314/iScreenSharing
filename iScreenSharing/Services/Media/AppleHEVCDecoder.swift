@@ -30,22 +30,36 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     }
 
     struct DecodeFailure: Equatable, Sendable {
+        enum Reason: String, Equatable, Sendable {
+            case decoderStatus
+            case frameDropped
+            case missingImageBuffer
+        }
+
         let tileIndex: Int
         let rtpTimestamp: UInt32
         let frameSequenceNumber: UInt16?
         let status: OSStatus
+        let reason: Reason
 
         init(
             tileIndex: Int,
             rtpTimestamp: UInt32,
             frameSequenceNumber: UInt16? = nil,
-            status: OSStatus
+            status: OSStatus,
+            reason: Reason = .decoderStatus
         ) {
             self.tileIndex = tileIndex
             self.rtpTimestamp = rtpTimestamp
             self.frameSequenceNumber = frameSequenceNumber
             self.status = status
+            self.reason = reason
         }
+    }
+
+    enum VideoToolboxOutputDisposition: Equatable {
+        case frame
+        case failure(DecodeFailure.Reason)
     }
 
     typealias FrameHandler = @Sendable (DecodedFrame) -> Void
@@ -113,6 +127,10 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         let session = try makeSession(decoderMode: decoderMode)
         self.session = session
         backendHandler(session.backend)
+    }
+
+    var backend: Backend {
+        lock.withDecoderLock { session?.backend ?? .videoToolbox }
     }
 
     @discardableResult
@@ -187,23 +205,27 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                     sampleBuffer: sampleBuffer,
                     flags: Self.decodeFlags,
                     infoFlagsOut: &decodeInfo
-                ) { [frameHandler, failureHandler, longTermReferenceHandler] status, _, imageBuffer, _, _ in
-                    if status == noErr,
-                       isLongTermReferenceFrame,
+                ) { [frameHandler, failureHandler, longTermReferenceHandler] status, infoFlags, imageBuffer, _, _ in
+                    let disposition = Self.videoToolboxOutputDisposition(
+                        status: status,
+                        infoFlags: infoFlags,
+                        hasImageBuffer: imageBuffer != nil
+                    )
+                    guard disposition == .frame, let imageBuffer else {
+                        guard case let .failure(reason) = disposition else { return }
+                        failureHandler(DecodeFailure(
+                            tileIndex: tileIndex,
+                            rtpTimestamp: rtpTimestamp,
+                            frameSequenceNumber: timing?.observedFrameSequenceNumber,
+                            status: status,
+                            reason: reason
+                        ))
+                        return
+                    }
+                    if isLongTermReferenceFrame,
                        let decodingOrderNumber,
                        decodingOrderNumber != 0 {
                         longTermReferenceHandler(decodingOrderNumber)
-                    }
-                    guard status == noErr, let imageBuffer else {
-                        if status != noErr {
-                            failureHandler(DecodeFailure(
-                                tileIndex: tileIndex,
-                                rtpTimestamp: rtpTimestamp,
-                                frameSequenceNumber: timing?.observedFrameSequenceNumber,
-                                status: status
-                            ))
-                        }
-                        return
                     }
                     let decoderOutputAt = CACurrentMediaTime()
                     frameHandler(DecodedFrame(
@@ -276,6 +298,17 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         let order = nextOrder
         nextOrder &+= 1
         return order
+    }
+
+    static func videoToolboxOutputDisposition(
+        status: OSStatus,
+        infoFlags: VTDecodeInfoFlags,
+        hasImageBuffer: Bool
+    ) -> VideoToolboxOutputDisposition {
+        if status != noErr { return .failure(.decoderStatus) }
+        if infoFlags.contains(.frameDropped) { return .failure(.frameDropped) }
+        if !hasImageBuffer { return .failure(.missingImageBuffer) }
+        return .frame
     }
 
     static func validateTileIndex(_ tileIndex: Int, tileCount: Int) throws {

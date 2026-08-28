@@ -122,7 +122,9 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             guard let decodePipeline = self.decodePipeline,
                   let parameterSets = self.decoderParameterSets else { return }
             do {
-                decodePipeline.setSynchronizesTileFrames(mode.synchronizesTileFrames)
+                decodePipeline.setSynchronizesVideoToolboxTiles(
+                    mode.synchronizesVideoToolboxTiles
+                )
                 try decodePipeline.replaceDecoder(using: self.makeDecoderFactory(
                     parameterSets: parameterSets,
                     tileCount: self.mediaCanvas.tileCount,
@@ -462,13 +464,11 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
                     decoderMode: decoderMode,
                     performanceMonitor: performanceMonitor
                 ),
-                frameHandler: { [weak self] decodedFrame in
-                    self?.publish([decodedFrame])
-                },
-                frameBatchHandler: { [weak self] decodedFrames in
+                outputHandler: { [weak self] decodedFrames in
                     self?.publish(decodedFrames)
                 },
-                synchronizesTileFrames: decoderMode.synchronizesTileFrames,
+                synchronizesVideoToolboxTiles:
+                    decoderMode.synchronizesVideoToolboxTiles,
                 longTermReferenceHandler: { [weak self] decodingOrderNumber in
                     do {
                         try self?.feedback.acknowledgeLongTermReference(

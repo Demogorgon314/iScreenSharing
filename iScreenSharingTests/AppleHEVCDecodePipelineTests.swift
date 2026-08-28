@@ -58,7 +58,7 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
                 decoder.longTermReferenceHandler = longTermReference
                 return decoder
             },
-            frameHandler: { _ in XCTFail("LTR completion must not publish a frame") },
+            outputHandler: { _ in XCTFail("LTR completion must not publish a frame") },
             longTermReferenceHandler: { acknowledgements.append($0) },
             refreshHandler: { _ in },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
@@ -215,7 +215,7 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
             sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
             callbackQueue: callbackQueue,
             decoderFactory: makeFactory(decoder: firstDecoder, callbacks: callbacks),
-            frameHandler: { _ in },
+            outputHandler: { _ in },
             refreshHandler: { _ in },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
@@ -248,7 +248,7 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
                 decoder.longTermReferenceHandler = longTermReference
                 return decoder
             },
-            frameHandler: { frames.append($0) },
+            outputHandler: { frames.append(contentsOf: $0) },
             refreshHandler: { _ in },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
@@ -259,10 +259,9 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         pipeline.close()
     }
 
-    func testSynchronizedVideoToolboxPublishesSparseSenderFrameAsOneBatch() throws {
+    func testVideoProcessingPreferenceSynchronizesActualVideoToolboxFallback() throws {
         let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.synchronized")
         let decoder = FakeDecoder()
-        var individualFrames = [AppleHEVCDecoder.DecodedFrame]()
         var batches = [[AppleHEVCDecoder.DecodedFrame]]()
         let pipeline = try AppleHEVCDecodePipeline(
             tileCount: sources.count,
@@ -274,9 +273,9 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
                 decoder.longTermReferenceHandler = longTermReference
                 return decoder
             },
-            frameHandler: { individualFrames.append($0) },
-            frameBatchHandler: { batches.append($0) },
-            synchronizesTileFrames: true,
+            outputHandler: { batches.append($0) },
+            synchronizesVideoToolboxTiles:
+                AppleVideoDecoderMode.videoProcessing.synchronizesVideoToolboxTiles,
             refreshHandler: { _ in },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
@@ -301,9 +300,89 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         callbackQueue.sync {}
         callbackQueue.sync {}
 
-        XCTAssertTrue(individualFrames.isEmpty)
         XCTAssertEqual(batches.count, 1)
         XCTAssertEqual(batches[0].map(\.region), [.tile(0), .tile(3)])
+        pipeline.close()
+    }
+
+    func testVideoProcessingPreferenceBypassesSynchronizationForActualVCPBackend() throws {
+        let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.vcp")
+        let decoder = FakeDecoder()
+        decoder.backend = .videoProcessing
+        var batches = [[AppleHEVCDecoder.DecodedFrame]]()
+        let pipeline = try AppleHEVCDecodePipeline(
+            tileCount: sources.count,
+            sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
+            callbackQueue: callbackQueue,
+            decoderFactory: { failure, frame, longTermReference in
+                decoder.failureHandler = failure
+                decoder.frameHandler = frame
+                decoder.longTermReferenceHandler = longTermReference
+                return decoder
+            },
+            outputHandler: { batches.append($0) },
+            synchronizesVideoToolboxTiles: true,
+            refreshHandler: { _ in },
+            errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
+        )
+
+        decoder.emitFrame(timestamp: 90_000, region: .fullCanvas)
+        callbackQueue.sync {}
+
+        XCTAssertEqual(batches.map { $0.map(\.region) }, [[.fullCanvas]])
+        pipeline.close()
+    }
+
+    func testDroppedVideoToolboxTileDoesNotBlockLaterSynchronizedFrames() throws {
+        let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.dropped")
+        let decoder = FakeDecoder()
+        var batches = [[AppleHEVCDecoder.DecodedFrame]]()
+        let pipeline = try AppleHEVCDecodePipeline(
+            tileCount: sources.count,
+            sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
+            callbackQueue: callbackQueue,
+            decoderFactory: { failure, frame, longTermReference in
+                decoder.failureHandler = failure
+                decoder.frameHandler = frame
+                decoder.longTermReferenceHandler = longTermReference
+                return decoder
+            },
+            outputHandler: { batches.append($0) },
+            synchronizesVideoToolboxTiles: true,
+            refreshHandler: { _ in },
+            errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
+        )
+
+        pipeline.submit([
+            accessUnit(
+                source: 100,
+                timestamp: 90_000,
+                order: 10,
+                frameSequenceNumber: 8,
+                subframeBoundary: .last
+            ),
+        ])
+        decoder.emitFailure(
+            timestamp: 90_000,
+            tileIndex: 0,
+            frameSequenceNumber: 8,
+            status: noErr,
+            reason: .frameDropped
+        )
+        pipeline.submit([
+            accessUnit(
+                source: 200,
+                timestamp: 91_500,
+                order: 11,
+                frameSequenceNumber: 9,
+                subframeBoundary: .last
+            ),
+        ])
+        decoder.emitFrame(timestamp: 91_500, region: .tile(1), frameSequenceNumber: 9)
+        callbackQueue.sync {}
+        callbackQueue.sync {}
+
+        XCTAssertEqual(batches.map { $0.map(\.region) }, [[.tile(1)]])
         pipeline.close()
     }
 
@@ -321,9 +400,8 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
                 decoder.longTermReferenceHandler = longTermReference
                 return decoder
             },
-            frameHandler: { _ in XCTFail("Expected an atomic batch") },
-            frameBatchHandler: { batches.append($0) },
-            synchronizesTileFrames: true,
+            outputHandler: { batches.append($0) },
+            synchronizesVideoToolboxTiles: true,
             refreshHandler: { _ in },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
@@ -364,7 +442,6 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
     func testCanEnableSynchronizedTilePresentationWithoutReplacingDecoder() throws {
         let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.mode-change")
         let decoder = FakeDecoder()
-        var individualFrames = [AppleHEVCDecoder.DecodedFrame]()
         var batches = [[AppleHEVCDecoder.DecodedFrame]]()
         let pipeline = try AppleHEVCDecodePipeline(
             tileCount: sources.count,
@@ -376,13 +453,12 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
                 decoder.longTermReferenceHandler = longTermReference
                 return decoder
             },
-            frameHandler: { individualFrames.append($0) },
-            frameBatchHandler: { batches.append($0) },
+            outputHandler: { batches.append($0) },
             refreshHandler: { _ in },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
 
-        pipeline.setSynchronizesTileFrames(true)
+        pipeline.setSynchronizesVideoToolboxTiles(true)
         pipeline.submit([
             accessUnit(source: 300, timestamp: 90_000, order: 10, frameSequenceNumber: 8),
         ])
@@ -393,7 +469,6 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         callbackQueue.sync {}
         callbackQueue.sync {}
 
-        XCTAssertTrue(individualFrames.isEmpty)
         XCTAssertEqual(batches.map { $0.map(\.region) }, [[.tile(2)]])
         XCTAssertFalse(decoder.isClosed)
         pipeline.close()
@@ -417,7 +492,7 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
             sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
             callbackQueue: callbackQueue,
             decoderFactory: directFactory(firstDecoder),
-            frameHandler: { frames.append($0) },
+            outputHandler: { frames.append(contentsOf: $0) },
             refreshHandler: { _ in },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
@@ -445,7 +520,7 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
                 decoder.longTermReferenceHandler = longTermReference
                 return decoder
             },
-            frameHandler: { _ in },
+            outputHandler: { _ in },
             refreshHandler: { callbacks.recordRefresh(timestamp: $0) },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
@@ -588,6 +663,7 @@ private extension AppleHEVCDecodePipelineTests {
         var failureHandler: AppleHEVCDecoder.FailureHandler?
         var frameHandler: AppleHEVCDecoder.FrameHandler?
         var longTermReferenceHandler: AppleHEVCDecoder.LongTermReferenceHandler?
+        var backend: AppleHEVCDecoder.Backend = .videoToolbox
 
         func decode(
             _ nalUnits: [Data],
@@ -614,11 +690,19 @@ private extension AppleHEVCDecodePipelineTests {
             isClosed = true
         }
 
-        func emitFailure(timestamp: UInt32, status: OSStatus = -12909) {
+        func emitFailure(
+            timestamp: UInt32,
+            tileIndex: Int = 0,
+            frameSequenceNumber: UInt16? = nil,
+            status: OSStatus = -12909,
+            reason: AppleHEVCDecoder.DecodeFailure.Reason = .decoderStatus
+        ) {
             failureHandler?(AppleHEVCDecoder.DecodeFailure(
-                tileIndex: 0,
+                tileIndex: tileIndex,
                 rtpTimestamp: timestamp,
-                status: status
+                frameSequenceNumber: frameSequenceNumber,
+                status: status,
+                reason: reason
             ))
         }
 

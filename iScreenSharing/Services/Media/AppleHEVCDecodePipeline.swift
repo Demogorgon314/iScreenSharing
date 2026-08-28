@@ -4,6 +4,8 @@ import QuartzCore
 import VideoToolbox
 
 protocol AppleHEVCDecodeSubmitting: AnyObject {
+    var backend: AppleHEVCDecoder.Backend { get }
+
     @discardableResult
     func decode(
         _ nalUnits: [Data],
@@ -34,8 +36,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         @escaping AppleHEVCDecoder.LongTermReferenceHandler
     ) throws -> any AppleHEVCDecodeSubmitting
 
-    typealias FrameHandler = @Sendable (AppleHEVCDecoder.DecodedFrame) -> Void
-    typealias FrameBatchHandler = @Sendable ([AppleHEVCDecoder.DecodedFrame]) -> Void
+    typealias OutputHandler = @Sendable ([AppleHEVCDecoder.DecodedFrame]) -> Void
     typealias LongTermReferenceHandler = @Sendable (UInt16) -> Void
     typealias RefreshHandler = @Sendable (UInt32) -> Void
     typealias ErrorHandler = @Sendable (Error) -> Void
@@ -95,12 +96,12 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
 
     private let sourceToTile: [UInt32: Int]
     private let callbackQueue: DispatchQueue
-    private let frameHandler: FrameHandler
-    private let frameBatchHandler: FrameBatchHandler?
+    private let outputHandler: OutputHandler
     private let longTermReferenceHandler: LongTermReferenceHandler
     private let refreshHandler: RefreshHandler
     private let errorHandler: ErrorHandler
     private let callbackBridge: CallbackBridge
+    private var synchronizesVideoToolboxTiles: Bool
     private var tileFrameSynchronizer: AppleVideoTileFrameSynchronizer?
     private var decoder: (any AppleHEVCDecodeSubmitting)?
     private var admission = AppleHEVCDecodingOrderQueue()
@@ -118,9 +119,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         sourceToTile: [UInt32: Int],
         callbackQueue: DispatchQueue,
         decoderFactory: DecoderFactory,
-        frameHandler: @escaping FrameHandler,
-        frameBatchHandler: FrameBatchHandler? = nil,
-        synchronizesTileFrames: Bool = false,
+        outputHandler: @escaping OutputHandler,
+        synchronizesVideoToolboxTiles: Bool = false,
         longTermReferenceHandler: @escaping LongTermReferenceHandler = { _ in },
         refreshHandler: @escaping RefreshHandler,
         errorHandler: @escaping ErrorHandler
@@ -129,18 +129,17 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         precondition(sourceToTile.count == tileCount)
         self.sourceToTile = sourceToTile
         self.callbackQueue = callbackQueue
-        self.frameHandler = frameHandler
-        self.frameBatchHandler = frameBatchHandler
+        self.outputHandler = outputHandler
         self.longTermReferenceHandler = longTermReferenceHandler
         self.refreshHandler = refreshHandler
         self.errorHandler = errorHandler
         callbackBridge = CallbackBridge()
-        tileFrameSynchronizer = synchronizesTileFrames
-            ? AppleVideoTileFrameSynchronizer()
-            : nil
+        self.synchronizesVideoToolboxTiles = synchronizesVideoToolboxTiles
+        tileFrameSynchronizer = nil
         decoder = nil
 
         decoder = try makeDecoder(using: decoderFactory)
+        updateTileFrameSynchronizer()
         callbackBridge.install(
             frameHandler: { [weak self, callbackQueue] generation, frame in
                 callbackQueue.async { [weak self] in
@@ -233,10 +232,10 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
 
     /// Changes only the public VideoToolbox presentation policy. The decoder
     /// session and playout clock remain stable across a menu-driven mode change.
-    func setSynchronizesTileFrames(_ enabled: Bool) {
+    func setSynchronizesVideoToolboxTiles(_ enabled: Bool) {
         guard !isClosed else { return }
-        tileFrameSynchronizer?.reset()
-        tileFrameSynchronizer = enabled ? AppleVideoTileFrameSynchronizer() : nil
+        synchronizesVideoToolboxTiles = enabled
+        updateTileFrameSynchronizer()
     }
 
     /// Replaces only the decompression session for a new video format. RTP
@@ -248,6 +247,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         tileFrameSynchronizer?.reset()
         tilesAwaitingRefresh.removeAll(keepingCapacity: true)
         decoder = try makeDecoder(using: decoderFactory)
+        updateTileFrameSynchronizer()
     }
 
     func close() {
@@ -282,10 +282,10 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         }
         if shouldLog {
             logFreezeDiagnostic(
-                "asynchronous status=\(failure.status) rtp=\(failure.rtpTimestamp); continuing submissions"
+                "asynchronous reason=\(failure.reason.rawValue) status=\(failure.status) rtp=\(failure.rtpTimestamp); continuing submissions"
             )
             Self.logger.notice(
-                "Asynchronous video decode failure tile=\(failure.tileIndex, privacy: .public) status=\(failure.status, privacy: .public); continuing submissions"
+                "Asynchronous video decode completion without output tile=\(failure.tileIndex, privacy: .public) reason=\(failure.reason.rawValue, privacy: .public) status=\(failure.status, privacy: .public); continuing submissions"
             )
         }
     }
@@ -310,6 +310,16 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         )
     }
 
+    private func updateTileFrameSynchronizer() {
+        let shouldSynchronize = synchronizesVideoToolboxTiles
+            && decoder?.backend == .videoToolbox
+        guard shouldSynchronize != (tileFrameSynchronizer != nil) else { return }
+        tileFrameSynchronizer?.reset()
+        tileFrameSynchronizer = shouldSynchronize
+            ? AppleVideoTileFrameSynchronizer()
+            : nil
+    }
+
     private func handleDecodedFrame(
         _ frame: AppleHEVCDecoder.DecodedFrame,
         generation: UInt64
@@ -322,12 +332,12 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
             tilesAwaitingRefresh.removeAll(keepingCapacity: true)
         }
         guard let tileFrameSynchronizer else {
-            frameHandler(frame)
+            outputHandler([frame])
             return
         }
         guard case .tile = frame.region,
               frame.accessUnitTiming?.observedFrameSequenceNumber != nil else {
-            frameHandler(frame)
+            outputHandler([frame])
             return
         }
         if tileFrameSynchronizer.recordDecodedFrame(frame) {
@@ -345,11 +355,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         guard !isClosed, generation == decoderGeneration,
               let tileFrameSynchronizer else { return }
         for batch in tileFrameSynchronizer.drainReadyBatches() {
-            if let frameBatchHandler {
-                frameBatchHandler(batch)
-            } else {
-                batch.forEach(frameHandler)
-            }
+            outputHandler(batch)
         }
     }
 

@@ -22,7 +22,7 @@ enum AppleVideoDecoderMode: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var synchronizesTileFrames: Bool {
-        self == .videoToolboxSynchronized
+    var synchronizesVideoToolboxTiles: Bool {
+        self != .videoToolboxLowLatency
     }
 }

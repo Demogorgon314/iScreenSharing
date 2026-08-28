@@ -13,6 +13,41 @@ final class AppleHEVCDecoderTests: XCTestCase {
         )
     }
 
+    func testClassifiesDroppedAndMissingVideoToolboxOutputAsCompletedFailures() {
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: noErr,
+                infoFlags: [.frameDropped],
+                hasImageBuffer: false
+            ),
+            .failure(.frameDropped)
+        )
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: noErr,
+                infoFlags: [],
+                hasImageBuffer: false
+            ),
+            .failure(.missingImageBuffer)
+        )
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: kVTVideoDecoderBadDataErr,
+                infoFlags: [],
+                hasImageBuffer: false
+            ),
+            .failure(.decoderStatus)
+        )
+        XCTAssertEqual(
+            AppleHEVCDecoder.videoToolboxOutputDisposition(
+                status: noErr,
+                infoFlags: [],
+                hasImageBuffer: true
+            ),
+            .frame
+        )
+    }
+
     func testBuildsFourByteLengthPrefixedPayload() throws {
         let unit = Data([0x26, 0x01, 0xaa, 0xbb])
         XCTAssertEqual(
@@ -95,6 +130,17 @@ final class AppleHEVCDecoderTests: XCTestCase {
             tileCount: 4,
             isAvailable: true
         ))
+    }
+
+    func testAllProductModesExceptLowLatencySynchronizeVideoToolboxTiles() {
+        XCTAssertTrue(AppleVideoDecoderMode.automatic.synchronizesVideoToolboxTiles)
+        XCTAssertTrue(AppleVideoDecoderMode.videoProcessing.synchronizesVideoToolboxTiles)
+        XCTAssertTrue(
+            AppleVideoDecoderMode.videoToolboxSynchronized.synchronizesVideoToolboxTiles
+        )
+        XCTAssertFalse(
+            AppleVideoDecoderMode.videoToolboxLowLatency.synchronizesVideoToolboxTiles
+        )
     }
 
     func testBuildsNativeSubframeIdentifierFromIndependentTileAndOrderFields() {
