@@ -92,7 +92,13 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
 
     func insertText(_ text: String) {
         for scalar in text.unicodeScalars {
-            let symbol = scalar.value <= 0xff ? scalar.value : 0x0100_0000 | scalar.value
+            let symbol: UInt32
+            switch scalar.value {
+            case 0x09: symbol = 0xff09
+            case 0x0a, 0x0d: symbol = 0xff0d
+            default:
+                symbol = scalar.value <= 0xff ? scalar.value : 0x0100_0000 | scalar.value
+            }
             sendKey(symbol: symbol)
         }
     }

@@ -14,3 +14,8 @@ protocol AppleClipboardReceiving: AnyObject {
     func setControlling(_ controlling: Bool)
     func close()
 }
+
+extension AppleClipboardReceiving {
+    func setControlling(_ controlling: Bool) {}
+    func close() {}
+}

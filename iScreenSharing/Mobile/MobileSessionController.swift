@@ -20,41 +20,64 @@ final class MobileSessionController: ObservableObject {
     private let controlChannelNegotiator: any AppleControlChannelNegotiating
     private let mediaNegotiator: any AppleMediaNegotiating
     private let videoStreamStarter: any AppleVideoStreamStarting
+    private let credentialStore: any CredentialStoring
     private var isActive = true
     private var streamStateObserver: AnyCancellable?
     private var connectionTask: Task<Void, Never>?
+    private var viewportSize: CGSize?
 
     init(
         endpoint: ConnectionEndpoint,
         authenticator: any RFBAuthenticating = RFBAuthenticationService(),
         controlChannelNegotiator: any AppleControlChannelNegotiating = AppleControlChannelNegotiator(),
         mediaNegotiator: any AppleMediaNegotiating = AppleMediaNegotiator(),
-        videoStreamStarter: any AppleVideoStreamStarting = AppleVideoStreamStarter()
+        videoStreamStarter: any AppleVideoStreamStarting = AppleVideoStreamStarter(),
+        credentialStore: any CredentialStoring = KeychainCredentialStore()
     ) {
         self.endpoint = endpoint
         self.authenticator = authenticator
         self.controlChannelNegotiator = controlChannelNegotiator
         self.mediaNegotiator = mediaNegotiator
         self.videoStreamStarter = videoStreamStarter
+        self.credentialStore = credentialStore
     }
 
-    func connect(username: String, password: String) {
+    func savedCredentials() async -> ScreenSharingCredentials? {
+        let credentialStore = credentialStore
+        let endpoint = endpoint
+        return await Task.detached {
+            try? credentialStore.load(for: endpoint)
+        }.value
+    }
+
+    func connect(username: String, password: String, rememberPassword: Bool = false) {
         guard state != .connecting else { return }
         state = .connecting
         connectionTask = Task { [weak self] in
-            await self?.establishSession(username: username, password: password)
+            await self?.establishSession(
+                username: username,
+                password: password,
+                rememberPassword: rememberPassword
+            )
         }
     }
 
-    private func establishSession(username: String, password: String) async {
+    private func establishSession(
+        username: String,
+        password: String,
+        rememberPassword: Bool
+    ) async {
         var connectingSession: RFBAuthenticatedSession?
         do {
             let credentials = try ScreenSharingCredentials(username: username, password: password)
             let session = try await authenticator.connect(to: endpoint, credentials: credentials)
             connectingSession = session
+            let requestedSize = viewportSize
+                .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
+                ?? AppleDynamicResolutionSize(width: 1440, height: 900)
             _ = try await controlChannelNegotiator.enableEncryption(
                 for: session,
-                displaySizes: [.fixed1080p]
+                displaySizes: [requestedSize]
             )
             let negotiation = try await mediaNegotiator.negotiate(session, displayCount: 1)
             let input = AppleInputController(session: session, canvas: negotiation.canvas)
@@ -76,11 +99,42 @@ final class MobileSessionController: ObservableObject {
             let cursors = AppleCursorStore()
             session.install(cursorStore: cursors)
 
+            try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
+            session.setVideoDecoderMode(.videoToolboxSynchronized)
+            guard let stream = session.videoStream else {
+                throw AppleVideoStreamError.missingMediaReceiver
+            }
+            self.session = session
+            observe(stream, session: session)
+            let dynamicResolutionController = AppleDynamicResolutionController(
+                initialCanvas: negotiation.canvas,
+                mediaConfiguration: negotiation.configuration,
+                sendMessage: { [weak session] message in
+                    guard let session else { throw CancellationError() }
+                    try await session.sendEncrypted(message)
+                },
+                applyCanvas: { [weak stream, weak input] canvas in
+                    await stream?.updateCanvas(canvas)
+                    await input?.update(canvas: canvas)
+                },
+                prepareMediaRestart: { [weak stream] in
+                    await stream?.prepareForMediaRestart()
+                }
+            )
+            session.install(dynamicResolutionController: dynamicResolutionController)
+            session.install(dynamicResolutionModel: AppleDynamicResolutionModel())
+
             let controlMessages = AppleControlMessageService(
                 session: session,
                 input: input,
                 clipboard: clipboard,
                 pendingMessages: negotiation.pendingMessages,
+                receiveDisplayLayout: { layout in
+                    try? await dynamicResolutionController.receive(layout)
+                },
+                receiveMediaCanvas: { canvas in
+                    await dynamicResolutionController.receiveMediaCanvas(canvas)
+                },
                 receiveCursorUpdate: { update in cursors.apply(update) },
                 didFail: { [weak self, weak session] message in
                     self?.connectionDidFail(message, session: session)
@@ -88,11 +142,6 @@ final class MobileSessionController: ObservableObject {
             )
             session.install(controlMessageService: controlMessages, clipboardService: clipboard)
             session.install(controlState: AppleSessionControlState(session: session))
-
-            try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
-            session.setVideoDecoderMode(.videoToolboxSynchronized)
-            self.session = session
-            if let stream = session.videoStream { observe(stream, session: session) }
             configureAudio(for: session, negotiation: negotiation)
             clipboard.start()
             clipboard.setActive(isActive)
@@ -101,14 +150,18 @@ final class MobileSessionController: ObservableObject {
             state = .connected
             connectionTask = nil
             controlMessages.start()
+            persist(credentials, remember: rememberPassword)
+            scheduleViewportUpdate(waitsForViewportToSettle: false)
         } catch is CancellationError {
             connectingSession?.close()
             if session === connectingSession { session = nil }
+            deactivateAudioSession()
             state = .idle
             connectionTask = nil
         } catch {
             connectingSession?.close()
             if session === connectingSession { session = nil }
+            deactivateAudioSession()
             state = .failed(error.localizedDescription)
             connectionTask = nil
         }
@@ -122,12 +175,18 @@ final class MobileSessionController: ObservableObject {
         session?.close()
         session = nil
         state = .idle
-        try? AVAudioSession.sharedInstance().setActive(false)
+        deactivateAudioSession()
     }
 
     func setActive(_ active: Bool) {
         isActive = active
         (session?.clipboardService as? MobileClipboardService)?.setActive(active)
+    }
+
+    func updateViewport(_ size: CGSize) {
+        guard size.width > 0, size.height > 0, viewportSize != size else { return }
+        viewportSize = size
+        scheduleViewportUpdate(waitsForViewportToSettle: true)
     }
 
     private func observe(_ stream: AppleVideoStream, session: RFBAuthenticatedSession) {
@@ -137,11 +196,26 @@ final class MobileSessionController: ObservableObject {
         }
     }
 
+    private func scheduleViewportUpdate(waitsForViewportToSettle: Bool) {
+        guard let viewportSize,
+              let session,
+              let stream = session.videoStream,
+              let model = session.dynamicResolutionModel,
+              let controller = session.dynamicResolutionController else { return }
+        model.schedule(
+            viewport: viewportSize,
+            canvas: stream.canvas,
+            controller: controller,
+            waitsForViewportToSettle: waitsForViewportToSettle
+        )
+    }
+
     private func connectionDidFail(_ message: String, session failedSession: RFBAuthenticatedSession?) {
         guard let failedSession, session === failedSession else { return }
         streamStateObserver = nil
         failedSession.close()
         session = nil
+        deactivateAudioSession()
         state = .failed(message)
     }
 
@@ -160,5 +234,24 @@ final class MobileSessionController: ObservableObject {
         } catch {
             // Video and control remain usable when audio is unavailable.
         }
+    }
+
+    private func persist(_ credentials: ScreenSharingCredentials, remember: Bool) {
+        let credentialStore = credentialStore
+        let endpoint = endpoint
+        Task.detached {
+            if remember {
+                try? credentialStore.save(credentials, for: endpoint)
+            } else {
+                try? credentialStore.delete(for: endpoint)
+            }
+        }
+    }
+
+    private func deactivateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
     }
 }

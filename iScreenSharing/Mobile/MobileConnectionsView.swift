@@ -123,6 +123,7 @@ private struct MobileConnectionPlaceholderView: View {
     @StateObject private var controller: MobileSessionController
     @State private var username = ""
     @State private var password = ""
+    @State private var rememberPassword = false
     @State private var requestsKeyboard = false
     @FocusState private var focusedField: Field?
 
@@ -171,6 +172,11 @@ private struct MobileConnectionPlaceholderView: View {
         .onChange(of: scenePhase) { _, phase in
             controller.setActive(phase == .active)
         }
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { size in
+            controller.updateViewport(size)
+        }
     }
 
     private var loginForm: some View {
@@ -187,6 +193,7 @@ private struct MobileConnectionPlaceholderView: View {
                     .textContentType(.password)
                     .focused($focusedField, equals: .password)
                     .onSubmit(connect)
+                Toggle("Remember Password", isOn: $rememberPassword)
             } header: {
                 Text("Registered User")
             } footer: {
@@ -215,12 +222,25 @@ private struct MobileConnectionPlaceholderView: View {
                 .disabled(username.isEmpty || password.isEmpty || controller.state == .connecting)
             }
         }
-        .task { focusedField = .username }
+        .task {
+            if let credentials = await controller.savedCredentials() {
+                username = credentials.username
+                password = credentials.password
+                rememberPassword = true
+                focusedField = .password
+            } else {
+                focusedField = .username
+            }
+        }
     }
 
     private func connect() {
         guard !username.isEmpty, !password.isEmpty else { return }
         focusedField = nil
-        controller.connect(username: username, password: password)
+        controller.connect(
+            username: username,
+            password: password,
+            rememberPassword: rememberPassword
+        )
     }
 }
