@@ -345,7 +345,7 @@ private struct AudioMuteButton: View {
 
 private struct ActiveVideoSessionView: View {
     let renderer: AppleVideoRenderer
-    @ObservedObject var stream: AppleVideoStream
+    @ObservedObject var stream: SessionVideoStream
     let input: AppleInputController?
     let fileTransfer: AppleFileTransferService?
     let cursors: AppleCursorStore?
@@ -377,6 +377,7 @@ private struct ActiveVideoSessionView: View {
                 displayScale: displayScale,
                 stretchesVideoToFillBounds: stretchesVideoToFillBounds,
                 synchronizesPresentation: synchronizesPresentation,
+                presentsFramesOnlyOnDisplayLink: stream.presentsFramesOnlyOnDisplayLink,
                 showsDeveloperHUD: showsMetalPerformanceHUD,
                 sourceRect: sourceRect,
                 inputMapping: inputMapping,

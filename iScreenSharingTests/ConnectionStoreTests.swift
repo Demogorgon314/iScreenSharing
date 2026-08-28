@@ -207,12 +207,14 @@ final class ConnectionStoreTests: XCTestCase {
             endpoint: updatedEndpoint,
             preferredUsername: "  editor  ",
             sharingType: .highPerformance,
+            standardQuality: .lowBandwidth,
             virtualDisplayCount: .two
         )
 
         let updated = try XCTUnwrap(store.connection(for: updatedEndpoint))
         XCTAssertEqual(updated.name, "Studio Mac")
         XCTAssertEqual(updated.preferredUsername, "editor")
+        XCTAssertEqual(updated.standardQuality, .lowBandwidth)
         XCTAssertEqual(updated.virtualDisplayCount, .two)
         XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: updatedEndpoint), updated)
         XCTAssertThrowsError(
@@ -243,6 +245,7 @@ final class ConnectionStoreTests: XCTestCase {
 
         XCTAssertEqual(connection.preferredUsername, "")
         XCTAssertEqual(connection.sharingType, .highPerformance)
+        XCTAssertEqual(connection.standardQuality, .high)
         XCTAssertEqual(connection.virtualDisplayCount, .one)
         XCTAssertNil(connection.deviceInfo)
     }

@@ -14,6 +14,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let displayScale: AppleVideoDisplayScale
     let stretchesVideoToFillBounds: Bool
     let synchronizesPresentation: Bool
+    let presentsFramesOnlyOnDisplayLink: Bool
     let showsDeveloperHUD: Bool
     let sourceRect: CGRect?
     let inputMapping: AppleDisplayInputMapping?
@@ -33,6 +34,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             displayScale: displayScale,
             stretchesVideoToFillBounds: stretchesVideoToFillBounds,
             synchronizesPresentation: synchronizesPresentation,
+            presentsFramesOnlyOnDisplayLink: presentsFramesOnlyOnDisplayLink,
             showsDeveloperHUD: showsDeveloperHUD,
             sourceRect: sourceRect,
             inputMapping: inputMapping,
@@ -49,6 +51,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
         view.displayScale = displayScale
         view.stretchesVideoToFillBounds = stretchesVideoToFillBounds
         view.synchronizesPresentation = synchronizesPresentation
+        view.presentsFramesOnlyOnDisplayLink = presentsFramesOnlyOnDisplayLink
         view.showsDeveloperHUD = showsDeveloperHUD
         view.sourceRect = sourceRect
         view.inputMapping = inputMapping
@@ -157,6 +160,7 @@ final class RemoteVideoCanvasNSView: NSView {
             schedulePresentation()
         }
     }
+    var presentsFramesOnlyOnDisplayLink: Bool
     var showsDeveloperHUD: Bool {
         didSet {
             guard showsDeveloperHUD != oldValue else { return }
@@ -214,6 +218,7 @@ final class RemoteVideoCanvasNSView: NSView {
         displayScale: AppleVideoDisplayScale,
         stretchesVideoToFillBounds: Bool = false,
         synchronizesPresentation: Bool,
+        presentsFramesOnlyOnDisplayLink: Bool = false,
         showsDeveloperHUD: Bool = false,
         sourceRect: CGRect?,
         inputMapping: AppleDisplayInputMapping?,
@@ -232,6 +237,7 @@ final class RemoteVideoCanvasNSView: NSView {
         self.displayScale = displayScale
         self.stretchesVideoToFillBounds = stretchesVideoToFillBounds
         self.synchronizesPresentation = synchronizesPresentation
+        self.presentsFramesOnlyOnDisplayLink = presentsFramesOnlyOnDisplayLink
         self.showsDeveloperHUD = showsDeveloperHUD
         self.sourceRect = sourceRect
         self.inputMapping = inputMapping
@@ -834,7 +840,10 @@ final class RemoteVideoCanvasNSView: NSView {
             )
         }
         if synchronizesPresentation {
-            if let update = displayScheduler.enqueue(frames) {
+            if let update = displayScheduler.enqueue(
+                frames,
+                presentsImmediately: !presentsFramesOnlyOnDisplayLink
+            ) {
                 applyAndPresent(update)
             }
         } else {

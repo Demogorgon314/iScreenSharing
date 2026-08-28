@@ -120,9 +120,10 @@ final class AuthenticationCoordinatorTests: XCTestCase {
     func testAutomaticSignInWithoutSavedCredentialsKeepsCoordinatorIdle() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let sessions = SessionManager()
+        let authenticator = MockAuthenticator(result: .success(try makeSession(endpoint: endpoint)))
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(try makeSession(endpoint: endpoint))),
+            authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
             mediaNegotiator: MockMediaNegotiator(),
             videoStreamStarter: MockVideoStreamStarter(),
@@ -297,7 +298,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertTrue(sessions.session(for: endpoint) === session)
     }
 
-    func testPrefillsUsernameAndRejectsUnsupportedStandardMode() async throws {
+    func testPrefillsUsernameAndConnectsStandardMode() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let connections = ConnectionStore(defaults: defaults)
         connections.record(endpoint)
@@ -310,9 +311,12 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             sharingType: .standard,
             virtualDisplayCount: .one
         )
+        let authenticator = MockAuthenticator(
+            result: .success(try makeSession(endpoint: endpoint))
+        )
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(try makeSession(endpoint: endpoint))),
+            authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
             mediaNegotiator: MockMediaNegotiator(),
             videoStreamStarter: MockVideoStreamStarter(),
@@ -324,10 +328,8 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.preferredUsername(), "editor")
         coordinator.signIn(username: "editor", password: "password", rememberPassword: false)
 
-        XCTAssertEqual(
-            coordinator.state,
-            .failed(AuthenticationCoordinatorError.standardModeUnavailable.localizedDescription)
-        )
+        try await waitUntil { coordinator.state == .authenticated }
+        XCTAssertEqual(authenticator.requestedSharingType, .standard)
     }
 
     private func makeSession(endpoint: ConnectionEndpoint) throws -> RFBAuthenticatedSession {
@@ -393,16 +395,24 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
 private final class MockAuthenticator: RFBAuthenticating, @unchecked Sendable {
     let result: Result<RFBAuthenticatedSession, Error>
+    private let lock = NSLock()
+    private var sharingType: ScreenSharingType?
 
     init(result: Result<RFBAuthenticatedSession, Error>) {
         self.result = result
     }
 
+    var requestedSharingType: ScreenSharingType? {
+        lock.withLock { sharingType }
+    }
+
     func connect(
         to endpoint: ConnectionEndpoint,
-        credentials: ScreenSharingCredentials
+        credentials: ScreenSharingCredentials,
+        sharingType: ScreenSharingType
     ) async throws -> RFBAuthenticatedSession {
-        try result.get()
+        lock.withLock { self.sharingType = sharingType }
+        return try result.get()
     }
 }
 

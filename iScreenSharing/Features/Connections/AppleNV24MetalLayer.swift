@@ -408,6 +408,15 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private func encode(into commandBuffer: MTLCommandBuffer, texture: MTLTexture) -> Bool {
         guard renderingBounds.width > 0, renderingBounds.height > 0 else { return false }
         if let frame = latestFrames[AppleVideoFrameStore.fullCanvasIndex] {
+            if CVPixelBufferGetPixelFormatType(frame.pixelBuffer) == kCVPixelFormatType_32BGRA,
+               let source = bgraTexture(from: frame.pixelBuffer) {
+                return encodeRGBA(
+                    source,
+                    layout: fullCanvasLayout,
+                    into: texture,
+                    commandBuffer: commandBuffer
+                )
+            }
             return encodeNV24Frames(
                 [(frame, fullCanvasLayout)],
                 into: texture,
@@ -635,6 +644,23 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             CVPixelBufferGetWidthOfPlane(pixelBuffer, plane),
             CVPixelBufferGetHeightOfPlane(pixelBuffer, plane),
             plane,
+            &image
+        )
+        guard status == kCVReturnSuccess, let image else { return nil }
+        return CVMetalTextureGetTexture(image)
+    }
+
+    private func bgraTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+        var image: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            nil,
+            context.textureCache,
+            pixelBuffer,
+            nil,
+            .bgra8Unorm,
+            CVPixelBufferGetWidth(pixelBuffer),
+            CVPixelBufferGetHeight(pixelBuffer),
+            0,
             &image
         )
         guard status == kCVReturnSuccess, let image else { return nil }

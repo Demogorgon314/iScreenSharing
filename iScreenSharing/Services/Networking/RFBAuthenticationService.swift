@@ -3,7 +3,8 @@ import Foundation
 protocol RFBAuthenticating: Sendable {
     func connect(
         to endpoint: ConnectionEndpoint,
-        credentials: ScreenSharingCredentials
+        credentials: ScreenSharingCredentials,
+        sharingType: ScreenSharingType
     ) async throws -> RFBAuthenticatedSession
 }
 
@@ -23,7 +24,8 @@ struct RFBAuthenticationService: RFBAuthenticating {
 
     func connect(
         to endpoint: ConnectionEndpoint,
-        credentials: ScreenSharingCredentials
+        credentials: ScreenSharingCredentials,
+        sharingType: ScreenSharingType = .highPerformance
     ) async throws -> RFBAuthenticatedSession {
         let (transport, remoteAddress) = try await connectTransport(to: endpoint)
         do {
@@ -36,10 +38,14 @@ struct RFBAuthenticationService: RFBAuthenticating {
                 credentials: credentials,
                 transport: transport
             )
-            let serverInfo = try await initializeSession(on: transport)
+            let serverInfo = try await initializeSession(
+                on: transport,
+                sharingType: sharingType
+            )
             return RFBAuthenticatedSession(
                 endpoint: endpoint,
                 remoteAddress: remoteAddress,
+                sharingType: sharingType,
                 masterKey: masterKey,
                 serverInfo: serverInfo,
                 transport: transport
@@ -132,8 +138,13 @@ struct RFBAuthenticationService: RFBAuthenticating {
         return masterKey
     }
 
-    private func initializeSession(on transport: any RFBTransport) async throws -> RFBServerInfo {
-        try await transport.send(Data([0xc1]))
+    private func initializeSession(
+        on transport: any RFBTransport,
+        sharingType: ScreenSharingType
+    ) async throws -> RFBServerInfo {
+        try await transport.send(
+            sharingType == .standard ? StandardRFBMessages.clientInit : Data([0xc1])
+        )
         let header = try await transport.receiveExactly(24)
         let nameLength = try Int(header.uint32BE(at: 20))
         guard nameLength <= Self.maximumServerNameLength else {

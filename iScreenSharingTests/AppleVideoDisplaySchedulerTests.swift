@@ -53,6 +53,28 @@ final class AppleVideoDisplaySchedulerTests: XCTestCase {
         XCTAssertEqual(eligibleUpdate.frames[0]?.sequence, 1)
     }
 
+    func testDisplayLinkOnlyEnqueueCoalescesUntilNextTick() throws {
+        var scheduler = AppleVideoDisplayScheduler(queueCapacity: 1)
+        _ = scheduler.displayLinkDidFire(targetTimestamp: 10)
+
+        let firstImmediateUpdate = scheduler.enqueue(
+            [0: try makeFrame(sequence: 1, presentationTime: 9)],
+            presentsImmediately: false
+        )
+        let secondImmediateUpdate = scheduler.enqueue(
+            [0: try makeFrame(sequence: 2, presentationTime: 9.5)],
+            presentsImmediately: false
+        )
+        let displayLinkUpdate = scheduler.displayLinkDidFire(targetTimestamp: 11)
+
+        XCTAssertNil(firstImmediateUpdate)
+        XCTAssertNil(secondImmediateUpdate)
+        XCTAssertEqual(displayLinkUpdate.frames[0]?.sequence, 2)
+        XCTAssertTrue(displayLinkUpdate.requiresPresentation)
+        XCTAssertEqual(displayLinkUpdate.trigger, .displayLinkTick)
+        XCTAssertEqual(scheduler.queuedFrameCount, 0)
+    }
+
     func testInvalidatedDisplayTargetDoesNotReleaseFrameUntilNextTick() throws {
         var scheduler = AppleVideoDisplayScheduler()
         _ = scheduler.displayLinkDidFire(targetTimestamp: 10)

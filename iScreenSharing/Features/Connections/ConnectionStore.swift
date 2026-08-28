@@ -136,6 +136,7 @@ final class ConnectionStore: ObservableObject {
         endpoint: ConnectionEndpoint,
         preferredUsername: String,
         sharingType: ScreenSharingType,
+        standardQuality: StandardRFBQuality = .high,
         virtualDisplayCount: VirtualDisplayCount
     ) throws {
         guard let index = connections.firstIndex(where: { $0.id == connection.id }) else {
@@ -151,6 +152,7 @@ final class ConnectionStore: ObservableObject {
         connections[index].endpoint = endpoint
         connections[index].preferredUsername = preferredUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         connections[index].sharingType = sharingType
+        connections[index].standardQuality = standardQuality
         connections[index].virtualDisplayCount = virtualDisplayCount
         persist()
     }
