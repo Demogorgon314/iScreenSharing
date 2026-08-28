@@ -154,7 +154,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         device = context.device
         pixelFormat = .bgra8Unorm
         framebufferOnly = true
-        backgroundColor = CGColor.black
+        backgroundColor = CGColor(gray: 0, alpha: 1)
         maximumDrawableCount = 2
         allowsNextDrawableTimeout = true
         configurePresentation()
@@ -357,6 +357,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         let presentationSubmittedAt = CACurrentMediaTime()
         let performance = performance
         let logger = Self.logger
+#if os(macOS)
         let didPresentFrame = didPresentFrame
         // Capture this session's trace now; the retained layer can be reused
         // before Metal delivers the old drawable's callback.
@@ -378,6 +379,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             }
             didPresentFrame?()
         }
+#endif
         commandBuffer.present(drawable)
         if let batchID {
             commandBuffer.addScheduledHandler { _ in
@@ -387,6 +389,16 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         let inFlightGate = inFlightGate
         commandBuffer.addCompletedHandler { commandBuffer in
             defer { inFlightGate.end() }
+#if !os(macOS)
+            let completedAt = CACurrentMediaTime()
+            performance?.recordDisplay(
+                duration: completedAt - presentationSubmittedAt,
+                presentedAt: completedAt
+            )
+            if let batchID {
+                performance?.recordRenderBatchPresented(batchID, at: completedAt)
+            }
+#endif
             performance?.recordGPU(
                 duration: CACurrentMediaTime() - submittedAt
             )
@@ -413,15 +425,19 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     private func configurePresentation() {
+#if os(macOS)
         displaySyncEnabled = synchronizesPresentation
+#endif
         presentsWithTransaction = false
     }
 
     private func configureDeveloperHUD() {
+#if os(macOS)
         let mode = showsDeveloperHUD ? "default" : "disabled"
         developerHUDProperties = [
             "mode": mode
         ]
+#endif
     }
 
     private func encode(into commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) -> Bool {

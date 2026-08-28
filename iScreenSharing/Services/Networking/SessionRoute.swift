@@ -20,6 +20,7 @@ protocol OpenSessionRoute: AnyObject, Sendable {
 enum SessionRouteError: LocalizedError, Equatable {
     case mediaUnavailableForStandardMode
     case mediaAlreadyOpened
+    case unsupportedRoute
     case closed
 
     var errorDescription: String? {
@@ -28,6 +29,8 @@ enum SessionRouteError: LocalizedError, Equatable {
             "Standard Screen Sharing does not use a high-performance media route."
         case .mediaAlreadyOpened:
             "The high-performance media route has already been opened."
+        case .unsupportedRoute:
+            "This connection route is unavailable on this device."
         case .closed:
             "The Screen Sharing route is closed."
         }
@@ -124,16 +127,21 @@ struct DirectSessionRouteAdapter: SessionRouteAdapter {
 }
 
 struct TailscaleSessionRouteAdapter: SessionRouteAdapter {
+#if os(macOS)
     private let nodeProvider: any TailscaleNodeProviding
 
     init(nodeProvider: any TailscaleNodeProviding = EmbeddedTailscaleRuntime.shared) {
         self.nodeProvider = nodeProvider
     }
+#else
+    init() {}
+#endif
 
     func open(
         _ endpoint: ConnectionEndpoint,
         sharingType: ScreenSharingType
     ) async throws -> any OpenSessionRoute {
+#if os(macOS)
         let remoteAddress = try ResolvedRemoteAddress(
             numericHost: endpoint.host,
             port: endpoint.port
@@ -159,6 +167,9 @@ struct TailscaleSessionRouteAdapter: SessionRouteAdapter {
             transport.cancel()
             throw error
         }
+#else
+        throw SessionRouteError.unsupportedRoute
+#endif
     }
 }
 

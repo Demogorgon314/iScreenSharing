@@ -117,44 +117,110 @@ private struct MobileNewConnectionView: View {
 }
 
 private struct MobileConnectionPlaceholderView: View {
+    @Environment(\.scenePhase) private var scenePhase
     let endpoint: ConnectionEndpoint
 
-    @StateObject private var probeModel: MobileConnectionProbeModel
+    @StateObject private var controller: MobileSessionController
+    @State private var username = ""
+    @State private var password = ""
+    @State private var requestsKeyboard = false
+    @FocusState private var focusedField: Field?
+
+    private enum Field {
+        case username
+        case password
+    }
 
     init(endpoint: ConnectionEndpoint) {
         self.endpoint = endpoint
-        _probeModel = StateObject(wrappedValue: MobileConnectionProbeModel(endpoint: endpoint))
+        _controller = StateObject(wrappedValue: MobileSessionController(endpoint: endpoint))
     }
 
     var body: some View {
         Group {
-            switch probeModel.state {
-            case .idle, .probing:
-                ProgressView("Contacting \(endpoint.displayName)…")
-            case .ready:
-                ContentUnavailableView {
-                    Label(endpoint.displayName, systemImage: "checkmark.circle")
-                } description: {
-                    Text("This Mac supports Apple high-performance Screen Sharing authentication.")
-                }
-            case .unsupported:
-                ContentUnavailableView {
-                    Label("Unsupported Mac", systemImage: "xmark.circle")
-                } description: {
-                    Text("The host did not advertise Apple RSA Screen Sharing authentication.")
-                }
-            case .failed(let message):
-                ContentUnavailableView {
-                    Label("Connection Failed", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(message)
-                } actions: {
-                    Button("Try Again") { Task { await probeModel.start() } }
-                }
+            if let session = controller.session, let stream = session.videoStream {
+                MobileVideoCanvasView(
+                    stream: stream,
+                    input: session.inputController,
+                    requestsKeyboard: $requestsKeyboard
+                )
+                .ignoresSafeArea(edges: .bottom)
+            } else {
+                loginForm
             }
         }
         .navigationTitle(endpoint.displayName)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await probeModel.start() }
+        .toolbar {
+            if controller.state == .connected {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        requestsKeyboard.toggle()
+                    } label: {
+                        Label("Keyboard", systemImage: "keyboard")
+                    }
+                    Button(role: .destructive) {
+                        controller.disconnect()
+                    } label: {
+                        Label("Disconnect", systemImage: "xmark.circle")
+                    }
+                }
+            }
+        }
+        .onDisappear { controller.disconnect() }
+        .onChange(of: scenePhase) { _, phase in
+            controller.setActive(phase == .active)
+        }
+    }
+
+    private var loginForm: some View {
+        Form {
+            Section {
+                TextField("User Name", text: $username)
+                    .textContentType(.username)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($focusedField, equals: .username)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .password }
+                SecureField("Password", text: $password)
+                    .textContentType(.password)
+                    .focused($focusedField, equals: .password)
+                    .onSubmit(connect)
+            } header: {
+                Text("Registered User")
+            } footer: {
+                Text("Sign in with an account allowed to use Screen Sharing on this Mac.")
+            }
+
+            if case .failed(let message) = controller.state {
+                Section {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                }
+            }
+
+            Section {
+                Button(action: connect) {
+                    HStack {
+                        Spacer()
+                        if controller.state == .connecting {
+                            ProgressView()
+                        } else {
+                            Text("Connect")
+                        }
+                        Spacer()
+                    }
+                }
+                .disabled(username.isEmpty || password.isEmpty || controller.state == .connecting)
+            }
+        }
+        .task { focusedField = .username }
+    }
+
+    private func connect() {
+        guard !username.isEmpty, !password.isEmpty else { return }
+        focusedField = nil
+        controller.connect(username: username, password: password)
     }
 }

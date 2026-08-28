@@ -1,4 +1,6 @@
+#if os(macOS)
 import Carbon
+#endif
 import Foundation
 import enum ScreenSharingProtocol.AppleClipboardMessage
 import enum ScreenSharingProtocol.AppleRFBMessages
@@ -329,8 +331,16 @@ actor AppleInputController {
             isDown: true,
             symbol: command.rawValue,
             keyCode: UInt16(truncatingIfNeeded: command.rawValue),
-            keyboardType: UInt16(LMGetKbdType())
+            keyboardType: Self.localKeyboardType
         )
+    }
+
+    private static var localKeyboardType: UInt16 {
+#if os(macOS)
+        UInt16(LMGetKbdType())
+#else
+        0
+#endif
     }
 
     func setUsesSameInputSource(_ usesSameInputSource: Bool) {

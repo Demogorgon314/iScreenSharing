@@ -19,15 +19,17 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     }
     private(set) var inputController: AppleInputController?
     private(set) var controlMessageService: AppleControlMessageService?
-    private(set) var clipboardService: AppleClipboardService?
+    private(set) var clipboardService: (any AppleClipboardReceiving)?
     private(set) var audioStream: AppleAudioStream?
     private(set) var dynamicResolutionController: AppleDynamicResolutionController?
     private(set) var cursorStore: AppleCursorStore?
     private(set) var displayLayoutModel: AppleDisplayLayoutModel?
     private(set) var dynamicResolutionModel: AppleDynamicResolutionModel?
     private(set) var remoteSystemCapabilities: AppleRemoteSystemCapabilities?
+#if os(macOS)
     private(set) var keyboardInputSourceService: AppleKeyboardInputSourceService?
     private(set) var fileTransferService: AppleFileTransferService?
+#endif
     private(set) var controlState: AppleSessionControlState?
 
     private let route: any OpenSessionRoute
@@ -111,8 +113,10 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         videoStreams.forEach { $0.close() }
         mediaReceiver?.close()
         let clipboardService = clipboardService
+#if os(macOS)
         let keyboardInputSourceService = keyboardInputSourceService
         let fileTransferService = fileTransferService
+#endif
         let inputController = inputController
         let recordLayer = recordLayer
         let encryptedWriter = encryptedWriter
@@ -120,8 +124,10 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         terminationHandler?()
         Task { @MainActor in
             clipboardService?.close()
+#if os(macOS)
             keyboardInputSourceService?.close()
             await fileTransferService?.close()
+#endif
             if let recordLayer {
                 try? await encryptedWriter.send(
                     [AppleClipboardMessage.disable],
@@ -225,7 +231,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     func install(
         controlMessageService: AppleControlMessageService,
-        clipboardService: AppleClipboardService
+        clipboardService: any AppleClipboardReceiving
     ) {
         self.controlMessageService?.close()
         self.controlMessageService = controlMessageService
@@ -260,6 +266,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.remoteSystemCapabilities = remoteSystemCapabilities
     }
 
+#if os(macOS)
     @MainActor
     func install(keyboardInputSourceService: AppleKeyboardInputSourceService) {
         self.keyboardInputSourceService?.close()
@@ -269,6 +276,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     func install(fileTransferService: AppleFileTransferService) {
         self.fileTransferService = fileTransferService
     }
+#endif
 
     @MainActor
     func install(controlState: AppleSessionControlState) {

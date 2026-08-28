@@ -21,11 +21,15 @@ final class AppleSessionControlState: ObservableObject {
             guard let self, let session else { return }
             do {
                 try await input.setControlling(!newValue)
+#if os(macOS)
                 await session.fileTransferService?.setControlling(!newValue)
+#endif
                 guard !Task.isCancelled else { return }
                 isObserving = newValue
                 session.clipboardService?.setControlling(!newValue)
+#if os(macOS)
                 session.keyboardInputSourceService?.setControlling(!newValue)
+#endif
                 isChangingMode = false
             } catch {
                 errorMessage = error.localizedDescription
