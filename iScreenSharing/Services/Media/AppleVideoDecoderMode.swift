@@ -8,11 +8,16 @@ enum AppleVideoDecoderMode: String, CaseIterable, Identifiable, Sendable {
 
     var id: Self { self }
 
+    static let standardCases: [Self] = [
+        .videoProcessing,
+        .videoToolboxSynchronized,
+    ]
+
     var title: String {
         switch self {
         case .automatic: "Automatic"
         case .videoProcessing: "VideoProcessing (VCP)"
-        case .videoToolboxSynchronized: "VideoToolbox (Synchronized)"
+        case .videoToolboxSynchronized: "VideoToolbox (Seamless)"
         case .videoToolboxLowLatency: "VideoToolbox (Low Latency)"
         }
     }

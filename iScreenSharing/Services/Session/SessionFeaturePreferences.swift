@@ -81,8 +81,12 @@ struct SessionFeaturePreferences {
 
     var videoDecoderMode: AppleVideoDecoderMode {
         guard let rawValue = defaults.string(forKey: Self.videoDecoderModeKey),
-              let mode = AppleVideoDecoderMode(rawValue: rawValue) else { return .automatic }
-        return mode
+              let mode = AppleVideoDecoderMode(rawValue: rawValue) else {
+            return .videoProcessing
+        }
+        // Automatic was exposed by earlier builds. The product choice is now
+        // explicit, while VCP still degrades safely when it is unavailable.
+        return mode == .automatic ? .videoProcessing : mode
     }
 
     func setSharesKeyboardInputSource(_ enabled: Bool) {

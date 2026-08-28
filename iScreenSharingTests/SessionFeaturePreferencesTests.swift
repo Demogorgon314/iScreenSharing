@@ -28,7 +28,7 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         XCTAssertTrue(preferences.synchronizesVideoPresentation)
         XCTAssertFalse(preferences.showsVideoPerformanceOverlay)
         XCTAssertEqual(preferences.videoPerformanceLevel, .compact)
-        XCTAssertEqual(preferences.videoDecoderMode, .automatic)
+        XCTAssertEqual(preferences.videoDecoderMode, .videoProcessing)
         XCTAssertFalse(preferences.showsMetalPerformanceHUD)
     }
 
@@ -84,13 +84,35 @@ final class SessionFeaturePreferencesTests: XCTestCase {
         )
     }
 
-    func testInvalidVideoDecoderModeFallsBackToAutomatic() {
+    func testInvalidVideoDecoderModeFallsBackToVideoProcessing() {
         defaults.set("unsupported", forKey: SessionFeaturePreferences.videoDecoderModeKey)
 
         XCTAssertEqual(
             SessionFeaturePreferences(defaults: defaults).videoDecoderMode,
-            .automatic
+            .videoProcessing
         )
+    }
+
+    func testMigratesAutomaticVideoDecoderModeToVideoProcessing() {
+        defaults.set("automatic", forKey: SessionFeaturePreferences.videoDecoderModeKey)
+
+        XCTAssertEqual(
+            SessionFeaturePreferences(defaults: defaults).videoDecoderMode,
+            .videoProcessing
+        )
+    }
+
+    func testStandardVideoDecoderModesExcludeExperimentalChoices() {
+        XCTAssertEqual(
+            AppleVideoDecoderMode.standardCases,
+            [.videoProcessing, .videoToolboxSynchronized]
+        )
+        XCTAssertEqual(
+            AppleVideoDecoderMode.videoToolboxSynchronized.title,
+            "VideoToolbox (Seamless)"
+        )
+        XCTAssertFalse(AppleVideoDecoderMode.standardCases.contains(.videoToolboxLowLatency))
+        XCTAssertFalse(AppleVideoDecoderMode.standardCases.contains(.automatic))
     }
 
     @MainActor

@@ -20,8 +20,9 @@ operational.
   rekeying, and session lifecycle
 - High-performance SRTP/SRTCP media transport with four-tile HEVC video streams
 - Selectable multi-tile decoding through Apple's private VideoProcessing (VCP)
-  framework or public synchronized/low-latency VideoToolbox paths with atomic
-  Metal presentation
+  framework or a public seamless VideoToolbox path with atomic Metal
+  presentation; an unsynchronized low-latency path remains available for
+  developer testing
 - NV24 Metal rendering, display-link pacing, multi-display windows, and cursor
   composition
 - RTCP receiver reports, NACK/FIR/LTR feedback, and Apple RCTL bandwidth
@@ -115,15 +116,16 @@ VideoProcessing symbols when available:
 VCP accepts tile identity/order metadata and returns one full-canvas pixel
 buffer after its internal tile assembly completes. If the private framework or
 symbols are unavailable, the app falls back to public VideoToolbox tile output.
-The synchronized public path groups the sender's sparse tile updates by frame
+The seamless public path groups the sender's sparse tile updates by frame
 sequence number and publishes each completed group as one observable snapshot;
 the low-latency path publishes decoded tiles immediately. Metal draws either
 snapshot in one drawable and one command buffer without first copying it into a
-new pixel buffer. The session menu and Display settings can select Automatic,
-VCP, synchronized VideoToolbox, or low-latency VideoToolbox; VCP selection still
-degrades safely when the private symbols are unavailable. Frame grouping,
-late-callback rejection, and zero-copy buffer handoff have deterministic
-coverage.
+new pixel buffer. The session menu and Display settings expose VCP and seamless
+VideoToolbox as product choices; low-latency VideoToolbox and presentation
+synchronization live only under Developer / Experimental in Display settings.
+VCP selection still degrades safely when the private symbols are unavailable.
+Frame grouping, late-callback rejection, and zero-copy buffer handoff have
+deterministic coverage.
 
 Viewer-to-host file transfer also launches ScreenSharing.framework's
 `SSFileCopySenderFW` helper when it is available. The helper is the native owner

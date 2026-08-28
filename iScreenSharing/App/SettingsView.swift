@@ -38,7 +38,7 @@ private struct DisplaySettingsView: View {
     @AppStorage(SessionFeaturePreferences.videoPerformanceLevelKey)
     private var videoPerformanceLevel = VideoPerformanceLevel.compact
     @AppStorage(SessionFeaturePreferences.videoDecoderModeKey)
-    private var videoDecoderMode = AppleVideoDecoderMode.automatic
+    private var videoDecoderMode = AppleVideoDecoderMode.videoProcessing
     @AppStorage(SessionFeaturePreferences.showsMetalPerformanceHUDKey)
     private var showsMetalPerformanceHUD = false
 
@@ -55,11 +55,23 @@ private struct DisplaySettingsView: View {
 
             Section("Video") {
                 Toggle("Adapt the remote resolution to the window", isOn: $usesDynamicResolution)
-                Toggle("Synchronize video presentation", isOn: $synchronizesVideoPresentation)
                 Picker("Decoder", selection: $videoDecoderMode) {
-                    ForEach(AppleVideoDecoderMode.allCases) { mode in
+                    ForEach(AppleVideoDecoderMode.standardCases) { mode in
                         Text(mode.title).tag(mode)
                     }
+                }
+            }
+
+            Section {
+                DisclosureGroup("Developer / Experimental") {
+                    Toggle(
+                        "Synchronize video presentation",
+                        isOn: $synchronizesVideoPresentation
+                    )
+                    Toggle(
+                        "Use low-latency VideoToolbox",
+                        isOn: lowLatencyDecoder
+                    )
                 }
             }
 
@@ -77,12 +89,28 @@ private struct DisplaySettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            if videoDecoderMode == .automatic {
+                videoDecoderMode = .videoProcessing
+            }
+        }
     }
 
     private var displayScale: Binding<DisplayScale> {
         Binding(
             get: { fixedDisplayScale < 0 ? .scaleToFit : .actualSize },
             set: { fixedDisplayScale = $0 == .scaleToFit ? -1 : 1 }
+        )
+    }
+
+    private var lowLatencyDecoder: Binding<Bool> {
+        Binding(
+            get: { videoDecoderMode == .videoToolboxLowLatency },
+            set: { enabled in
+                videoDecoderMode = enabled
+                    ? .videoToolboxLowLatency
+                    : .videoToolboxSynchronized
+            }
         )
     }
 }

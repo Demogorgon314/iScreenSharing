@@ -51,10 +51,8 @@ struct ScreenSharingCommands: Commands {
                 .disabled(activeSession?.canToggleObservationMode != true)
             Toggle("Dynamic Resolution", isOn: dynamicResolutionBinding)
                 .disabled(activeSession?.canUseDynamicResolution != true)
-            Toggle("Synchronize Video", isOn: videoSyncBinding)
-                .disabled(activeSession == nil)
             Picker("Video Decoder", selection: videoDecoderModeBinding) {
-                ForEach(AppleVideoDecoderMode.allCases) { mode in
+                ForEach(AppleVideoDecoderMode.standardCases) { mode in
                     Text(mode.title).tag(mode)
                 }
             }
@@ -161,11 +159,6 @@ struct ScreenSharingCommands: Commands {
                 .disabled(activeSession == nil)
             Toggle("Dynamic Resolution", isOn: dynamicResolutionBinding)
                 .disabled(activeSession?.canUseDynamicResolution != true)
-            Toggle(
-                "Synchronize Video",
-                isOn: videoSyncBinding
-            )
-            .disabled(activeSession == nil)
             Button("High Dynamic Range") { }
                 .disabled(true)
             Divider()
@@ -204,13 +197,6 @@ struct ScreenSharingCommands: Commands {
 
     private var activeSession: SessionCommandState? {
         sessionCommands.active
-    }
-
-    private var videoSyncBinding: Binding<Bool> {
-        Binding(
-            get: { sessionCommands.active?.synchronizesVideoPresentation ?? false },
-            set: { sessionCommands.active?.setSynchronizesVideoPresentation($0) }
-        )
     }
 
     private var dynamicResolutionBinding: Binding<Bool> {
@@ -271,7 +257,7 @@ struct ScreenSharingCommands: Commands {
 
     private var videoDecoderModeBinding: Binding<AppleVideoDecoderMode> {
         Binding(
-            get: { sessionCommands.active?.videoDecoderMode ?? .automatic },
+            get: { sessionCommands.active?.videoDecoderMode ?? .videoProcessing },
             set: { sessionCommands.active?.setVideoDecoderMode($0) }
         )
     }
