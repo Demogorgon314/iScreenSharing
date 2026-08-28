@@ -20,11 +20,20 @@
 			remoteGlobalIDString = A10000000000000000000010;
 			remoteInfo = iScreenSharing;
 		};
+		D10000000000000000000004 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C1000000000000000000000B;
+			remoteInfo = iScreenSharingMobile;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000004 /* iScreenSharing.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "iScreenSharing.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000005 /* iScreenSharingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iScreenSharingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10000000000000000000001 /* iScreenSharingMobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iScreenSharingMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10000000000000000000002 /* iScreenSharingMobileTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iScreenSharingMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000003 /* TailscaleKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = TailscaleKit.framework; path = Dependencies/libtailscale/swift/build/Build/Products/Release/TailscaleKit.framework; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -46,9 +55,96 @@
 		A10000000000000000000040 /* Exceptions for "iScreenSharing" folder in "iScreenSharing" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Mobile/MobileConnectionDraft.swift,
+				Mobile/MobileConnectionsView.swift,
+				Mobile/iScreenSharingMobileApp.swift,
 				Resources/Info.plist,
 			);
 			target = A10000000000000000000010 /* iScreenSharing */;
+		};
+		C10000000000000000000003 /* Exceptions for "iScreenSharing" folder in "iScreenSharingMobile" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				App/ScreenSharingAppDelegate.swift,
+				App/ScreenSharingCommands.swift,
+				App/SessionCommandState.swift,
+				App/SessionToolbarPreferences.swift,
+				App/SessionWindowCoordinator.swift,
+				App/SettingsView.swift,
+				App/iScreenSharingApp.swift,
+				Features/Connections/AppleFileTransferHistoryView.swift,
+				Features/Connections/AppleNV24MetalLayer.swift,
+				Features/Connections/AppleVideoDisplayScale.swift,
+				Features/Connections/AppleVideoDisplayScheduler.swift,
+				Features/Connections/AuthenticationCoordinator.swift,
+				Features/Connections/AuthenticationView.swift,
+				Features/Connections/ConnectionCoordinator.swift,
+				Features/Connections/ConnectionEditorView.swift,
+				Features/Connections/ConnectionLibraryLayout.swift,
+				Features/Connections/ConnectionStore.swift,
+				Features/Connections/ConnectionsLibraryView.swift,
+				Features/Connections/NetworkDiscoveryModel.swift,
+				Features/Connections/NewConnectionView.swift,
+				Features/Connections/RemoteDeviceIcon.swift,
+				Features/Connections/RemoteVideoCanvasView.swift,
+				Features/Connections/ScreenshotSharing.swift,
+				Features/Connections/SessionManager.swift,
+				Features/Connections/SessionView.swift,
+				Features/Connections/SessionViewportStore.swift,
+				Features/Connections/TailscaleModel.swift,
+				Resources/Assets.xcassets,
+				Services/Clipboard/AppleClipboardExchange.swift,
+				Services/Clipboard/AppleClipboardService.swift,
+				Services/FileTransfer/AppleFileTransferService.swift,
+				Services/Input/AppleKeyboardInputSourceService.swift,
+				Services/Input/AppleRemoteSystemCapabilities.swift,
+				Services/Media/AppleAACELDDecoder.swift,
+				Services/Media/AppleAudioPlayer.swift,
+				Services/Media/AppleAudioStream.swift,
+				Services/Media/AppleHEVCDecodePipeline.swift,
+				Services/Media/AppleHEVCDecoder.swift,
+				Services/Media/AppleHEVCDecodingOrderQueue.swift,
+				Services/Media/AppleHEVCStreamProcessor.swift,
+				Services/Media/AppleVCPDecompressionSession.swift,
+				Services/Media/AppleVideoDecoderMode.swift,
+				Services/Media/AppleVideoFeedbackController.swift,
+				Services/Media/AppleVideoFrameStore.swift,
+				Services/Media/AppleVideoPerformanceMonitor.swift,
+				Services/Media/AppleVideoPipelineTrace.swift,
+				Services/Media/AppleVideoPlayoutClock.swift,
+				Services/Media/AppleVideoStream.swift,
+				Services/Media/AppleVideoTileFrameSynchronizer.swift,
+				Services/Networking/AppleControlChannelNegotiator.swift,
+				Services/Networking/AppleControlMessageService.swift,
+				Services/Networking/AppleInputController.swift,
+				Services/Networking/AppleMediaNegotiator.swift,
+				Services/Networking/AppleMediaReceiver.swift,
+				Services/Networking/AppleMediaReceiverFactory.swift,
+				Services/Networking/AppleRekeyReader.swift,
+				Services/Networking/BonjourBrowser.swift,
+				Services/Networking/BonjourDeviceInfoResolver.swift,
+				Services/Networking/EmbeddedTailscaleRuntime.swift,
+				Services/Networking/NWConnectionTransport.swift,
+				Services/Networking/RFBAuthenticationService.swift,
+				Services/Networking/RFBProbeService.swift,
+				Services/Networking/RFBTransport.swift,
+				Services/Networking/RemoteAddressResolver.swift,
+				Services/Networking/TailscaleMediaReceiver.swift,
+				Services/Networking/TailscaleTCPTransport.swift,
+				Services/Security/KeychainCredentialStore.swift,
+				Services/Security/TailscaleStateKeyStore.swift,
+				Services/Session/AppleCursorStore.swift,
+				Services/Session/AppleDisplayLayoutModel.swift,
+				Services/Session/AppleDynamicResolutionController.swift,
+				Services/Session/AppleDynamicResolutionModel.swift,
+				Services/Session/AppleSessionControlState.swift,
+				Services/Session/ConnectionDocumentService.swift,
+				Services/Session/RFBAuthenticatedSession.swift,
+				Services/Session/SessionFeaturePreferences.swift,
+				Resources/Info.plist,
+				iScreenSharing.entitlements,
+			);
+			target = C1000000000000000000000B /* iScreenSharingMobile */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -57,6 +153,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				A10000000000000000000040 /* Exceptions for "iScreenSharing" folder in "iScreenSharing" target */,
+				C10000000000000000000003 /* Exceptions for "iScreenSharing" folder in "iScreenSharingMobile" target */,
 			);
 			path = iScreenSharing;
 			sourceTree = "<group>";
@@ -64,6 +161,11 @@
 		A10000000000000000000003 /* iScreenSharingTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = iScreenSharingTests;
+			sourceTree = "<group>";
+		};
+		C10000000000000000000004 /* iScreenSharingMobileTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = iScreenSharingMobileTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -85,6 +187,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C10000000000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10000000000000000000009 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -93,6 +209,7 @@
 			children = (
 				A10000000000000000000002 /* iScreenSharing */,
 				A10000000000000000000003 /* iScreenSharingTests */,
+				C10000000000000000000004 /* iScreenSharingMobileTests */,
 				B10000000000000000000003 /* TailscaleKit.framework */,
 				A10000000000000000000007 /* Products */,
 			);
@@ -103,6 +220,8 @@
 			children = (
 				A10000000000000000000004 /* iScreenSharing.app */,
 				A10000000000000000000005 /* iScreenSharingTests.xctest */,
+				C10000000000000000000001 /* iScreenSharingMobile.app */,
+				C10000000000000000000002 /* iScreenSharingMobileTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -158,6 +277,51 @@
 			productReference = A10000000000000000000005 /* iScreenSharingTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		C1000000000000000000000B /* iScreenSharingMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C1000000000000000000000F /* Build configuration list for PBXNativeTarget "iScreenSharingMobile" */;
+			buildPhases = (
+				C10000000000000000000005 /* Sources */,
+				C10000000000000000000006 /* Frameworks */,
+				C10000000000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000002 /* iScreenSharing */,
+			);
+			name = iScreenSharingMobile;
+			packageProductDependencies = (
+			);
+			productName = iScreenSharingMobile;
+			productReference = C10000000000000000000001 /* iScreenSharingMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+		C1000000000000000000000C /* iScreenSharingMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D10000000000000000000003 /* Build configuration list for PBXNativeTarget "iScreenSharingMobileTests" */;
+			buildPhases = (
+				C10000000000000000000008 /* Sources */,
+				C10000000000000000000009 /* Frameworks */,
+				C1000000000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D10000000000000000000005 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C10000000000000000000004 /* iScreenSharingMobileTests */,
+			);
+			name = iScreenSharingMobileTests;
+			packageProductDependencies = (
+			);
+			productName = iScreenSharingMobileTests;
+			productReference = C10000000000000000000002 /* iScreenSharingMobileTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -174,6 +338,13 @@
 					A10000000000000000000016 = {
 						CreatedOnToolsVersion = 26.1;
 						TestTargetID = A10000000000000000000010;
+					};
+					C1000000000000000000000B = {
+						CreatedOnToolsVersion = 26.1;
+					};
+					C1000000000000000000000C = {
+						CreatedOnToolsVersion = 26.1;
+						TestTargetID = C1000000000000000000000B;
 					};
 				};
 			};
@@ -196,6 +367,8 @@
 			targets = (
 				A10000000000000000000010 /* iScreenSharing */,
 				A10000000000000000000016 /* iScreenSharingTests */,
+				C1000000000000000000000B /* iScreenSharingMobile */,
+				C1000000000000000000000C /* iScreenSharingMobileTests */,
 			);
 		};
 /* End PBXProject section */
@@ -209,6 +382,20 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A10000000000000000000019 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10000000000000000000007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C1000000000000000000000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -254,6 +441,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C10000000000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C10000000000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -261,6 +462,11 @@
 			isa = PBXTargetDependency;
 			target = A10000000000000000000010 /* iScreenSharing */;
 			targetProxy = A10000000000000000000021 /* PBXContainerItemProxy */;
+		};
+		D10000000000000000000005 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C1000000000000000000000B /* iScreenSharingMobile */;
+			targetProxy = D10000000000000000000004 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -450,6 +656,93 @@
 			};
 			name = Release;
 		};
+		C1000000000000000000000D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GX4T5HF5N9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = iScreenSharing;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Screen Sharing uses your local network to connect to Macs you choose.";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobile;
+				PRODUCT_MODULE_NAME = iScreenSharingMobile;
+				PRODUCT_NAME = iScreenSharingMobile;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C1000000000000000000000E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GX4T5HF5N9;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = iScreenSharing;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Screen Sharing uses your local network to connect to Macs you choose.";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobile;
+				PRODUCT_MODULE_NAME = iScreenSharingMobile;
+				PRODUCT_NAME = iScreenSharingMobile;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D10000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = GX4T5HF5N9;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobileTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iScreenSharingMobile.app/iScreenSharingMobile";
+			};
+			name = Debug;
+		};
+		D10000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = GX4T5HF5N9;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wangkai.iShareScreen.mobileTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/iScreenSharingMobile.app/iScreenSharingMobile";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -476,6 +769,24 @@
 			buildConfigurations = (
 				A10000000000000000000031 /* Debug */,
 				A10000000000000000000032 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C1000000000000000000000F /* Build configuration list for PBXNativeTarget "iScreenSharingMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1000000000000000000000D /* Debug */,
+				C1000000000000000000000E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D10000000000000000000003 /* Build configuration list for PBXNativeTarget "iScreenSharingMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D10000000000000000000001 /* Debug */,
+				D10000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
