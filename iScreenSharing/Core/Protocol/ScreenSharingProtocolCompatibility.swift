@@ -35,3 +35,6 @@ typealias AppleDisplayRect = ScreenSharingProtocol.AppleDisplayRect
 typealias AppleDisplayLayout = ScreenSharingProtocol.AppleDisplayLayout
 typealias AppleDisplayConfiguration = ScreenSharingProtocol.AppleDisplayConfiguration
 typealias AppleDisplayConfigurationError = ScreenSharingProtocol.AppleDisplayConfigurationError
+typealias AppleMediaOffers = ScreenSharingProtocol.AppleMediaOffers
+typealias AppleMediaOffer = ScreenSharingProtocol.AppleMediaOffer
+typealias AppleMediaOfferError = ScreenSharingProtocol.AppleMediaOfferError

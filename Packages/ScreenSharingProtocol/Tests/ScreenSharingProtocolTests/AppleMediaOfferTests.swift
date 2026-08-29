@@ -1,6 +1,7 @@
 import CryptoKit
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleMediaOfferTests: XCTestCase {
     func testVideoDecoderNegotiationIncludesAlternateTilePositionControl() {
@@ -15,7 +16,8 @@ final class AppleMediaOfferTests: XCTestCase {
         let offers = try AppleMediaOffer.create(
             randomUInt32: { randomValues.removeFirst() },
             timestamp: { 123_456_789 },
-            uuid: { fixedUUID }
+            uuid: { fixedUUID },
+            operatingSystemVersion: "Version 15.7.7 (Build 24G720)"
         )
         XCTAssertEqual(offers.videoSynchronizationSource, 0x1122_3344)
         XCTAssertEqual(offers.audioSynchronizationSource, 0x5566_7788)
@@ -46,19 +48,33 @@ final class AppleMediaOfferTests: XCTestCase {
             audioEnabled: true,
             randomUInt32: { 1 },
             timestamp: { 2 },
-            uuid: { UUID() }
+            uuid: { UUID() },
+            operatingSystemVersion: "Version 15.7.7 (Build 24G720)"
         )
         let disabled = try AppleMediaOffer.create(
             audioEnabled: false,
             randomUInt32: { 1 },
             timestamp: { 2 },
-            uuid: { UUID() }
+            uuid: { UUID() },
+            operatingSystemVersion: "Version 15.7.7 (Build 24G720)"
         )
 
         XCTAssertNotEqual(
             try AppleMediaOffer.decompressMediaBlob(from: enabled.audio),
             try AppleMediaOffer.decompressMediaBlob(from: disabled.audio)
         )
+    }
+
+    func testRejectsPropertyListWithoutMediaBlob() throws {
+        let invalidOffer = try PropertyListSerialization.data(
+            fromPropertyList: ["avcMediaStreamNegotiatorMode": 7],
+            format: .binary,
+            options: 0
+        )
+
+        XCTAssertThrowsError(try AppleMediaOffer.decompressMediaBlob(from: invalidOffer)) {
+            XCTAssertEqual($0 as? AppleMediaOfferError, .invalidPropertyList)
+        }
     }
 }
 

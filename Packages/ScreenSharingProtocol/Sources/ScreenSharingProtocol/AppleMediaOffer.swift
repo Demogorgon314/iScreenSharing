@@ -1,17 +1,29 @@
 import Foundation
 
-struct AppleMediaOffers: Equatable, Sendable {
-    let video: Data
-    let audio: Data
-    let videoSynchronizationSource: UInt32
-    let audioSynchronizationSource: UInt32
+public struct AppleMediaOffers: Equatable, Sendable {
+    public let video: Data
+    public let audio: Data
+    public let videoSynchronizationSource: UInt32
+    public let audioSynchronizationSource: UInt32
+
+    public init(
+        video: Data,
+        audio: Data,
+        videoSynchronizationSource: UInt32,
+        audioSynchronizationSource: UInt32
+    ) {
+        self.video = video
+        self.audio = audio
+        self.videoSynchronizationSource = videoSynchronizationSource
+        self.audioSynchronizationSource = audioSynchronizationSource
+    }
 }
 
-enum AppleMediaOffer {
+public enum AppleMediaOffer {
     /// Keep the decoder's control-feature map identical to the PT 100 offer.
     /// The server may encode tile positions with POSE rather than POS, and VCP
     /// needs both entries to strip and interpret the private HEVC suffix.
-    static let videoDecoderNegotiationDetails =
+    public static let videoDecoderNegotiationDetails =
         "FLS;LF:-1;POS:5;EOD:1;HTS:2;RR:3;POSE:4;AR:16/9,5/8;XR:16/9,5/8;"
 
     private static let hevcParameters = Data(
@@ -25,11 +37,12 @@ enum AppleMediaOffer {
         (0, 100_000_000, 1_048_576),
     ]
 
-    static func create(
+    public static func create(
         audioEnabled: Bool = true,
-        randomUInt32: () throws -> UInt32 = { try Cryptography.randomUInt32() },
-        timestamp: () -> UInt64 = { UInt64(Date().timeIntervalSince1970 * 1_000_000_000) },
-        uuid: () -> UUID = UUID.init
+        randomUInt32: () throws -> UInt32,
+        timestamp: () -> UInt64,
+        uuid: () -> UUID,
+        operatingSystemVersion: String
     ) throws -> AppleMediaOffers {
         let videoSynchronizationSource = try randomUInt32()
         let audioSynchronizationSource = try randomUInt32()
@@ -38,14 +51,16 @@ enum AppleMediaOffer {
             sessionID: videoSynchronizationSource,
             timestamp: timestamp(),
             callID: uuid(),
-            audioEnabled: audioEnabled
+            audioEnabled: audioEnabled,
+            operatingSystemVersion: operatingSystemVersion
         )
         let audio = try makePlist(
             mode: 8,
             sessionID: audioSynchronizationSource,
             timestamp: timestamp(),
             callID: uuid(),
-            audioEnabled: audioEnabled
+            audioEnabled: audioEnabled,
+            operatingSystemVersion: operatingSystemVersion
         )
         return AppleMediaOffers(
             video: video,
@@ -55,7 +70,7 @@ enum AppleMediaOffer {
         )
     }
 
-    static func decompressMediaBlob(from offer: Data) throws -> Data {
+    public static func decompressMediaBlob(from offer: Data) throws -> Data {
         let plist = try PropertyListSerialization.propertyList(from: offer, format: nil)
         guard let dictionary = plist as? [String: Any],
               let compressed = dictionary["avcMediaStreamNegotiatorMediaBlob"] as? Data else {
@@ -64,7 +79,7 @@ enum AppleMediaOffer {
         return try decompressMediaBlob(compressed)
     }
 
-    static func decompressMediaBlob(_ compressed: Data) throws -> Data {
+    public static func decompressMediaBlob(_ compressed: Data) throws -> Data {
         try ZlibCodec.decompress(compressed)
     }
 
@@ -73,7 +88,8 @@ enum AppleMediaOffer {
         sessionID: UInt32,
         timestamp: UInt64,
         callID: UUID,
-        audioEnabled: Bool
+        audioEnabled: Bool,
+        operatingSystemVersion: String
     ) throws -> Data {
         let blob = mediaBlob(
             mode: mode,
@@ -82,7 +98,9 @@ enum AppleMediaOffer {
             audioEnabled: audioEnabled
         )
         let dictionary: [String: Any] = [
-            "avcMediaStreamOptionRemoteEndpointInfo": remoteEndpointInfo(),
+            "avcMediaStreamOptionRemoteEndpointInfo": remoteEndpointInfo(
+                operatingSystemVersion: operatingSystemVersion
+            ),
             "avcMediaStreamNegotiatorMode": mode,
             "avcMediaStreamNegotiatorMediaBlob": try ZlibCodec.compress(blob),
             "avcMediaStreamOptionCallID": callID.uuidString.uppercased(),
@@ -150,13 +168,12 @@ enum AppleMediaOffer {
         return protobuf(fields)
     }
 
-    private static func remoteEndpointInfo() -> Data {
-        let processInfo = ProcessInfo.processInfo
+    private static func remoteEndpointInfo(operatingSystemVersion: String) -> Data {
         return protobuf([
             .varint(1, 0), .varint(2, 1),
             .bytes(3, Data("Mac".utf8)),
             .bytes(4, Data("1.0.0".utf8)),
-            .bytes(5, Data(processInfo.operatingSystemVersionString.prefix(127).utf8)),
+            .bytes(5, Data(operatingSystemVersion.prefix(127).utf8)),
         ])
     }
 
@@ -194,14 +211,12 @@ enum AppleMediaOffer {
     }
 }
 
-enum AppleMediaOfferError: LocalizedError {
+public enum AppleMediaOfferError: LocalizedError, Equatable {
     case invalidPropertyList
-    case compressionFailed
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidPropertyList: "The media offer property list is invalid."
-        case .compressionFailed: "The media offer could not be compressed."
         }
     }
 }
