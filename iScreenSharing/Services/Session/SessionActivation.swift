@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
 struct SessionActivationConfiguration {
     let sharingType: ScreenSharingType

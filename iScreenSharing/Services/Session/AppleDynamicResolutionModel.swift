@@ -1,5 +1,7 @@
 import Combine
 import Foundation
+import struct ScreenSharingProtocol.AppleDisplayLayout
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
 @MainActor
 final class AppleDynamicResolutionModel: ObservableObject {

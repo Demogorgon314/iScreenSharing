@@ -1,5 +1,6 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleFramebufferUpdate
+import struct ScreenSharingProtocol.AppleDisplayLayout
 
 final class AppleControlMessageService: @unchecked Sendable {
     private weak var session: RFBAuthenticatedSession?

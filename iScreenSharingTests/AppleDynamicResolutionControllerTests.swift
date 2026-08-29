@@ -1,4 +1,8 @@
+import enum ScreenSharingProtocol.AppleDisplayConfigurationError
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleDisplayLayout
+import struct ScreenSharingProtocol.AppleDisplayRect
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 import XCTest
 @testable import iScreenSharing
 
