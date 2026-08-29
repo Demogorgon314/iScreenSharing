@@ -1,5 +1,6 @@
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleClipboardMessageTests: XCTestCase {
     func testBuildsEnableAndFetchMessages() {
@@ -125,4 +126,32 @@ final class AppleClipboardMessageTests: XCTestCase {
         XCTAssertEqual(fragments.map(\.count), [60_000, 60_000, 10_000])
         XCTAssertEqual(fragments.reduce(into: Data()) { $0.append($1) }, message)
     }
+}
+
+private extension Data {
+    func uint32BE(at offset: Int) throws -> UInt32 {
+        guard offset >= 0, count >= offset + 4 else { throw ClipboardTestWireError.outOfBounds }
+        return UInt32(self[offset]) << 24
+            | UInt32(self[offset + 1]) << 16
+            | UInt32(self[offset + 2]) << 8
+            | UInt32(self[offset + 3])
+    }
+
+    mutating func appendUInt32BE(_ value: UInt32) {
+        append(UInt8(truncatingIfNeeded: value >> 24))
+        append(UInt8(truncatingIfNeeded: value >> 16))
+        append(UInt8(truncatingIfNeeded: value >> 8))
+        append(UInt8(truncatingIfNeeded: value))
+    }
+
+    mutating func writeUInt32BE(_ value: UInt32, at offset: Int) {
+        self[offset] = UInt8(truncatingIfNeeded: value >> 24)
+        self[offset + 1] = UInt8(truncatingIfNeeded: value >> 16)
+        self[offset + 2] = UInt8(truncatingIfNeeded: value >> 8)
+        self[offset + 3] = UInt8(truncatingIfNeeded: value)
+    }
+}
+
+private enum ClipboardTestWireError: Error {
+    case outOfBounds
 }
