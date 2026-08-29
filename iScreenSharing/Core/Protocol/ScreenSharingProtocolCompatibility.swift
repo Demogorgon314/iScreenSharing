@@ -48,3 +48,7 @@ typealias AppleCursorImage = ScreenSharingProtocol.AppleCursorImage
 typealias AppleCursorUpdate = ScreenSharingProtocol.AppleCursorUpdate
 typealias AppleRemoteDeviceInfo = ScreenSharingProtocol.AppleRemoteDeviceInfo
 typealias AppleFramebufferUpdate = ScreenSharingProtocol.AppleFramebufferUpdate
+typealias AppleScrollWheelEvent = ScreenSharingProtocol.AppleScrollWheelEvent
+typealias AppleRFBInputEncryptionRequest = ScreenSharingProtocol.AppleRFBInputEncryptionRequest
+typealias AppleRFBMessages = ScreenSharingProtocol.AppleRFBMessages
+typealias AppleRFBMessageError = ScreenSharingProtocol.AppleRFBMessageError

@@ -1,5 +1,6 @@
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleRFBMessagesTests: XCTestCase {
     func testBuildsFramebufferUpdateRequest() {
@@ -67,13 +68,21 @@ final class AppleRFBMessagesTests: XCTestCase {
     func testSetEncodingsPreservesSignedPseudoEncoding() throws {
         let message = try AppleRFBMessages.setEncodings()
 
-        XCTAssertEqual(message.count, 4 + AppleRFBMessages.highPerformanceEncodings.count * 4)
+        XCTAssertEqual(message.count, 4 + 11 * 4)
         XCTAssertEqual(message.prefix(4), Data([0x02, 0x00, 0x00, 0x0b]))
         XCTAssertEqual(try message.int32BE(at: 4), 1010)
         XCTAssertEqual(try message.int32BE(at: 4 + 5 * 4), -223)
         XCTAssertEqual(try message.int32BE(at: message.count - 4), 1110)
-        XCTAssertFalse(AppleRFBMessages.highPerformanceEncodings.contains(6))
-        XCTAssertFalse(AppleRFBMessages.highPerformanceEncodings.contains(16))
+    }
+
+    func testRejectsEncodingListBeyondWireLimit() {
+        XCTAssertThrowsError(
+            try AppleRFBMessages.setEncodings(
+                Array(repeating: 0, count: Int(UInt16.max) + 1)
+            )
+        ) { error in
+            XCTAssertEqual(error as? AppleRFBMessageError, .tooManyEncodings)
+        }
     }
 
     func testBuildsObserveAndControlModeMessages() {
@@ -95,71 +104,62 @@ final class AppleRFBMessagesTests: XCTestCase {
         )
     }
 
-    func testBuildsAppleEncryptedPointerEvent() throws {
-        let message = try AppleRFBMessages.encryptedPointerEvent(
+    func testBuildsPointerEncryptionRequest() {
+        let request = AppleRFBMessages.pointerEventEncryptionRequest(
             buttons: 3,
             x: 0x1234,
             y: 0x5678,
-            clickCount: 2,
-            contentKey: Data(repeating: 0, count: 16)
+            clickCount: 2
         )
+        XCTAssertEqual(request.header, Data([0x10, 0x05]))
         XCTAssertEqual(
-            message,
-            Data([
-                0x10, 0x05, 0xe9, 0x3e, 0x9b, 0xe4, 0x74, 0xb5, 0xae,
-                0x84, 0xd2, 0x92, 0x49, 0xa6, 0xf6, 0x8f, 0xfd, 0x77,
-            ])
+            request.plaintextBlock,
+            Data([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 3, 0x12, 0x34, 0x56, 0x78])
         )
     }
 
-
-    func testEncryptedPointerMovementUsesVersionOneFlag() throws {
-        let key = Data(repeating: 0, count: 16)
-        let message = try AppleRFBMessages.encryptedPointerEvent(
+    func testPointerMovementUsesVersionOneFlagAndTimestamp() {
+        let request = AppleRFBMessages.pointerEventEncryptionRequest(
             buttons: 0,
             x: 1,
             y: 2,
-            timestampDelta: 0x0102_0304,
-            contentKey: key
+            timestampDelta: 0x0102_0304
         )
 
-        XCTAssertEqual(message[1], 1)
+        XCTAssertEqual(request.header, Data([0x10, 0x01]))
         XCTAssertEqual(
-            try Cryptography.decryptAESECB(message.dropFirst(2), key: key),
+            request.plaintextBlock,
             Data([0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 0xff, 0, 0, 1, 0, 2])
         )
     }
 
-    func testBuildsEncryptedKeyboardEventWithNativeFields() throws {
-        let key = Data(repeating: 0, count: 16)
-        let message = try AppleRFBMessages.encryptedKeyEvent(
+    func testBuildsKeyboardEncryptionRequestWithNativeFields() {
+        let request = AppleRFBMessages.keyEventEncryptionRequest(
             isDown: true,
             keySymbol: 0xff51,
             timestampDelta: 0x0102_0304,
             keyboardType: 40,
-            keyCode: 123,
-            contentKey: key
+            keyCode: 123
         )
 
-        XCTAssertEqual(message.prefix(2), Data([0x10, 0x01]))
+        XCTAssertEqual(request.header, Data([0x10, 0x01]))
         XCTAssertEqual(
-            try Cryptography.decryptAESECB(message.dropFirst(2), key: key),
+            request.plaintextBlock,
             Data([0xff, 1, 0, 0, 0xff, 0x51, 1, 2, 3, 4, 0, 0, 0, 40, 0, 123])
         )
     }
 
-    func testKeyboardEventUsesSharedInputSourceSubtype() throws {
-        let message = try AppleRFBMessages.encryptedKeyEvent(
+    func testKeyboardEncryptionRequestUsesSharedInputSourceSubtype() {
+        let request = AppleRFBMessages.keyEventEncryptionRequest(
             isDown: true,
             keySymbol: 0x71,
             timestampDelta: 0,
             keyboardType: 40,
             keyCode: 12,
-            subtype: 3,
-            contentKey: Data(repeating: 0, count: 16)
+            subtype: 3
         )
 
-        XCTAssertEqual(message.prefix(2), Data([0x10, 0x03]))
+        XCTAssertEqual(request.header, Data([0x10, 0x03]))
     }
 
     func testBuildsNativeHighPrecisionScrollWheelEvent() {
@@ -193,4 +193,21 @@ final class AppleRFBMessagesTests: XCTestCase {
             ])
         )
     }
+}
+
+private extension Data {
+    func int32BE(at offset: Int) throws -> Int32 {
+        guard offset >= 0, count >= offset + 4 else {
+            throw AppleRFBMessagesTestError.outOfBounds
+        }
+        let value = UInt32(self[offset]) << 24
+            | UInt32(self[offset + 1]) << 16
+            | UInt32(self[offset + 2]) << 8
+            | UInt32(self[offset + 3])
+        return Int32(bitPattern: value)
+    }
+}
+
+private enum AppleRFBMessagesTestError: Error {
+    case outOfBounds
 }
