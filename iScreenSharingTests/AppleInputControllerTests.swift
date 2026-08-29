@@ -1,5 +1,6 @@
 import enum ScreenSharingProtocol.AppleRFBMessages
 import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 

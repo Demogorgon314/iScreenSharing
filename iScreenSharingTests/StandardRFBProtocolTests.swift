@@ -1,5 +1,6 @@
 import CoreVideo
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 

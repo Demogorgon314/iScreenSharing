@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.RFBServerInfo
 
 final class RFBAuthenticatedSession: @unchecked Sendable {
     let endpoint: ConnectionEndpoint

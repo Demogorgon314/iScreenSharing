@@ -1,6 +1,7 @@
 import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 import struct ScreenSharingProtocol.AppleMediaKeys
+import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 
