@@ -2,6 +2,7 @@ import Carbon
 import Foundation
 import enum ScreenSharingProtocol.AppleClipboardMessage
 import enum ScreenSharingProtocol.AppleRFBMessages
+import enum ScreenSharingProtocol.StandardRFBMessages
 import class ScreenSharingProtocol.AppleEncryptedRecordLayer
 import struct ScreenSharingProtocol.AppleClipboardArchive
 import struct ScreenSharingProtocol.AppleCanvas

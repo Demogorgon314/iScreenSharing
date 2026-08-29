@@ -115,15 +115,11 @@ public enum AppleRFBMessages {
     }
 
     public static func setEncodings(_ encodings: [Int32]) throws -> Data {
-        guard encodings.count <= Int(UInt16.max) else {
+        do {
+            return try RFBEncodingList.message(encodings)
+        } catch {
             throw AppleRFBMessageError.tooManyEncodings
         }
-        var message = Data([0x02, 0x00])
-        message.appendAppleUInt16BE(UInt16(encodings.count))
-        for encoding in encodings {
-            message.appendAppleInt32BE(encoding)
-        }
-        return message
     }
 
     public static func framebufferUpdateRequest(

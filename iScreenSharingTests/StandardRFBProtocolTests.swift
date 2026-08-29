@@ -1,23 +1,12 @@
 import CoreVideo
 import enum ScreenSharingProtocol.AppleRFBMessages
+import enum ScreenSharingProtocol.StandardRFBMessages
 import struct ScreenSharingProtocol.RFBServerInfo
+import struct ScreenSharingProtocol.StandardRFBPixelFormat
 import XCTest
 @testable import iScreenSharing
 
 final class StandardRFBProtocolTests: XCTestCase {
-    func testBuildsClientInitializationAndStandardPixelFormat() {
-        XCTAssertEqual(StandardRFBMessages.clientInit, Data([1]))
-        XCTAssertEqual(
-            StandardRFBMessages.setPixelFormat(.standard),
-            Data([
-                0, 0, 0, 0,
-                32, 24, 0, 1,
-                0, 255, 0, 255, 0, 255,
-                16, 8, 0, 0, 0, 0,
-            ])
-        )
-    }
-
     func testBuildsQualitySpecificEncodingPreferences() {
         XCTAssertEqual(
             StandardRFBMessages.setEncodings(for: .high),
@@ -425,17 +414,6 @@ final class StandardRFBProtocolTests: XCTestCase {
             0x20, 0, 0, 0xff,
         ])
         XCTAssertEqual(transport.sentMessages.map(\.first), [0, 2, 3, 9])
-    }
-
-    func testBuildsStandardInputMessages() {
-        XCTAssertEqual(
-            StandardRFBMessages.keyEvent(isDown: true, symbol: 0x41),
-            Data([4, 1, 0, 0, 0, 0, 0, 0x41])
-        )
-        XCTAssertEqual(
-            StandardRFBMessages.pointerEvent(buttons: 5, x: 0x1234, y: 0x5678),
-            Data([5, 5, 0x12, 0x34, 0x56, 0x78])
-        )
     }
 
     func testReceivesRawRectangleAndPublishesFullCanvasFrame() async throws {

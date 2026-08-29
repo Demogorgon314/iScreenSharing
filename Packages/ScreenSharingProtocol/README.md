@@ -11,7 +11,8 @@ other releases must be verified rather than inferred from this implementation.
 
 The package owns:
 
-- RFB version, security-type, and ServerInit parsing
+- RFB version, security-type, and ServerInit parsing, plus fixed Standard-mode
+  client messages and pixel-format wire values
 - Apple RSA1 authentication payloads
 - Apple control, display, media-negotiation, clipboard, file-transfer, cursor,
   keyboard-source, and rekey wire values

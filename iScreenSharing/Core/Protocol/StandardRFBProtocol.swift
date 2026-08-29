@@ -1,20 +1,10 @@
 import Accelerate
 import Foundation
-import enum ScreenSharingProtocol.AppleRFBMessages
+import enum ScreenSharingProtocol.StandardRFBMessages
+import struct ScreenSharingProtocol.StandardRFBPixelFormat
 import zlib
 
-struct StandardRFBPixelFormat: Equatable, Sendable {
-    let bitsPerPixel: UInt8
-    let depth: UInt8
-    let redMaximum: UInt16
-    let greenMaximum: UInt16
-    let blueMaximum: UInt16
-    let redShift: UInt8
-    let greenShift: UInt8
-    let blueShift: UInt8
-
-    var bytesPerPixel: Int { Int(bitsPerPixel) / 8 }
-
+extension StandardRFBPixelFormat {
     var isNativeBGRX: Bool {
         bitsPerPixel == 32
             && redMaximum == 255
@@ -23,21 +13,6 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
             && redShift == 16
             && greenShift == 8
             && blueShift == 0
-    }
-
-    static let standard = Self(
-        bitsPerPixel: 32, depth: 24,
-        redMaximum: 255, greenMaximum: 255, blueMaximum: 255,
-        redShift: 16, greenShift: 8, blueShift: 0
-    )
-
-    var wireData: Data {
-        var data = Data([bitsPerPixel, depth, 0, 1])
-        data.appendUInt16BE(redMaximum)
-        data.appendUInt16BE(greenMaximum)
-        data.appendUInt16BE(blueMaximum)
-        data.append(contentsOf: [redShift, greenShift, blueShift, 0, 0, 0])
-        return data
     }
 
     func decodeBGRA(_ source: Data, pixelCount: Int) throws -> Data {
@@ -555,7 +530,7 @@ final class StandardRFBZlibDecoder: @unchecked Sendable {
     }
 }
 
-enum StandardRFBMessages {
+extension StandardRFBMessages {
     struct QualityProfile {
         let quality: StandardRFBQuality
         let preferredEncoding: Int32?
@@ -572,17 +547,6 @@ enum StandardRFBMessages {
         }
     }
 
-    static let rawEncoding: Int32 = 0
-    static let copyRectangleEncoding: Int32 = 1
-    static let hextileEncoding: Int32 = 5
-    static let zlibEncoding: Int32 = 6
-    static let subZlibHalftoneEncoding: Int32 = 1_000
-    static let subZlib16GrayEncoding: Int32 = 1_001
-    static let subZlibThousandsEncoding: Int32 = 1_002
-    static let desktopSizeEncoding: Int32 = -223
-
-    static let clientInit = Data([1])
-
     static func qualityProfile(for quality: StandardRFBQuality) -> QualityProfile {
         let encoding: Int32? = switch quality {
         case .high: nil
@@ -593,30 +557,13 @@ enum StandardRFBMessages {
         return QualityProfile(quality: quality, preferredEncoding: encoding)
     }
 
-    static func setPixelFormat(_ format: StandardRFBPixelFormat) -> Data {
-        Data([0, 0, 0, 0]) + format.wireData
-    }
-
     static func setEncodings(for quality: StandardRFBQuality) -> Data {
         var encodings = [copyRectangleEncoding, zlibEncoding, rawEncoding, hextileEncoding]
         if let preferredEncoding = qualityProfile(for: quality).preferredEncoding {
             encodings.insert(preferredEncoding, at: 0)
         }
         encodings.append(desktopSizeEncoding)
-        return try! AppleRFBMessages.setEncodings(encodings)
-    }
-
-    static func keyEvent(isDown: Bool, symbol: UInt32) -> Data {
-        var data = Data([4, isDown ? 1 : 0, 0, 0])
-        data.appendUInt32BE(symbol)
-        return data
-    }
-
-    static func pointerEvent(buttons: UInt8, x: UInt16, y: UInt16) -> Data {
-        var data = Data([5, buttons])
-        data.appendUInt16BE(x)
-        data.appendUInt16BE(y)
-        return data
+        return try! setEncodings(encodings)
     }
 }
 

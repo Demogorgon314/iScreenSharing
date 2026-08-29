@@ -47,6 +47,11 @@ complete Session SDK or a cross-platform compatibility promise.
 - ``RFBServerInfo``
 - ``AppleRSA1``
 
+### Standard RFB
+
+- ``StandardRFBPixelFormat``
+- ``StandardRFBMessages``
+
 ### Encrypted control
 
 - ``AppleRecordKeys``
