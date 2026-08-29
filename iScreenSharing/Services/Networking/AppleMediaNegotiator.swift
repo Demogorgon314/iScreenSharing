@@ -1,5 +1,23 @@
 import Foundation
 
+struct AppleMediaNegotiationEnvironment: Sendable {
+    let randomBytes: @Sendable (Int) throws -> Data
+    let randomUInt32: @Sendable () throws -> UInt32
+    let timestamp: @Sendable () -> UInt64
+    let uuid: @Sendable () -> UUID
+    let operatingSystemVersion: String
+
+    static let system = Self(
+        randomBytes: Cryptography.randomBytes,
+        randomUInt32: Cryptography.randomUInt32,
+        timestamp: {
+            UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
+        },
+        uuid: { UUID() },
+        operatingSystemVersion: ProcessInfo.processInfo.operatingSystemVersionString
+    )
+}
+
 enum AppleMediaStreamDisplayMapping {
     static func displayIndex(forMediaStreamIndex mediaStreamIndex: Int, displayCount: Int) -> Int {
         mediaStreamIndex
@@ -64,6 +82,11 @@ protocol AppleMediaNegotiating: Sendable {
 
 struct AppleMediaNegotiator: AppleMediaNegotiating {
     private static let retryLimit = 16
+    private let environment: AppleMediaNegotiationEnvironment
+
+    init(environment: AppleMediaNegotiationEnvironment = .system) {
+        self.environment = environment
+    }
 
     func negotiate(
         _ session: RFBAuthenticatedSession,
@@ -84,14 +107,15 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         receiver: any AppleMediaReceiving,
         displayCount: Int
     ) async throws -> AppleMediaNegotiationResult {
-        let offers = try AppleMediaOffer.create()
-        let secondaryOffers = displayCount > 1 ? try AppleMediaOffer.create() : nil
-        let keys = try AppleMediaKeys.random(includeSecondaryVideo: secondaryOffers != nil)
+        let offers = try makeOffer()
+        let secondaryOffers = displayCount > 1 ? try makeOffer() : nil
+        let keys = try makeKeys(includeSecondaryVideo: secondaryOffers != nil)
         let configuration = try AppleMediaConfiguration.message(
             audioOffer: offers.audio,
             videoOffer: offers.video,
             secondaryVideoOffer: secondaryOffers?.video,
-            keys: keys
+            keys: keys,
+            callID: environment.uuid()
         )
 
         for message in try Self.framebufferStartupMessages(displayCount: displayCount) {
@@ -186,6 +210,28 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
             }
         }
         throw AppleMediaNegotiationError.missingCanvas
+    }
+
+    private func makeOffer() throws -> AppleMediaOffers {
+        try AppleMediaOffer.create(
+            randomUInt32: environment.randomUInt32,
+            timestamp: environment.timestamp,
+            uuid: environment.uuid,
+            operatingSystemVersion: environment.operatingSystemVersion
+        )
+    }
+
+    private func makeKeys(includeSecondaryVideo: Bool) throws -> AppleMediaKeys {
+        try AppleMediaKeys(
+            audioViewer: environment.randomBytes(AppleMediaKeys.blobLength),
+            audioServer: environment.randomBytes(AppleMediaKeys.blobLength),
+            videoViewer: environment.randomBytes(AppleMediaKeys.blobLength),
+            videoServer: environment.randomBytes(AppleMediaKeys.blobLength),
+            secondaryVideoViewer: includeSecondaryVideo
+                ? environment.randomBytes(AppleMediaKeys.blobLength) : nil,
+            secondaryVideoServer: includeSecondaryVideo
+                ? environment.randomBytes(AppleMediaKeys.blobLength) : nil
+        )
     }
 
     static func framebufferStartupMessages() throws -> [Data] {
