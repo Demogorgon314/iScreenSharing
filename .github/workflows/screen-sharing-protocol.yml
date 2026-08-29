@@ -1,0 +1,47 @@
+name: ScreenSharingProtocol
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/screen-sharing-protocol.yml"
+      - "Packages/ScreenSharingProtocol/**"
+  push:
+    paths:
+      - ".github/workflows/screen-sharing-protocol.yml"
+      - "Packages/ScreenSharingProtocol/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Test, documentation, and public API
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Packages/ScreenSharingProtocol
+
+    steps:
+      - name: Check out without app submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Run protocol tests
+        run: swift test
+
+      - name: Build release library
+        run: swift build -c release
+
+      - name: Build DocC documentation
+        run: >-
+          xcodebuild
+          -scheme ScreenSharingProtocol
+          -destination 'generic/platform=macOS'
+          -derivedDataPath "$RUNNER_TEMP/ScreenSharingProtocolDocC"
+          docbuild
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Compile public consumer
+        run: swift build --package-path Fixtures/PublicAPISmoke
