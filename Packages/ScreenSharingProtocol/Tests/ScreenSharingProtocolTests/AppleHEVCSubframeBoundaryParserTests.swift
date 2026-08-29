@@ -1,5 +1,6 @@
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleHEVCSubframeBoundaryParserTests: XCTestCase {
     func testMatchesNativeFLSControlSequence() throws {
@@ -56,7 +57,7 @@ final class AppleHEVCSubframeBoundaryParserTests: XCTestCase {
 
     private func makeParser() throws -> AppleHEVCSubframeBoundaryParser {
         try XCTUnwrap(AppleHEVCSubframeBoundaryParser(
-            negotiationDetails: AppleMediaOffer.videoDecoderNegotiationDetails
+            negotiationDetails: "FLS;LF:-1;POS:5;EOD:1;HTS:2;RR:3;POSE:4;"
         ))
     }
 

@@ -3,32 +3,6 @@ import XCTest
 
 @MainActor
 final class AppleKeyboardInputSourceMessageTests: XCTestCase {
-    func testBuildsNativeShareAndDisableMessagesWithoutNullTerminator() throws {
-        XCTAssertEqual(
-            try AppleKeyboardInputSourceMessage.share(identifier: "com.apple.keylayout.US"),
-            Data([0x1a, 0x00, 0x00, 0x1a, 0x00, 0x01, 0x00, 0x16])
-                + Data("com.apple.keylayout.US".utf8)
-        )
-        XCTAssertEqual(
-            try AppleKeyboardInputSourceMessage.share(identifier: nil),
-            Data([0x1a, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x00])
-        )
-    }
-
-    func testParsesRemoteInputSourceAndSecureInputFlag() {
-        var payload = Data([0x00, 0x01, 0, 0, 0, 1, 0, 2])
-        payload.append(Data("US".utf8))
-        XCTAssertEqual(
-            AppleKeyboardInputSourceMessage.state(from: payload),
-            AppleKeyboardInputSourceState(field: 1, isSecureInput: true, identifier: "US")
-        )
-    }
-
-    func testRejectsEmptyAndTruncatedRemoteIdentifiers() {
-        XCTAssertNil(AppleKeyboardInputSourceMessage.state(from: Data(repeating: 0, count: 8)))
-        XCTAssertNil(AppleKeyboardInputSourceMessage.state(from: Data([0, 1, 0, 0, 0, 0, 0, 2, 0x55])))
-    }
-
     func testServiceDefaultsOffAndUsesRemoteStateAsCapabilityEvidence() async throws {
         let recorder = KeyboardSourceRecorder()
         let service = AppleKeyboardInputSourceService(

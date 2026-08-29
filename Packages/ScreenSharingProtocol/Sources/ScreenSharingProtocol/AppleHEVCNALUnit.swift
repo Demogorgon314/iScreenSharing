@@ -1,13 +1,14 @@
 import Foundation
 
-enum AppleHEVCNALUnit {
-    static let videoParameterSetType: UInt8 = 32
-    static let sequenceParameterSetType: UInt8 = 33
-    static let pictureParameterSetType: UInt8 = 34
-    static let aggregationType: UInt8 = 48
-    static let fragmentationType: UInt8 = 49
+/// Parsing and reassembly for Apple's HEVC RTP payload forms.
+public enum AppleHEVCNALUnit {
+    public static let videoParameterSetType: UInt8 = 32
+    public static let sequenceParameterSetType: UInt8 = 33
+    public static let pictureParameterSetType: UInt8 = 34
+    public static let aggregationType: UInt8 = 48
+    public static let fragmentationType: UInt8 = 49
 
-    static func type(of data: Data) -> UInt8? {
+    public static func type(of data: Data) -> UInt8? {
         guard data.count >= 2 else { return nil }
         return (data[0] >> 1) & 0x3f
     }
@@ -15,7 +16,7 @@ enum AppleHEVCNALUnit {
     /// Matches VideoPacketBuffer's start-of-frame flag. Single NAL and
     /// aggregation packets start a frame; an FU packet only starts one when
     /// its fragmentation header carries the S bit.
-    static func startsAccessUnit(_ payload: Data) -> Bool {
+    public static func startsAccessUnit(_ payload: Data) -> Bool {
         guard let type = type(of: payload) else { return false }
         if type == fragmentationType {
             guard payload.count >= 5 else { return false }
@@ -28,7 +29,7 @@ enum AppleHEVCNALUnit {
     /// results that can start a high-performance bandwidth probe. Every HEVC
     /// fragmentation packet qualifies, including continuation fragments; the
     /// private frame-header signature is the other unambiguous wire form.
-    static func startsBandwidthProbe(_ payload: Data) -> Bool {
+    public static func startsBandwidthProbe(_ payload: Data) -> Bool {
         guard payload.count >= 4 else { return false }
         if payload.starts(with: [0x92, 0xe6, 0xc0, 0xa3]) {
             return true
@@ -36,7 +37,7 @@ enum AppleHEVCNALUnit {
         return type(of: payload) == fragmentationType
     }
 
-    static func reassemble(_ payloads: [Data]) -> [Data] {
+    public static func reassemble(_ payloads: [Data]) -> [Data] {
         var units = [Data]()
         var fragmented = Data()
         var fragmentIsActive = false
@@ -83,28 +84,31 @@ enum AppleHEVCNALUnit {
         return units
     }
 
+    public static func firstDecodingOrderNumber(in payloads: [Data]) -> UInt16? {
+        for payload in payloads {
+            guard let type = type(of: payload) else { continue }
+            let offset = type == fragmentationType ? 3 : 2
+            guard let value = BigEndianWire.uint16(from: payload, at: offset) else { continue }
+            return value
+        }
+        return nil
+    }
+
     private static func aggregationUnits(in payload: Data) -> [Data]? {
         var offset = 4
         var result = [Data]()
         while offset < payload.count {
             guard payload.count - offset >= 2,
-                  let length = try? Int(payload.uint16BE(at: offset)),
-                  length > 0 else { return nil }
+                  let rawLength = BigEndianWire.uint16(from: payload, at: offset) else {
+                return nil
+            }
+            let length = Int(rawLength)
+            guard length > 0 else { return nil }
             offset += 2
             guard length <= payload.count - offset else { return nil }
             result.append(payload.subdata(in: offset..<(offset + length)))
             offset += length
         }
         return result.isEmpty ? nil : result
-    }
-
-    static func firstDecodingOrderNumber(in payloads: [Data]) -> UInt16? {
-        for payload in payloads {
-            guard let type = type(of: payload) else { continue }
-            let offset = type == fragmentationType ? 3 : 2
-            guard let value = try? payload.uint16BE(at: offset) else { continue }
-            return value
-        }
-        return nil
     }
 }

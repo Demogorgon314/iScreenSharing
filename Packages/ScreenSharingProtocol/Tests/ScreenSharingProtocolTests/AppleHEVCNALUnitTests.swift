@@ -1,38 +1,21 @@
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleHEVCNALUnitTests: XCTestCase {
     func testClassifiesNativeAccessUnitStartPackets() {
-        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(
-            Data([0x42, 0x01, 0, 1])
-        ))
-        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(
-            Data([0x60, 0x01, 0, 1])
-        ))
-        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(
-            Data([0x62, 0x01, 0x81, 0, 1])
-        ))
-        XCTAssertFalse(AppleHEVCNALUnit.startsAccessUnit(
-            Data([0x62, 0x01, 0x01, 0, 1])
-        ))
-        XCTAssertFalse(AppleHEVCNALUnit.startsAccessUnit(
-            Data([0x62, 0x01, 0x81, 0])
-        ))
+        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(Data([0x42, 0x01, 0, 1])))
+        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(Data([0x60, 0x01, 0, 1])))
+        XCTAssertTrue(AppleHEVCNALUnit.startsAccessUnit(Data([0x62, 0x01, 0x81, 0, 1])))
+        XCTAssertFalse(AppleHEVCNALUnit.startsAccessUnit(Data([0x62, 0x01, 0x01, 0, 1])))
+        XCTAssertFalse(AppleHEVCNALUnit.startsAccessUnit(Data([0x62, 0x01, 0x81, 0])))
     }
 
     func testClassifiesNativeBandwidthProbeStartPackets() {
-        XCTAssertTrue(AppleHEVCNALUnit.startsBandwidthProbe(
-            Data([0x62, 0x01, 0x01, 0x00])
-        ))
-        XCTAssertTrue(AppleHEVCNALUnit.startsBandwidthProbe(
-            Data([0x92, 0xe6, 0xc0, 0xa3])
-        ))
-        XCTAssertFalse(AppleHEVCNALUnit.startsBandwidthProbe(
-            Data([0x26, 0x01, 0x00, 0x01])
-        ))
-        XCTAssertFalse(AppleHEVCNALUnit.startsBandwidthProbe(
-            Data([0x62, 0x01, 0x01])
-        ))
+        XCTAssertTrue(AppleHEVCNALUnit.startsBandwidthProbe(Data([0x62, 0x01, 0x01, 0x00])))
+        XCTAssertTrue(AppleHEVCNALUnit.startsBandwidthProbe(Data([0x92, 0xe6, 0xc0, 0xa3])))
+        XCTAssertFalse(AppleHEVCNALUnit.startsBandwidthProbe(Data([0x26, 0x01, 0x00, 0x01])))
+        XCTAssertFalse(AppleHEVCNALUnit.startsBandwidthProbe(Data([0x62, 0x01, 0x01])))
     }
 
     func testExtractsAggregationPacketUnits() {
@@ -55,6 +38,15 @@ final class AppleHEVCNALUnitTests: XCTestCase {
         XCTAssertEqual(
             AppleHEVCNALUnit.reassemble([start, middle, end]),
             [Data([0x26, 0x01, 0xaa, 0xbb, 0xcc, 0xdd])]
+        )
+    }
+
+    func testCompletesSingleFragmentMarkedAsStartAndEnd() {
+        let fragment = Data([0x62, 0x01, 0xd3, 0x12, 0x34, 0xaa])
+
+        XCTAssertEqual(
+            AppleHEVCNALUnit.reassemble([fragment]),
+            [Data([0x26, 0x01, 0xaa])]
         )
     }
 
@@ -88,5 +80,28 @@ final class AppleHEVCNALUnitTests: XCTestCase {
 
         XCTAssertTrue(AppleHEVCNALUnit.reassemble([truncatedUnit]).isEmpty)
         XCTAssertTrue(AppleHEVCNALUnit.reassemble([overrunUnit]).isEmpty)
+    }
+
+    func testFindsFirstDecodingOrderNumberUsingPayloadSpecificOffset() {
+        XCTAssertEqual(
+            AppleHEVCNALUnit.firstDecodingOrderNumber(
+                in: [Data([0x42, 0x01, 0x12, 0x34])]
+            ),
+            0x1234
+        )
+        XCTAssertEqual(
+            AppleHEVCNALUnit.firstDecodingOrderNumber(
+                in: [Data([0x62, 0x01, 0x93, 0xab, 0xcd])]
+            ),
+            0xabcd
+        )
+        XCTAssertNil(AppleHEVCNALUnit.firstDecodingOrderNumber(in: [Data([0x42])]))
+    }
+}
+
+private extension Data {
+    mutating func appendUInt16BE(_ value: UInt16) {
+        append(UInt8(truncatingIfNeeded: value >> 8))
+        append(UInt8(truncatingIfNeeded: value))
     }
 }

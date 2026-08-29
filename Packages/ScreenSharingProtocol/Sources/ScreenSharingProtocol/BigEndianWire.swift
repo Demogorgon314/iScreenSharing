@@ -22,4 +22,9 @@ enum BigEndianWire {
         data.append(UInt8(truncatingIfNeeded: value >> 8))
         data.append(UInt8(truncatingIfNeeded: value))
     }
+
+    static func append(_ value: UInt16, to data: inout Data) {
+        data.append(UInt8(truncatingIfNeeded: value >> 8))
+        data.append(UInt8(truncatingIfNeeded: value))
+    }
 }

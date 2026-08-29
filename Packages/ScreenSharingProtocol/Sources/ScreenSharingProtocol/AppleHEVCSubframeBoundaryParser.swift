@@ -5,8 +5,8 @@ import Foundation
 /// (24G720); the parser itself uses no private API.
 /// A malformed or unsupported suffix is deliberately reported as unknown so
 /// callers can retain their sequence-advance fallback.
-struct AppleHEVCSubframeBoundaryParser: Sendable {
-    enum Boundary: Equatable, Sendable {
+public struct AppleHEVCSubframeBoundaryParser: Sendable {
+    public enum Boundary: Equatable, Sendable {
         case notLast
         case last
         case unknown
@@ -14,7 +14,7 @@ struct AppleHEVCSubframeBoundaryParser: Sendable {
 
     private let endOfDataBit: UInt8
 
-    init?(negotiationDetails: String) {
+    public init?(negotiationDetails: String) {
         let fields = negotiationDetails.split(separator: ";")
         guard fields.contains("FLS"),
               let endOfData = fields.first(where: { $0.hasPrefix("EOD:") }),
@@ -25,7 +25,7 @@ struct AppleHEVCSubframeBoundaryParser: Sendable {
         endOfDataBit = bit
     }
 
-    func classify(nalUnits: [Data]) -> Boundary {
+    public func classify(nalUnits: [Data]) -> Boundary {
         guard let unit = nalUnits.last(where: Self.isVCLNALUnit),
               let controlByte = Self.flsControlByte(in: unit) else {
             return .unknown
