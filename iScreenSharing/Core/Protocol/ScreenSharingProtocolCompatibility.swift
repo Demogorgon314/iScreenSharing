@@ -1,13 +1,6 @@
 import ScreenSharingProtocol
 
 // Keep existing App-facing names stable while protocol ownership moves into the package.
-typealias AppleFileTransferRequest = ScreenSharingProtocol.AppleFileTransferRequest
-typealias AppleFileCopyFrame = ScreenSharingProtocol.AppleFileCopyFrame
-typealias AppleFileTransferResponse = ScreenSharingProtocol.AppleFileTransferResponse
-typealias AppleFileTransferMessage = ScreenSharingProtocol.AppleFileTransferMessage
-typealias AppleFileCopyToolOutput = ScreenSharingProtocol.AppleFileCopyToolOutput
-typealias AppleFileCopyToolMessageParser = ScreenSharingProtocol.AppleFileCopyToolMessageParser
-typealias AppleFileTransferError = ScreenSharingProtocol.AppleFileTransferError
 typealias AppleClipboardArchive = ScreenSharingProtocol.AppleClipboardArchive
 typealias AppleClipboardItem = ScreenSharingProtocol.AppleClipboardItem
 typealias AppleClipboardFlavor = ScreenSharingProtocol.AppleClipboardFlavor

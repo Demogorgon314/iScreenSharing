@@ -1,4 +1,11 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleFileCopyToolOutput
+import enum ScreenSharingProtocol.AppleFileTransferError
+import enum ScreenSharingProtocol.AppleFileTransferMessage
+import enum ScreenSharingProtocol.AppleFileTransferResponse
+import struct ScreenSharingProtocol.AppleFileCopyFrame
+import struct ScreenSharingProtocol.AppleFileCopyToolMessageParser
+import struct ScreenSharingProtocol.AppleFileTransferRequest
 
 enum AppleFileTransferState: Equatable, Sendable {
     case waitingForRemote

@@ -1,3 +1,4 @@
+import enum ScreenSharingProtocol.AppleFileTransferMessage
 import XCTest
 @testable import iScreenSharing
 

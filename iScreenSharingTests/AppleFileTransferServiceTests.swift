@@ -1,4 +1,7 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleFileCopyToolOutput
+import enum ScreenSharingProtocol.AppleFileTransferError
+import enum ScreenSharingProtocol.AppleFileTransferMessage
 import XCTest
 @testable import iScreenSharing
 
