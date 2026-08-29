@@ -16,11 +16,35 @@ final class StandardRFBProtocolTests: XCTestCase {
         )
     }
 
-    func testPrefersCopyRectangleThenZlibAndAdvertisesFallbacks() {
+    func testLowBandwidthKeepsServerCompatible32BitPixelFormat() {
         XCTAssertEqual(
-            StandardRFBMessages.setEncodings,
+            StandardRFBMessages.setPixelFormat(.forQuality(.lowBandwidth)),
+            Data([
+                0, 0, 0, 0,
+                32, 24, 0, 1,
+                0, 255, 0, 255, 0, 255,
+                16, 8, 0, 0, 0, 0,
+            ])
+        )
+    }
+
+    func testBuildsQualitySpecificEncodingPreferences() {
+        XCTAssertEqual(
+            StandardRFBMessages.setEncodings(for: .high),
             Data([
                 2, 0, 0, 5,
+                0, 0, 0, 1,
+                0, 0, 0, 6,
+                0, 0, 0, 0,
+                0, 0, 0, 5,
+                0xff, 0xff, 0xff, 0x21,
+            ])
+        )
+        XCTAssertEqual(
+            StandardRFBMessages.setEncodings(for: .lowBandwidth),
+            Data([
+                2, 0, 0, 6,
+                0, 0, 3, 0xe8,
                 0, 0, 0, 1,
                 0, 0, 0, 6,
                 0, 0, 0, 0,
@@ -86,31 +110,64 @@ final class StandardRFBProtocolTests: XCTestCase {
             Data([0, 0, 255, 255])
         )
         XCTAssertEqual(
-            try StandardRFBPixelFormat.forQuality(.lowBandwidth).decodeBGRA(
-                Data([0x1c]),
-                pixelCount: 1
-            ),
-            Data([0, 255, 0, 255])
-        )
-        XCTAssertEqual(
             try StandardRFBPixelFormat.forQuality(.balanced).decodeBGRA(
                 Data([0x10, 0x84]),
                 pixelCount: 1
             ),
             Data([132, 130, 132, 255])
         )
-        XCTAssertEqual(
-            try StandardRFBPixelFormat.forQuality(.lowBandwidth).decodeBGRA(
-                Data([0x92]),
-                pixelCount: 1
-            ),
-            Data([170, 146, 146, 255])
-        )
         XCTAssertThrowsError(
             try StandardRFBPixelFormat.forQuality(.balanced).decodeBGRA(
                 Data([0]),
                 pixelCount: 1
             )
+        )
+    }
+
+    func testDecodesHalftoneRowsMSBFirstWithByteAlignedPadding() throws {
+        var framebuffer = Data(repeating: 0xaa, count: 96)
+        try framebuffer.withUnsafeMutableBytes { destination in
+            try StandardRFBHalftoneDecoder.decode(
+                Data([0b1010_0001, 0b1100_0000, 0b0101_1110, 0b0000_0000]),
+                width: 10,
+                height: 2,
+                into: destination,
+                destinationOffset: 8,
+                destinationBytesPerRow: 48
+            )
+        }
+
+        XCTAssertEqual(Array(framebuffer[8..<48]), [
+            255, 255, 255, 255, 0, 0, 0, 255,
+            255, 255, 255, 255, 0, 0, 0, 255,
+            0, 0, 0, 255, 0, 0, 0, 255,
+            0, 0, 0, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255,
+        ])
+        XCTAssertEqual(Array(framebuffer[56..<96]), [
+            0, 0, 0, 255, 255, 255, 255, 255,
+            0, 0, 0, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 255, 255, 255, 255,
+            255, 255, 255, 255, 0, 0, 0, 255,
+            0, 0, 0, 255, 0, 0, 0, 255,
+        ])
+        XCTAssertEqual(Array(framebuffer[0..<8]), Array(repeating: 0xaa, count: 8))
+        XCTAssertEqual(Array(framebuffer[48..<56]), Array(repeating: 0xaa, count: 8))
+    }
+
+    func testRejectsMalformedHalftonePayload() {
+        var framebuffer = Data(count: 8)
+        XCTAssertThrowsError(
+            try framebuffer.withUnsafeMutableBytes { destination in
+                try StandardRFBHalftoneDecoder.decode(
+                    Data([0x80]),
+                    width: 9,
+                    height: 1,
+                    into: destination,
+                    destinationOffset: 0,
+                    destinationBytesPerRow: 36
+                )
+            }
         )
     }
 
@@ -306,6 +363,52 @@ final class StandardRFBProtocolTests: XCTestCase {
             1, 2, 3, 0xff,
             4, 5, 6, 0xff,
         ])
+    }
+
+    func testReceivesLowBandwidthHalftoneRectangle() async throws {
+        let update = Data([
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 3, 0xe8,
+            0, 0, 0, 9,
+            120, 156, 106, 0, 0, 0, 0, 255, 255,
+        ])
+        let transport = StandardRFBTestTransport(receiveData: update)
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .lowBandwidth)
+        session.install(videoStream: stream)
+
+        stream.start()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while stream.decodedFrameCount == 0, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        stream.close()
+
+        XCTAssertEqual(stream.decodedFrameCount, 1)
+        let pixelBuffer = try XCTUnwrap(
+            stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
+        )
+        XCTAssertEqual(Self.bytes(from: pixelBuffer), [
+            255, 255, 255, 255,
+            0, 0, 0, 255,
+        ])
+        XCTAssertEqual(transport.sentMessages[1], StandardRFBMessages.setEncodings(for: .lowBandwidth))
     }
 
     func testAppliesOverlappingCopyRectangleFromPreviousFramebuffer() async throws {

@@ -3,15 +3,6 @@ import Foundation
 import zlib
 
 struct StandardRFBPixelFormat: Equatable, Sendable {
-    private static let rgb332ToBGRA = makeConversionTable(
-        redMaximum: 7,
-        greenMaximum: 7,
-        blueMaximum: 3,
-        redShift: 5,
-        greenShift: 2,
-        blueShift: 0
-    )
-
     let bitsPerPixel: UInt8
     let depth: UInt8
     let redMaximum: UInt16
@@ -35,7 +26,7 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
 
     static func forQuality(_ quality: StandardRFBQuality) -> Self {
         switch quality {
-        case .high:
+        case .high, .lowBandwidth:
             Self(
                 bitsPerPixel: 32, depth: 24,
                 redMaximum: 255, greenMaximum: 255, blueMaximum: 255,
@@ -46,12 +37,6 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
                 bitsPerPixel: 16, depth: 16,
                 redMaximum: 31, greenMaximum: 63, blueMaximum: 31,
                 redShift: 11, greenShift: 5, blueShift: 0
-            )
-        case .lowBandwidth:
-            Self(
-                bitsPerPixel: 8, depth: 8,
-                redMaximum: 7, greenMaximum: 7, blueMaximum: 3,
-                redShift: 5, greenShift: 2, blueShift: 0
             )
         }
     }
@@ -144,15 +129,6 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
                     }
                     continue
                 }
-                let destinationWords = destinationRow.assumingMemoryBound(to: UInt32.self)
-                if isRGB332 {
-                    for column in 0..<width {
-                        destinationWords[column] = Self.rgb332ToBGRA[
-                            Int(source[sourcePixelOffset + column])
-                        ]
-                    }
-                    continue
-                }
                 let destinationBytes = destinationRow.assumingMemoryBound(to: UInt8.self)
                 for column in 0..<width {
                     let sourceIndex = sourcePixelOffset + column
@@ -203,40 +179,83 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
             && blueShift == 0
     }
 
-    private var isRGB332: Bool {
-        bitsPerPixel == 8
-            && redMaximum == 7
-            && greenMaximum == 7
-            && blueMaximum == 3
-            && redShift == 5
-            && greenShift == 2
-            && blueShift == 0
+}
+
+enum StandardRFBHalftoneDecoder {
+    static func packedByteCount(width: Int, height: Int) throws -> Int {
+        guard width > 0, height > 0 else { throw StandardRFBError.invalidRectangle }
+        let (paddedWidth, paddingOverflow) = width.addingReportingOverflow(7)
+        guard !paddingOverflow else { throw StandardRFBError.invalidRectangle }
+        let packedBytesPerRow = paddedWidth / 8
+        let (byteCount, sizeOverflow) = packedBytesPerRow.multipliedReportingOverflow(by: height)
+        guard !sizeOverflow else { throw StandardRFBError.invalidRectangle }
+        return byteCount
     }
 
-    private static func makeConversionTable(
-        redMaximum: UInt16,
-        greenMaximum: UInt16,
-        blueMaximum: UInt16,
-        redShift: UInt8,
-        greenShift: UInt8,
-        blueShift: UInt8
-    ) -> [UInt32] {
-        let entryCount = 1 << (Int(redShift) + redMaximum.nonzeroBitCount)
-        return (0..<entryCount).map { value in
-            let value = UInt32(value)
-            let red = UInt32(expand(
-                (value >> UInt32(redShift)) & UInt32(redMaximum),
-                maximum: redMaximum
-            ))
-            let green = UInt32(expand(
-                (value >> UInt32(greenShift)) & UInt32(greenMaximum),
-                maximum: greenMaximum
-            ))
-            let blue = UInt32(expand(
-                (value >> UInt32(blueShift)) & UInt32(blueMaximum),
-                maximum: blueMaximum
-            ))
-            return blue | green << 8 | red << 16 | 0xff << 24
+    static func decode(
+        _ source: Data,
+        width: Int,
+        height: Int,
+        into destination: UnsafeMutableRawBufferPointer,
+        destinationOffset: Int,
+        destinationBytesPerRow: Int
+    ) throws {
+        let packedBytesPerRow = try packedByteCount(width: width, height: 1)
+        let expectedByteCount = try packedByteCount(width: width, height: height)
+        guard source.count == expectedByteCount,
+              destinationOffset >= 0,
+              destinationBytesPerRow >= width * 4 else {
+            throw StandardRFBError.invalidRectangle
+        }
+        let requiredBytes = destinationOffset + (height - 1) * destinationBytesPerRow + width * 4
+        guard requiredBytes <= destination.count,
+              let destinationBase = destination.baseAddress else {
+            throw StandardRFBError.invalidRectangle
+        }
+        let (pixelCount, pixelCountOverflow) = width.multipliedReportingOverflow(by: height)
+        guard !pixelCountOverflow else { throw StandardRFBError.invalidRectangle }
+        var grayscale = Data(count: pixelCount)
+        try source.withUnsafeBytes { sourceBytes in
+            try grayscale.withUnsafeMutableBytes { grayscaleBytes in
+                guard let sourceBase = sourceBytes.baseAddress,
+                      let grayscaleBase = grayscaleBytes.baseAddress else {
+                    throw StandardRFBError.invalidRectangle
+                }
+                var sourceBuffer = vImage_Buffer(
+                    data: UnsafeMutableRawPointer(mutating: sourceBase),
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: packedBytesPerRow
+                )
+                var grayscaleBuffer = vImage_Buffer(
+                    data: grayscaleBase,
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: width
+                )
+                var destinationBuffer = vImage_Buffer(
+                    data: destinationBase.advanced(by: destinationOffset),
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: destinationBytesPerRow
+                )
+                let flags = vImage_Flags(kvImageNoFlags)
+                guard vImageConvert_Planar1toPlanar8(
+                    &sourceBuffer,
+                    &grayscaleBuffer,
+                    flags
+                ) == kvImageNoError,
+                    vImageConvert_Planar8ToBGRX8888(
+                        &grayscaleBuffer,
+                        &grayscaleBuffer,
+                        &grayscaleBuffer,
+                        255,
+                        &destinationBuffer,
+                        flags
+                    ) == kvImageNoError else {
+                    throw StandardRFBError.invalidRectangle
+                }
+            }
         }
     }
 }
@@ -369,6 +388,7 @@ enum StandardRFBMessages {
     static let copyRectangleEncoding: Int32 = 1
     static let hextileEncoding: Int32 = 5
     static let zlibEncoding: Int32 = 6
+    static let subZlibHalftoneEncoding: Int32 = 1_000
     static let desktopSizeEncoding: Int32 = -223
 
     static let clientInit = Data([1])
@@ -377,13 +397,14 @@ enum StandardRFBMessages {
         Data([0, 0, 0, 0]) + format.wireData
     }
 
-    static let setEncodings: Data = try! AppleRFBMessages.setEncodings([
-        copyRectangleEncoding,
-        zlibEncoding,
-        rawEncoding,
-        hextileEncoding,
-        desktopSizeEncoding,
-    ])
+    static func setEncodings(for quality: StandardRFBQuality) -> Data {
+        var encodings = [copyRectangleEncoding, zlibEncoding, rawEncoding, hextileEncoding]
+        if quality == .lowBandwidth {
+            encodings.insert(subZlibHalftoneEncoding, at: 0)
+        }
+        encodings.append(desktopSizeEncoding)
+        return try! AppleRFBMessages.setEncodings(encodings)
+    }
 
     static func keyEvent(isDown: Bool, symbol: UInt32) -> Data {
         var data = Data([4, isDown ? 1 : 0, 0, 0])

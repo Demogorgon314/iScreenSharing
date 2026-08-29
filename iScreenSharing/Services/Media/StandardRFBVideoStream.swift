@@ -10,8 +10,10 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     )
 
     private weak var session: RFBAuthenticatedSession?
+    private let quality: StandardRFBQuality
     private let pixelFormat: StandardRFBPixelFormat
     private let zlibDecoder: StandardRFBZlibDecoder
+    private let halftoneZlibDecoder: StandardRFBZlibDecoder
     private let lifecycleLock = NSLock()
     private var receiveTask: Task<Void, Never>?
     private var framebuffer: Data
@@ -28,6 +30,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         var rawRectangles = 0
         var copyRectangles = 0
         var zlibRectangles = 0
+        var halftoneRectangles = 0
         var hextileRectangles = 0
         var sourceBytes = 0
         var pixels = 0
@@ -39,8 +42,10 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
 
     init(session: RFBAuthenticatedSession, quality: StandardRFBQuality) throws {
         self.session = session
+        self.quality = quality
         pixelFormat = .forQuality(quality)
         zlibDecoder = try StandardRFBZlibDecoder()
+        halftoneZlibDecoder = try StandardRFBZlibDecoder()
         let canvas = AppleCanvas(
             width: Int(session.serverInfo.width),
             height: Int(session.serverInfo.height),
@@ -89,7 +94,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         do {
             try await session.sendStandard([
                 StandardRFBMessages.setPixelFormat(pixelFormat),
-                StandardRFBMessages.setEncodings,
+                StandardRFBMessages.setEncodings(for: quality),
                 AppleRFBMessages.framebufferUpdateRequest(
                     width: session.serverInfo.width,
                     height: session.serverInfo.height
@@ -101,6 +106,9 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         } catch is CancellationError {
             return
         } catch {
+            Self.logger.error(
+                "Standard stream failed quality=\(self.quality.rawValue, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+            )
             publishState(.failed(error.localizedDescription))
         }
     }
@@ -210,6 +218,36 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
                 processingMetrics.applyDuration += applyDuration
                 initialCoverage.mark(x: x, y: y, width: width, height: height)
                 didChange = true
+            case StandardRFBMessages.subZlibHalftoneEncoding:
+                let expectedSize = try StandardRFBHalftoneDecoder.packedByteCount(
+                    width: width,
+                    height: height
+                )
+                let compressedLength = Int(
+                    try await receiveStandardBytes(4, from: session).uint32BE(at: 0)
+                )
+                guard compressedLength > 0,
+                      compressedLength <= Self.maximumFramebufferBytes else {
+                    throw StandardRFBError.framebufferTooLarge
+                }
+                let compressed = try await receiveStandardBytes(compressedLength, from: session)
+                let inflateStartedAt = ProcessInfo.processInfo.systemUptime
+                let payload = try halftoneZlibDecoder.decode(
+                    compressed,
+                    expectedSize: expectedSize
+                )
+                let inflateDuration = ProcessInfo.processInfo.systemUptime - inflateStartedAt
+                let applyStartedAt = ProcessInfo.processInfo.systemUptime
+                try applyHalftoneRectangle(payload, x: x, y: y, width: width, height: height)
+                let applyDuration = ProcessInfo.processInfo.systemUptime - applyStartedAt
+                processingDuration += inflateDuration + applyDuration
+                processingMetrics.halftoneRectangles += 1
+                processingMetrics.sourceBytes += compressed.count
+                processingMetrics.pixels += try Self.checkedPixelCount(width: width, height: height)
+                processingMetrics.inflateDuration += inflateDuration
+                processingMetrics.applyDuration += applyDuration
+                initialCoverage.mark(x: x, y: y, width: width, height: height)
+                didChange = true
             case StandardRFBMessages.hextileEncoding:
                 let startedAt = ProcessInfo.processInfo.systemUptime
                 let pixels = try await StandardRFBHextileDecoder.decode(
@@ -297,6 +335,31 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
                     destinationBytesPerRow: destinationBytesPerRow
                 )
             }
+        }
+    }
+
+    private func applyHalftoneRectangle(
+        _ payload: Data,
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int
+    ) throws {
+        guard x >= 0, y >= 0, width > 0, height > 0,
+              x + width <= framebufferCanvas.width,
+              y + height <= framebufferCanvas.height else {
+            throw StandardRFBError.invalidRectangle
+        }
+        let destinationBytesPerRow = framebufferCanvas.width * 4
+        try framebuffer.withUnsafeMutableBytes { destination in
+            try StandardRFBHalftoneDecoder.decode(
+                payload,
+                width: width,
+                height: height,
+                into: destination,
+                destinationOffset: y * destinationBytesPerRow + x * 4,
+                destinationBytesPerRow: destinationBytesPerRow
+            )
         }
     }
 
@@ -464,7 +527,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         let megapixelsPerSecond = Double(values.pixels) / elapsed / 1_000_000
         let sourceMegabitsPerSecond = Double(values.sourceBytes) * 8 / elapsed / 1_000_000
         Self.logger.notice(
-            "Standard phases updates=\(values.updates) rects=\(values.rawRectangles)/\(values.copyRectangles)/\(values.zlibRectangles)/\(values.hextileRectangles) source=\(sourceMegabitsPerSecond, format: .fixed(precision: 1))Mb/s pixels=\(megapixelsPerSecond, format: .fixed(precision: 1))MP/s inflate=\(values.inflateDuration * 1_000 / updates, format: .fixed(precision: 2))ms apply=\(values.applyDuration * 1_000 / updates, format: .fixed(precision: 2))ms hextile=\(values.hextileDuration * 1_000 / updates, format: .fixed(precision: 2))ms publish=\(values.publishDuration * 1_000 / updates, format: .fixed(precision: 2))ms"
+            "Standard phases updates=\(values.updates) rects=\(values.rawRectangles)/\(values.copyRectangles)/\(values.zlibRectangles)/\(values.halftoneRectangles)/\(values.hextileRectangles) source=\(sourceMegabitsPerSecond, format: .fixed(precision: 1))Mb/s pixels=\(megapixelsPerSecond, format: .fixed(precision: 1))MP/s inflate=\(values.inflateDuration * 1_000 / updates, format: .fixed(precision: 2))ms apply=\(values.applyDuration * 1_000 / updates, format: .fixed(precision: 2))ms hextile=\(values.hextileDuration * 1_000 / updates, format: .fixed(precision: 2))ms publish=\(values.publishDuration * 1_000 / updates, format: .fixed(precision: 2))ms"
         )
         processingMetrics = ProcessingMetrics()
     }

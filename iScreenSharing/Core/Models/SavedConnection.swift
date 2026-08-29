@@ -59,7 +59,7 @@ enum StandardRFBQuality: String, Codable, CaseIterable, Sendable {
         switch self {
         case .high: "High (32-bit color)"
         case .balanced: "Balanced (16-bit color)"
-        case .lowBandwidth: "Low Bandwidth (8-bit color)"
+        case .lowBandwidth: "Low Bandwidth (monochrome)"
         }
     }
 }

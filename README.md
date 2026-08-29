@@ -14,8 +14,9 @@ vendor extension.
 
 ## Current features
 
-- Standard Screen Sharing with selectable 32-bit, 16-bit, or 8-bit color
-  quality; persistent-stream Zlib, Hextile, Raw, and CopyRect decoding,
+- Standard Screen Sharing with selectable 32-bit, 16-bit, or monochrome
+  low-bandwidth quality; persistent-stream Apple SubZlib Halftone, standard
+  Zlib, Hextile, Raw, and CopyRect decoding,
   dynamic server framebuffer size,
   standard keyboard/pointer input, and the existing BGRA Metal presentation
   path. Standard-mode clipboard, audio, file transfer, and client-requested
