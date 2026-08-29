@@ -3,6 +3,7 @@ import CoreVideo
 import Foundation
 import OSLog
 import QuartzCore
+import enum ScreenSharingProtocol.AppleHEVCNALUnit
 import enum ScreenSharingProtocol.AppleMediaOffer
 import VideoToolbox
 

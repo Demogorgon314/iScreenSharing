@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.AppleHEVCSubframeBoundaryParser
 
 /// Coalesces the tiles that the sender assigned to one logical video frame.
 /// The sender may update any sparse subset of tiles, so neither tile count nor
