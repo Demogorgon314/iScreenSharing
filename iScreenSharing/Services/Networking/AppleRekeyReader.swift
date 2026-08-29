@@ -12,7 +12,7 @@ struct AppleRekeyReader {
                     return rekey
                 }
             default:
-                throw AppleRekeyError.unsupportedFramebufferMessage(messageType)
+                throw AppleRekeyReaderError.unsupportedFramebufferMessage(messageType)
             }
         }
     }
@@ -36,10 +36,23 @@ struct AppleRekeyReader {
                 )
                 _ = try await session.receiveExactly(length)
             default:
-                throw AppleRekeyError.unsupportedEncoding(encoding)
+                throw AppleRekeyReaderError.unsupportedEncoding(encoding)
             }
         }
         return nil
     }
 }
 
+enum AppleRekeyReaderError: LocalizedError, Equatable {
+    case unsupportedFramebufferMessage(UInt8)
+    case unsupportedEncoding(Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedFramebufferMessage:
+            "The Mac returned an unexpected message before encryption was enabled."
+        case .unsupportedEncoding:
+            "The Mac returned an unsupported setup encoding."
+        }
+    }
+}

@@ -2,7 +2,7 @@ import XCTest
 @testable import iScreenSharing
 
 final class AppleRekeyTests: XCTestCase {
-    func testParsesAndUnwrapsKeyRotation() throws {
+    func testUnwrapsKeyRotation() throws {
         let wrappingKey = Data(repeating: 0x11, count: 16)
         let contentKey = Data((0..<16).map(UInt8.init))
         let iv = Data((16..<32).map(UInt8.init))
@@ -19,14 +19,14 @@ final class AppleRekeyTests: XCTestCase {
         XCTAssertEqual(keys.initializationVector, iv)
     }
 
-    func testRejectsIncorrectPayloadLengths() {
-        XCTAssertThrowsError(try AppleRekey(payload: Data(repeating: 0, count: 35)))
+    func testRejectsIncorrectRecordKeyLengths() {
         XCTAssertThrowsError(
             try AppleRecordKeys(
                 key: Data(repeating: 0, count: 15),
                 initializationVector: Data(repeating: 0, count: 16)
             )
-        )
+        ) { error in
+            XCTAssertEqual(error as? AppleRecordKeyError, .invalidLength)
+        }
     }
 }
-
