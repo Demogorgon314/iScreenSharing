@@ -17,7 +17,8 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
 
         let session = try await RFBAuthenticationService().connect(
             to: ConnectionEndpoint(host),
-            credentials: ScreenSharingCredentials(username: username, password: password)
+            credentials: ScreenSharingCredentials(username: username, password: password),
+            sharingType: .highPerformance
         )
         defer { session.close() }
 

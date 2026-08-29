@@ -92,7 +92,7 @@ actor AppleInputController {
         displayID: UInt32?,
         clickCount: Int
     ) async -> Bool {
-        guard isControlling, let session, let recordLayer = session.recordLayer, !isClosed else {
+        guard isControlling, let session, !isClosed else {
             return false
         }
         let point = Self.clampedPoint(
@@ -101,6 +101,16 @@ actor AppleInputController {
             canvas: displayID == nil ? canvas : nil
         )
         do {
+            if session.sharingType == .standard {
+                try await session.sendStandard(StandardRFBMessages.pointerEvent(
+                    buttons: Self.standardButtonMask(buttons),
+                    x: point.x,
+                    y: point.y
+                ))
+                sentEventCount += 1
+                return true
+            }
+            guard let recordLayer = session.recordLayer else { return false }
             var messages = [Data]()
             if let selectionMessage = displaySelection.message(for: displayID) {
                 messages.append(selectionMessage)
@@ -156,6 +166,16 @@ actor AppleInputController {
         displayID: UInt32? = nil
     ) async {
         guard isControlling, let session, !isClosed else { return }
+        if session.sharingType == .standard {
+            await scroll(
+                verticalTicks: Int(event.deltaY),
+                horizontalTicks: Int(event.deltaX),
+                x: x,
+                y: y,
+                displayID: displayID
+            )
+            return
+        }
         let point = Self.clampedPoint(
             x: x,
             y: y,
@@ -187,8 +207,18 @@ actor AppleInputController {
         }
     }
 
+    private static func standardButtonMask(_ appleMask: UInt8) -> UInt8 {
+        let rightPressed = appleMask & rightButton != 0
+        let middlePressed = appleMask & middleButton != 0
+        var standardMask = appleMask & ~(rightButton | middleButton)
+        if rightPressed { standardMask |= 1 << 2 }
+        if middlePressed { standardMask |= 1 << 1 }
+        return standardMask
+    }
+
     func selectDisplay(_ displayID: UInt32?) async {
         guard isControlling, let session, !isClosed,
+              session.sharingType == .highPerformance,
               let message = displaySelection.message(for: displayID) else { return }
         do {
             try await session.sendEncrypted(message)
@@ -206,8 +236,17 @@ actor AppleInputController {
         keyboardType: UInt16 = 0
     ) async {
         guard isControlling, symbol != 0,
-              let session, let recordLayer = session.recordLayer, !isClosed else { return }
+              let session, !isClosed else { return }
         do {
+            if session.sharingType == .standard {
+                try await session.sendStandard(StandardRFBMessages.keyEvent(
+                    isDown: isDown,
+                    symbol: symbol
+                ))
+                sentEventCount += 1
+                return
+            }
+            guard let recordLayer = session.recordLayer else { return }
             let message = try AppleRFBMessages.encryptedKeyEvent(
                 isDown: isDown,
                 keySymbol: symbol,
@@ -292,6 +331,9 @@ actor AppleInputController {
 
     private func sendThrowing(_ message: Data) async throws {
         guard let session, !isClosed else { return }
+        if session.sharingType == .standard {
+            throw AppleInputControllerError.unsupportedInStandardMode
+        }
         try await session.sendEncrypted(message)
         sentEventCount += 1
     }
@@ -310,8 +352,14 @@ actor AppleInputController {
 
 enum AppleInputControllerError: LocalizedError, Equatable {
     case notControlling
+    case unsupportedInStandardMode
 
     var errorDescription: String? {
-        "Remote input is unavailable while observing the shared Mac."
+        switch self {
+        case .notControlling:
+            "Remote input is unavailable while observing the shared Mac."
+        case .unsupportedInStandardMode:
+            "This clipboard command is unavailable in Standard Screen Sharing."
+        }
     }
 }

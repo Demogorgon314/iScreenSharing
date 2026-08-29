@@ -1,21 +1,28 @@
 # iScreenSharing
 
-iScreenSharing is a native macOS client for Apple's proprietary Screen
-Sharing high-performance mode. It targets macOS 15 and implements the Apple RFB
-control channel together with the encrypted HEVC, audio, feedback, input,
-clipboard, and file-transfer protocols used by Screen Sharing.app.
+iScreenSharing is a native macOS client for Apple Screen Sharing. It targets
+macOS 15 and supports both the standard RFB framebuffer path and Apple's
+proprietary high-performance mode, including its encrypted HEVC, audio,
+feedback, input, clipboard, and file-transfer protocols.
 
-This is not a general-purpose VNC raster client. The project is focused on
-interoperability with modern macOS Screen Sharing hosts and on matching the
-observable behavior of Apple's high-performance implementation.
-
-The saved-connection model still contains a `Standard` mode value for data and
-UI compatibility, but that mode is not implemented: authentication currently
-returns an explicit unsupported-mode error. Only `High Performance` is
-operational.
+The project remains focused on interoperability with modern macOS Screen
+Sharing hosts. Standard mode uses the shared Apple RSA authentication path,
+then standard RFB ClientInit, pixel-format, encoding, framebuffer-update, key,
+and pointer messages. It currently supports Hextile with Raw fallback and
+DesktopSize updates. It is not intended to cover every VNC security type or
+vendor extension.
 
 ## Current features
 
+- Standard Screen Sharing with selectable 32-bit color, reduced color,
+  16-level grayscale, or 1-bit black-and-white low-bandwidth quality; persistent-stream
+  Apple SubZlib Halftone, SubZlib16Gray, and SubZlib Thousands, standard Zlib,
+  Hextile, Raw, and
+  CopyRect decoding,
+  dynamic server framebuffer size,
+  standard keyboard/pointer input, and the existing BGRA Metal presentation
+  path. Standard-mode clipboard, audio, file transfer, and client-requested
+  desktop resizing are not currently exposed
 - Apple `RFB 003.889` handshake and authentication, encrypted records,
   rekeying, and session lifecycle
 - High-performance SRTP/SRTCP media transport with four-tile HEVC video streams

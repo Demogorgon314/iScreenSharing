@@ -32,12 +32,19 @@ struct AppleVideoDisplayScheduler {
     }
 
     @discardableResult
-    mutating func enqueue(_ frames: AppleVideoFrameStore.FrameBatch) -> DisplayUpdate? {
+    mutating func enqueue(
+        _ frames: AppleVideoFrameStore.FrameBatch,
+        presentsImmediately: Bool = true
+    ) -> DisplayUpdate? {
         for (tileIndex, frame) in frames {
             guard frame.presentationTime
                     > lastDisplayedPresentationTime[tileIndex, default: -.infinity] else { continue }
             guard frame.sequence > lastEnqueuedSequence[tileIndex, default: 0] else { continue }
             lastEnqueuedSequence[tileIndex] = frame.sequence
+            if !presentsImmediately {
+                queues[tileIndex] = [frame]
+                continue
+            }
             guard queues[tileIndex, default: []].count < queueCapacity else { continue }
             queues[tileIndex, default: []].append(frame)
             queues[tileIndex]?.sort {
@@ -47,7 +54,7 @@ struct AppleVideoDisplayScheduler {
                 return $0.sequence < $1.sequence
             }
         }
-        guard let latestDisplayTargetTimestamp else { return nil }
+        guard presentsImmediately, let latestDisplayTargetTimestamp else { return nil }
         return displayUpdate(
             through: latestDisplayTargetTimestamp,
             trigger: .enqueueUsingPreviousTarget

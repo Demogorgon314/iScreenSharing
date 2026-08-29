@@ -11,6 +11,7 @@ struct ConnectionEditorView: View {
     @State private var serverAddress: String
     @State private var username: String
     @State private var sharingType: ScreenSharingType
+    @State private var standardQuality: StandardRFBQuality
     @State private var virtualDisplayCount: VirtualDisplayCount
     @State private var port: String
     @State private var errorMessage: String?
@@ -27,6 +28,7 @@ struct ConnectionEditorView: View {
         _serverAddress = State(initialValue: Self.serverAddress(for: connection.endpoint))
         _username = State(initialValue: connection.preferredUsername)
         _sharingType = State(initialValue: connection.sharingType)
+        _standardQuality = State(initialValue: connection.standardQuality)
         _virtualDisplayCount = State(initialValue: connection.virtualDisplayCount)
         _port = State(initialValue: String(connection.endpoint.port))
     }
@@ -48,6 +50,12 @@ struct ConnectionEditorView: View {
                     Picker("Display Type", selection: $virtualDisplayCount) {
                         ForEach(VirtualDisplayCount.allCases, id: \.self) { count in
                             Text(count.title).tag(count)
+                        }
+                    }
+                } else {
+                    Picker("Image Quality", selection: $standardQuality) {
+                        ForEach(StandardRFBQuality.allCases, id: \.self) { quality in
+                            Text(quality.title).tag(quality)
                         }
                     }
                 }
@@ -91,6 +99,7 @@ struct ConnectionEditorView: View {
                 endpoint: endpoint,
                 preferredUsername: username,
                 sharingType: sharingType,
+                standardQuality: standardQuality,
                 virtualDisplayCount: virtualDisplayCount
             )
             dismiss()

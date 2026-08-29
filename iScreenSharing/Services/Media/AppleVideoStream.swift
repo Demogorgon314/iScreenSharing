@@ -4,19 +4,8 @@ import Foundation
 import OSLog
 import QuartzCore
 
-final class AppleVideoStream: ObservableObject, @unchecked Sendable {
-    enum State: Equatable {
-        case preparing
-        case streaming
-        case failed(String)
-        case stopped
-    }
-
-    @Published private(set) var state: State = .preparing
-    @Published private(set) var canvas: AppleCanvas
+final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     private var mediaCanvas: AppleCanvas
-    let frames: AppleVideoFrameStore
-    let performance: AppleVideoPerformanceMonitor
 
     private static let maximumCachedUnitsPerSource = 128
     private static let initialBurstSettleTime: TimeInterval = 0.3
@@ -30,7 +19,6 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
 
     private let receiver: any AppleMediaReceiving
-    let displayIndex: Int
     private let mediaStreamIndex: Int
     private let processor: AppleHEVCStreamProcessor
     private let feedback: AppleVideoFeedbackController
@@ -86,16 +74,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
     init(receiver: any AppleMediaReceiving, video: AppleVideoNegotiation) throws {
         self.receiver = receiver
         mediaStreamIndex = video.mediaStreamIndex
-        displayIndex = video.displayIndex
-        canvas = video.canvas
         mediaCanvas = video.canvas
-        frames = AppleVideoFrameStore()
-        performance = AppleVideoPerformanceMonitor(tileCount: video.canvas.tileCount)
-        performance.setSocketReceiveBufferBytes(
-            receiver.videoReceiveBufferConfiguration(
-                mediaStreamIndex: video.mediaStreamIndex
-            )?.actualBytes
-        )
         processor = try AppleHEVCStreamProcessor(keyBlob: video.serverKey)
         let environment = ProcessInfo.processInfo.environment
         rateControlMode = AppleVideoRateControlMode(
@@ -107,13 +86,23 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
             keyBlob: video.viewerKey,
             synchronizationSource: video.synchronizationSource
         )
+        super.init(
+            canvas: video.canvas,
+            displayIndex: video.displayIndex,
+            tileCount: video.canvas.tileCount
+        )
+        performance.setSocketReceiveBufferBytes(
+            receiver.videoReceiveBufferConfiguration(
+                mediaStreamIndex: video.mediaStreamIndex
+            )?.actualBytes
+        )
     }
 
-    var decodedFrameCount: Int {
+    override var decodedFrameCount: Int {
         countLock.withVideoStreamLock { frameCount }
     }
 
-    func setDecoderMode(_ mode: AppleVideoDecoderMode) {
+    override func setDecoderMode(_ mode: AppleVideoDecoderMode) {
         queue.async { [weak self] in
             guard let self else { return }
             let isOpen = self.lifecycleLock.withVideoStreamLock { !self.isClosed }
@@ -216,7 +205,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func start() {
+    override func start() {
         let canStart = lifecycleLock.withVideoStreamLock {
             !isClosed && playbackTimer == nil && rateControlTimer == nil
         }
@@ -263,7 +252,7 @@ final class AppleVideoStream: ObservableObject, @unchecked Sendable {
         }
     }
 
-    func close() {
+    override func close() {
         let timers = lifecycleLock.withVideoStreamLock { () -> (
             DispatchSourceTimer?,
             DispatchSourceTimer?
@@ -915,7 +904,9 @@ struct AppleVideoStreamStarter: AppleVideoStreamStarting {
         guard let receiver = session.mediaReceiver else {
             throw AppleVideoStreamError.missingMediaReceiver
         }
-        let streams = try negotiation.videos.map { try AppleVideoStream(receiver: receiver, video: $0) }
+        let streams: [SessionVideoStream] = try negotiation.videos.map {
+            try AppleVideoStream(receiver: receiver, video: $0)
+        }
         session.install(videoStreams: streams)
         streams.forEach { $0.start() }
     }

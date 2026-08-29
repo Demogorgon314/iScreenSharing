@@ -32,7 +32,11 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    func show(endpoint: ConnectionEndpoint, sessions: SessionManager) {
+    func show(
+        endpoint: ConnectionEndpoint,
+        sessions: SessionManager,
+        connectionStore: ConnectionStore? = nil
+    ) {
         let primaryKey = WindowKey(endpoint: endpoint, displayIndex: 0)
         if let window = windowControllers[primaryKey]?.window {
             window.makeKeyAndOrderFront(nil)
@@ -49,6 +53,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
             controlState: controlState,
+            connectionStore: connectionStore,
             disconnectsSessionOnDisappear: true
         )
         observeDisplayLayout(
@@ -311,6 +316,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         displayLayout: AppleDisplayLayoutModel,
         dynamicResolution: AppleDynamicResolutionModel,
         controlState: AppleSessionControlState,
+        connectionStore: ConnectionStore? = nil,
         disconnectsSessionOnDisappear: Bool
     ) {
         guard let session = sessions.session(for: key.endpoint) else { return }
@@ -319,9 +325,16 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             session: session,
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
-            controlState: controlState
+            controlState: controlState,
+            standardQualityDidChange: { [weak connectionStore] quality in
+                connectionStore?.updateStandardQuality(quality, for: key.endpoint)
+            }
         )
         commandStates[key.endpoint] = commandState
+        let renderer = videoRenderer(
+            for: key.endpoint,
+            displayIndex: key.displayIndex
+        )
         let content = SessionView(
             endpoint: key.endpoint,
             sessions: sessions,
@@ -331,10 +344,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             commandState: commandState,
             displayIndex: key.displayIndex,
             disconnectsSessionOnDisappear: disconnectsSessionOnDisappear,
-            videoRenderer: videoRenderer(
-                for: key.endpoint,
-                displayIndex: key.displayIndex
-            )
+            videoRenderer: renderer
         )
         .frame(minWidth: 800, minHeight: 500)
         let window = NSWindow(
@@ -365,6 +375,16 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         }
         window.delegate = self
         configureSessionWindowChrome(window)
+
+        if session.sharingType == .standard {
+            // A fully transparent window is not composited, so its display link
+            // cannot produce the presentation callback that reveals it. Keep it
+            // imperceptibly visible until Metal confirms the first drawable.
+            window.alphaValue = 0.01
+            renderer.notifyWhenNextFrameIsPresented { [weak window] in
+                window?.alphaValue = 1
+            }
+        }
 
         let controller = NSWindowController(window: window)
         windowControllers[key] = controller

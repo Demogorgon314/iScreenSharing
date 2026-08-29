@@ -43,11 +43,24 @@ final class ConnectionStore: ObservableObject {
     func record(
         _ endpoint: ConnectionEndpoint,
         preferredUsername: String? = nil,
+        standardQuality: StandardRFBQuality? = nil,
         deviceInfo: AppleRemoteDeviceInfo? = nil,
         at date: Date = .now
     ) {
-        Self.record(endpoint, deviceInfo: deviceInfo, at: date, in: &connections)
-        Self.record(endpoint, deviceInfo: deviceInfo, at: date, in: &recentConnections)
+        Self.record(
+            endpoint,
+            standardQuality: standardQuality,
+            deviceInfo: deviceInfo,
+            at: date,
+            in: &connections
+        )
+        Self.record(
+            endpoint,
+            standardQuality: standardQuality,
+            deviceInfo: deviceInfo,
+            at: date,
+            in: &recentConnections
+        )
         if let preferredUsername,
            let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
             connections[index].preferredUsername = preferredUsername
@@ -59,6 +72,17 @@ final class ConnectionStore: ObservableObject {
     func updateDeviceInfo(_ deviceInfo: AppleRemoteDeviceInfo, for endpoint: ConnectionEndpoint) {
         let connectionUpdated = Self.updateDeviceInfo(deviceInfo, for: endpoint, in: &connections)
         let recentUpdated = Self.updateDeviceInfo(deviceInfo, for: endpoint, in: &recentConnections)
+        guard connectionUpdated || recentUpdated else { return }
+        persist()
+    }
+
+    func updateStandardQuality(_ quality: StandardRFBQuality, for endpoint: ConnectionEndpoint) {
+        let connectionUpdated = Self.updateStandardQuality(quality, for: endpoint, in: &connections)
+        let recentUpdated = Self.updateStandardQuality(
+            quality,
+            for: endpoint,
+            in: &recentConnections
+        )
         guard connectionUpdated || recentUpdated else { return }
         persist()
     }
@@ -136,6 +160,7 @@ final class ConnectionStore: ObservableObject {
         endpoint: ConnectionEndpoint,
         preferredUsername: String,
         sharingType: ScreenSharingType,
+        standardQuality: StandardRFBQuality = .high,
         virtualDisplayCount: VirtualDisplayCount
     ) throws {
         guard let index = connections.firstIndex(where: { $0.id == connection.id }) else {
@@ -151,6 +176,7 @@ final class ConnectionStore: ObservableObject {
         connections[index].endpoint = endpoint
         connections[index].preferredUsername = preferredUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         connections[index].sharingType = sharingType
+        connections[index].standardQuality = standardQuality
         connections[index].virtualDisplayCount = virtualDisplayCount
         persist()
     }
@@ -219,6 +245,7 @@ final class ConnectionStore: ObservableObject {
 
     private static func record(
         _ endpoint: ConnectionEndpoint,
+        standardQuality: StandardRFBQuality?,
         deviceInfo: AppleRemoteDeviceInfo?,
         at date: Date,
         in connections: inout [SavedConnection]
@@ -228,10 +255,14 @@ final class ConnectionStore: ObservableObject {
             if let deviceInfo {
                 connections[index].deviceInfo = deviceInfo
             }
+            if let standardQuality {
+                connections[index].standardQuality = standardQuality
+            }
         } else {
             connections.append(SavedConnection(
                 endpoint: endpoint,
                 lastConnectedAt: date,
+                standardQuality: standardQuality ?? .high,
                 deviceInfo: deviceInfo
             ))
         }
@@ -246,6 +277,17 @@ final class ConnectionStore: ObservableObject {
         guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
               connections[index].deviceInfo != deviceInfo else { return false }
         connections[index].deviceInfo = deviceInfo
+        return true
+    }
+
+    private static func updateStandardQuality(
+        _ quality: StandardRFBQuality,
+        for endpoint: ConnectionEndpoint,
+        in connections: inout [SavedConnection]
+    ) -> Bool {
+        guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
+              connections[index].standardQuality != quality else { return false }
+        connections[index].standardQuality = quality
         return true
     }
 

@@ -5,6 +5,7 @@ import SwiftUI
 
 struct RemoteVideoCanvasView: NSViewRepresentable {
     let renderer: AppleVideoRenderer
+    let displayFrameSource: SessionVideoStream
     let canvas: AppleCanvas
     let frames: AppleVideoFrameStore
     let performance: AppleVideoPerformanceMonitor
@@ -14,6 +15,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     let displayScale: AppleVideoDisplayScale
     let stretchesVideoToFillBounds: Bool
     let synchronizesPresentation: Bool
+    let presentsFramesOnlyOnDisplayLink: Bool
     let showsDeveloperHUD: Bool
     let sourceRect: CGRect?
     let inputMapping: AppleDisplayInputMapping?
@@ -25,6 +27,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
             renderer: renderer,
+            displayFrameSource: displayFrameSource,
             canvas: canvas,
             frames: frames,
             input: input,
@@ -33,6 +36,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
             displayScale: displayScale,
             stretchesVideoToFillBounds: stretchesVideoToFillBounds,
             synchronizesPresentation: synchronizesPresentation,
+            presentsFramesOnlyOnDisplayLink: presentsFramesOnlyOnDisplayLink,
             showsDeveloperHUD: showsDeveloperHUD,
             sourceRect: sourceRect,
             inputMapping: inputMapping,
@@ -49,6 +53,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
         view.displayScale = displayScale
         view.stretchesVideoToFillBounds = stretchesVideoToFillBounds
         view.synchronizesPresentation = synchronizesPresentation
+        view.presentsFramesOnlyOnDisplayLink = presentsFramesOnlyOnDisplayLink
         view.showsDeveloperHUD = showsDeveloperHUD
         view.sourceRect = sourceRect
         view.inputMapping = inputMapping
@@ -81,6 +86,12 @@ private final class RemoteVideoCanvasDisplayLinkTarget: NSObject {
 @MainActor
 final class AppleVideoRenderer {
     private var retainedLayer: AppleNV24MetalLayer?
+    private var nextPresentationHandler: (() -> Void)?
+
+    func notifyWhenNextFrameIsPresented(_ handler: @escaping () -> Void) {
+        nextPresentationHandler = handler
+        installPresentationHandler()
+    }
 
     func displayLayer(
         synchronizesPresentation: Bool,
@@ -107,7 +118,25 @@ final class AppleVideoRenderer {
             performance: performance
         )
         retainedLayer = layer
+        installPresentationHandler()
         return layer
+    }
+
+    private func installPresentationHandler() {
+        guard nextPresentationHandler != nil else {
+            retainedLayer?.didPresentFrame = nil
+            return
+        }
+        retainedLayer?.didPresentFrame = { [weak self] in
+            Task { @MainActor in self?.frameDidPresent() }
+        }
+    }
+
+    private func frameDidPresent() {
+        let handler = nextPresentationHandler
+        nextPresentationHandler = nil
+        retainedLayer?.didPresentFrame = nil
+        handler?()
     }
 
     func snapshot() -> NSImage? {
@@ -157,6 +186,14 @@ final class RemoteVideoCanvasNSView: NSView {
             schedulePresentation()
         }
     }
+    var presentsFramesOnlyOnDisplayLink: Bool {
+        didSet {
+            guard presentsFramesOnlyOnDisplayLink != oldValue else { return }
+            displayFrameSource?.setDisplayDrivenFrameRequestsEnabled(
+                displayLink != nil && presentsFramesOnlyOnDisplayLink
+            )
+        }
+    }
     var showsDeveloperHUD: Bool {
         didSet {
             guard showsDeveloperHUD != oldValue else { return }
@@ -176,6 +213,7 @@ final class RemoteVideoCanvasNSView: NSView {
     var onLiveResizeChange: (Bool, CGSize) -> Void
 
     private(set) var canvas: AppleCanvas
+    private weak var displayFrameSource: SessionVideoStream?
     private let frames: AppleVideoFrameStore
     private let performance: AppleVideoPerformanceMonitor?
     private var input: AppleInputController?
@@ -206,6 +244,7 @@ final class RemoteVideoCanvasNSView: NSView {
 
     init(
         renderer: AppleVideoRenderer? = nil,
+        displayFrameSource: SessionVideoStream? = nil,
         canvas: AppleCanvas,
         frames: AppleVideoFrameStore,
         input: AppleInputController?,
@@ -214,6 +253,7 @@ final class RemoteVideoCanvasNSView: NSView {
         displayScale: AppleVideoDisplayScale,
         stretchesVideoToFillBounds: Bool = false,
         synchronizesPresentation: Bool,
+        presentsFramesOnlyOnDisplayLink: Bool = false,
         showsDeveloperHUD: Bool = false,
         sourceRect: CGRect?,
         inputMapping: AppleDisplayInputMapping?,
@@ -224,6 +264,7 @@ final class RemoteVideoCanvasNSView: NSView {
         performance: AppleVideoPerformanceMonitor? = nil
     ) {
         self.canvas = canvas
+        self.displayFrameSource = displayFrameSource
         self.frames = frames
         self.performance = performance
         self.input = input
@@ -232,6 +273,7 @@ final class RemoteVideoCanvasNSView: NSView {
         self.displayScale = displayScale
         self.stretchesVideoToFillBounds = stretchesVideoToFillBounds
         self.synchronizesPresentation = synchronizesPresentation
+        self.presentsFramesOnlyOnDisplayLink = presentsFramesOnlyOnDisplayLink
         self.showsDeveloperHUD = showsDeveloperHUD
         self.sourceRect = sourceRect
         self.inputMapping = inputMapping
@@ -834,7 +876,10 @@ final class RemoteVideoCanvasNSView: NSView {
             )
         }
         if synchronizesPresentation {
-            if let update = displayScheduler.enqueue(frames) {
+            if let update = displayScheduler.enqueue(
+                frames,
+                presentsImmediately: !presentsFramesOnlyOnDisplayLink
+            ) {
                 applyAndPresent(update)
             }
         } else {
@@ -889,6 +934,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     fileprivate func displayLinkDidFire(_ displayLink: CADisplayLink) {
+        displayFrameSource?.requestFrameForDisplay()
         let callbackTime = CACurrentMediaTime()
         performance?.recordDisplayLink(
             lead: displayLink.targetTimestamp - callbackTime,
@@ -920,6 +966,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func configureDisplayLink() {
+        displayFrameSource?.setDisplayDrivenFrameRequestsEnabled(false)
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
@@ -940,6 +987,9 @@ final class RemoteVideoCanvasNSView: NSView {
             selector: #selector(RemoteVideoCanvasDisplayLinkTarget.displayLinkDidFire(_:))
         )
         displayLink.add(to: .main, forMode: .common)
+        displayFrameSource?.setDisplayDrivenFrameRequestsEnabled(
+            presentsFramesOnlyOnDisplayLink
+        )
         displayLinkTarget = target
         self.displayLink = displayLink
         updateDisplayLinkFrameRate()

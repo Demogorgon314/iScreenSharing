@@ -80,6 +80,11 @@ struct SessionView: View {
         } message: {
             Text(dynamicResolution.errorMessage ?? "The remote display resolution could not be changed.")
         }
+        .alert("Unable to Change Image Quality", isPresented: standardQualityErrorIsPresented) {
+            Button("OK") { commandState.clearStandardQualityError() }
+        } message: {
+            Text(commandState.standardQualityErrorMessage ?? "The image quality could not be changed.")
+        }
         .onChange(of: dynamicResolution.isEnabled) { _, enabled in
             if enabled { scheduleDynamicResolution() }
         }
@@ -172,6 +177,11 @@ struct SessionView: View {
                 AudioMuteButton(audio: audio)
             }
         }
+        if commandState.canChangeStandardQuality {
+            ToolbarItem(placement: .primaryAction) {
+                StandardQualityToolbarControl(quality: standardQualityBinding)
+            }
+        }
     }
 
     private var unavailableContent: some View {
@@ -216,6 +226,13 @@ struct SessionView: View {
         )
     }
 
+    private var standardQualityBinding: Binding<Double> {
+        Binding(
+            get: { commandState.standardQuality.level },
+            set: { commandState.setStandardQuality(StandardRFBQuality(level: $0)) }
+        )
+    }
+
     private var modeErrorIsPresented: Binding<Bool> {
         Binding(
             get: { controlState.errorMessage != nil },
@@ -227,6 +244,13 @@ struct SessionView: View {
         Binding(
             get: { dynamicResolution.errorMessage != nil },
             set: { if !$0 { dynamicResolution.clearError() } }
+        )
+    }
+
+    private var standardQualityErrorIsPresented: Binding<Bool> {
+        Binding(
+            get: { commandState.standardQualityErrorMessage != nil },
+            set: { if !$0 { commandState.clearStandardQualityError() } }
         )
     }
 
@@ -284,6 +308,32 @@ struct SessionView: View {
         } catch {
             NSSound.beep()
         }
+    }
+}
+
+private struct StandardQualityToolbarControl: View {
+    @Binding var quality: Double
+
+    var body: some View {
+        VStack(spacing: 1) {
+            HStack(spacing: 6) {
+                Image(systemName: "circle.grid.3x3.fill")
+                    .foregroundStyle(.secondary)
+                Slider(value: $quality, in: 0...3, step: 1)
+                    .labelsHidden()
+                    .frame(width: 56)
+                Image(systemName: "photo.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .offset(y: 4)
+            Text("Quality")
+                .font(.caption2)
+        }
+        .frame(width: 106)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Image Quality")
+        .accessibilityValue(StandardRFBQuality(level: quality).title)
+        .help(StandardRFBQuality(level: quality).title)
     }
 }
 
@@ -345,7 +395,7 @@ private struct AudioMuteButton: View {
 
 private struct ActiveVideoSessionView: View {
     let renderer: AppleVideoRenderer
-    @ObservedObject var stream: AppleVideoStream
+    @ObservedObject var stream: SessionVideoStream
     let input: AppleInputController?
     let fileTransfer: AppleFileTransferService?
     let cursors: AppleCursorStore?
@@ -368,6 +418,7 @@ private struct ActiveVideoSessionView: View {
             Color.black
             RemoteVideoCanvasView(
                 renderer: renderer,
+                displayFrameSource: stream,
                 canvas: stream.canvas,
                 frames: stream.frames,
                 performance: stream.performance,
@@ -377,6 +428,7 @@ private struct ActiveVideoSessionView: View {
                 displayScale: displayScale,
                 stretchesVideoToFillBounds: stretchesVideoToFillBounds,
                 synchronizesPresentation: synchronizesPresentation,
+                presentsFramesOnlyOnDisplayLink: stream.presentsFramesOnlyOnDisplayLink,
                 showsDeveloperHUD: showsMetalPerformanceHUD,
                 sourceRect: sourceRect,
                 inputMapping: inputMapping,

@@ -137,6 +137,35 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(store.connections.count, 1)
     }
 
+    func testPersistsStandardQualityForSavedAndRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = ConnectionStore(defaults: defaults)
+        store.record(endpoint)
+
+        store.updateStandardQuality(.balanced, for: endpoint)
+
+        XCTAssertEqual(store.connection(for: endpoint)?.standardQuality, .balanced)
+        XCTAssertEqual(store.recentConnections.first?.standardQuality, .balanced)
+        let restored = ConnectionStore(defaults: defaults)
+        XCTAssertEqual(restored.connection(for: endpoint)?.standardQuality, .balanced)
+        XCTAssertEqual(restored.recentConnections.first?.standardQuality, .balanced)
+    }
+
+    func testRecordAppliesInitialStandardQualityToNewRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = ConnectionStore(defaults: defaults)
+        _ = store.networkConfiguration(for: endpoint, deviceInfo: nil)
+        store.clearRecentConnections()
+
+        store.record(endpoint, standardQuality: .lowBandwidth)
+
+        XCTAssertEqual(store.connection(for: endpoint)?.standardQuality, .lowBandwidth)
+        XCTAssertEqual(store.recentConnections.first?.standardQuality, .lowBandwidth)
+        let restored = ConnectionStore(defaults: defaults)
+        XCTAssertEqual(restored.connection(for: endpoint)?.standardQuality, .lowBandwidth)
+        XCTAssertEqual(restored.recentConnections.first?.standardQuality, .lowBandwidth)
+    }
+
     func testDeleteRemovesPersistedConnection() throws {
         let store = ConnectionStore(defaults: defaults)
         store.record(try ConnectionEndpoint("example.local"))
@@ -207,12 +236,14 @@ final class ConnectionStoreTests: XCTestCase {
             endpoint: updatedEndpoint,
             preferredUsername: "  editor  ",
             sharingType: .highPerformance,
+            standardQuality: .lowBandwidth,
             virtualDisplayCount: .two
         )
 
         let updated = try XCTUnwrap(store.connection(for: updatedEndpoint))
         XCTAssertEqual(updated.name, "Studio Mac")
         XCTAssertEqual(updated.preferredUsername, "editor")
+        XCTAssertEqual(updated.standardQuality, .lowBandwidth)
         XCTAssertEqual(updated.virtualDisplayCount, .two)
         XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: updatedEndpoint), updated)
         XCTAssertThrowsError(
@@ -243,6 +274,7 @@ final class ConnectionStoreTests: XCTestCase {
 
         XCTAssertEqual(connection.preferredUsername, "")
         XCTAssertEqual(connection.sharingType, .highPerformance)
+        XCTAssertEqual(connection.standardQuality, .high)
         XCTAssertEqual(connection.virtualDisplayCount, .one)
         XCTAssertNil(connection.deviceInfo)
     }

@@ -3,12 +3,13 @@ import Foundation
 final class RFBAuthenticatedSession: @unchecked Sendable {
     let endpoint: ConnectionEndpoint
     let remoteAddress: ResolvedRemoteAddress
+    let sharingType: ScreenSharingType
     let masterKey: Data
     let serverInfo: RFBServerInfo
     private(set) var recordLayer: AppleEncryptedRecordLayer?
     private(set) var mediaReceiver: (any AppleMediaReceiving)?
-    private(set) var videoStreams = [AppleVideoStream]()
-    var videoStream: AppleVideoStream? {
+    private(set) var videoStreams = [SessionVideoStream]()
+    var videoStream: SessionVideoStream? {
         videoStreams.first(where: { $0.displayIndex == 0 }) ?? videoStreams.first
     }
     private(set) var inputController: AppleInputController?
@@ -26,22 +27,28 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     private let transport: any RFBTransport
     private let encryptedWriter: AppleEncryptedRecordWriter
+    private let standardWriter: RFBStandardWriter
     private let closeLock = NSLock()
     private var hasClosed = false
 
     init(
         endpoint: ConnectionEndpoint,
         remoteAddress: ResolvedRemoteAddress,
+        sharingType: ScreenSharingType = .highPerformance,
         masterKey: Data,
         serverInfo: RFBServerInfo,
         transport: any RFBTransport
     ) {
         self.endpoint = endpoint
         self.remoteAddress = remoteAddress
+        self.sharingType = sharingType
         self.masterKey = masterKey
         self.serverInfo = serverInfo
         self.transport = transport
         encryptedWriter = AppleEncryptedRecordWriter { data in
+            try await transport.send(data)
+        }
+        standardWriter = RFBStandardWriter { data in
             try await transport.send(data)
         }
     }
@@ -85,6 +92,14 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         try await transport.send(data)
     }
 
+    func sendStandard(_ data: Data) async throws {
+        try await sendStandard([data])
+    }
+
+    func sendStandard(_ messages: [Data]) async throws {
+        try await standardWriter.send(messages)
+    }
+
     func receiveExactly(_ length: Int) async throws -> Data {
         try await transport.receiveExactly(length)
     }
@@ -117,16 +132,16 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.mediaReceiver = mediaReceiver
     }
 
-    func install(videoStream: AppleVideoStream) {
+    func install(videoStream: SessionVideoStream) {
         install(videoStreams: [videoStream])
     }
 
-    func install(videoStreams: [AppleVideoStream]) {
+    func install(videoStreams: [SessionVideoStream]) {
         self.videoStreams.forEach { $0.close() }
         self.videoStreams = videoStreams
     }
 
-    func videoStream(for displayIndex: Int) -> AppleVideoStream? {
+    func videoStream(for displayIndex: Int) -> SessionVideoStream? {
         videoStreams.first(where: { $0.displayIndex == displayIndex }) ?? videoStream
     }
 
@@ -193,6 +208,43 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     deinit {
         close()
+    }
+}
+
+actor RFBStandardWriter {
+    typealias Send = @Sendable (Data) async throws -> Void
+
+    private let sendData: Send
+    private var tail = Task<Void, Never> { }
+    private var hasTerminalFailure = false
+
+    init(send: @escaping Send) {
+        sendData = send
+    }
+
+    func send(_ messages: [Data]) async throws {
+        let predecessor = tail
+        let request = Task { [weak self] in
+            await predecessor.value
+            guard let self else { throw AppleEncryptedRecordWriterError.closed }
+            try await self.sendInOrder(messages)
+        }
+        tail = Task { _ = await request.result }
+        try await request.value
+    }
+
+    private func sendInOrder(_ messages: [Data]) async throws {
+        guard !hasTerminalFailure else {
+            throw AppleEncryptedRecordWriterError.transportFailed
+        }
+        do {
+            for message in messages {
+                try await sendData(message)
+            }
+        } catch {
+            hasTerminalFailure = true
+            throw error
+        }
     }
 }
 

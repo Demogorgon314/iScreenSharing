@@ -91,6 +91,37 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertEqual(pixels[3], 255)
     }
 
+    func testSnapshotRendersStandardBGRAFullCanvasFrame() throws {
+        let context = try XCTUnwrap(AppleNV24MetalContext())
+        let layer = AppleNV24MetalLayer(context: context)
+        layer.bounds = CGRect(x: 0, y: 0, width: 2, height: 1)
+        layer.contentsScale = 1
+        layer.update(
+            layouts: [],
+            fullCanvasLayout: AppleVideoCanvasLayout.Tile(
+                container: layer.bounds,
+                content: layer.bounds
+            ),
+            canvasSize: layer.bounds.size,
+            bounds: layer.bounds
+        )
+        layer.update(
+            makeFrame(pixelBuffer: try makeBGRAPixelBuffer(
+                width: 2,
+                height: 1,
+                bytes: [0x20, 0x40, 0x80, 0xff, 0x10, 0x30, 0x70, 0xff]
+            )),
+            at: AppleVideoFrameStore.fullCanvasIndex
+        )
+
+        let image = try XCTUnwrap(layer.snapshot())
+        let pixels = try XCTUnwrap(image.dataProvider?.data as Data?)
+
+        XCTAssertEqual(image.width, 2)
+        XCTAssertEqual(image.height, 1)
+        XCTAssertEqual(Array(pixels.prefix(4)), [0x20, 0x40, 0x80, 0xff])
+    }
+
     func testTiledSnapshotCompositesAtCanvasResolutionBeforeScaling() throws {
         let context = try XCTUnwrap(AppleNV24MetalContext())
         let layer = AppleNV24MetalLayer(context: context)
@@ -381,6 +412,25 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertFalse(firstWindowRenderer === auxiliaryWindowRenderer)
     }
 
+    func testRendererNotifiesOnlyTheNextPresentedFrame() async throws {
+        let renderer = AppleVideoRenderer()
+        var presentationCount = 0
+        renderer.notifyWhenNextFrameIsPresented { presentationCount += 1 }
+        let layer = try XCTUnwrap(renderer.displayLayer(
+            synchronizesPresentation: true,
+            showsDeveloperHUD: false,
+            performance: nil
+        ) as? AppleNV24MetalLayer)
+
+        layer.didPresentFrame?()
+        await Task.yield()
+        layer.didPresentFrame?()
+        await Task.yield()
+
+        XCTAssertEqual(presentationCount, 1)
+        XCTAssertNil(layer.didPresentFrame)
+    }
+
     func testVideoCanvasKeepsMetalLayerAfterLiveResizeWhenHUDIsHidden() throws {
         let view = RemoteVideoCanvasNSView(
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
@@ -533,6 +583,35 @@ final class AppleNV24MetalLayerTests: XCTestCase {
                 CVPixelBufferGetBytesPerRowOfPlane(result, plane)
                     * CVPixelBufferGetHeightOfPlane(result, plane)
             )
+        }
+        return result
+    }
+
+    private func makeBGRAPixelBuffer(
+        width: Int,
+        height: Int,
+        bytes: [UInt8]
+    ) throws -> CVPixelBuffer {
+        var pixelBuffer: CVPixelBuffer?
+        let attributes = [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
+        ] as CFDictionary
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_32BGRA,
+            attributes,
+            &pixelBuffer
+        )
+        let result = try XCTUnwrap(pixelBuffer, "CVPixelBufferCreate failed with \(status)")
+        CVPixelBufferLockBaseAddress(result, [])
+        defer { CVPixelBufferUnlockBaseAddress(result, []) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(result) else {
+            throw XCTSkip("CVPixelBuffer has no base address")
+        }
+        bytes.withUnsafeBytes { source in
+            baseAddress.copyMemory(from: source.baseAddress!, byteCount: bytes.count)
         }
         return result
     }

@@ -7,6 +7,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
     var lastConnectedAt: Date
     var preferredUsername: String
     var sharingType: ScreenSharingType
+    var standardQuality: StandardRFBQuality
     var virtualDisplayCount: VirtualDisplayCount
     var deviceInfo: AppleRemoteDeviceInfo?
 
@@ -17,6 +18,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         lastConnectedAt: Date = .now,
         preferredUsername: String = "",
         sharingType: ScreenSharingType = .highPerformance,
+        standardQuality: StandardRFBQuality = .high,
         virtualDisplayCount: VirtualDisplayCount = .one,
         deviceInfo: AppleRemoteDeviceInfo? = nil
     ) {
@@ -26,6 +28,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         self.lastConnectedAt = lastConnectedAt
         self.preferredUsername = preferredUsername
         self.sharingType = sharingType
+        self.standardQuality = standardQuality
         self.virtualDisplayCount = virtualDisplayCount
         self.deviceInfo = deviceInfo
     }
@@ -39,9 +42,45 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         preferredUsername = try container.decodeIfPresent(String.self, forKey: .preferredUsername) ?? ""
         sharingType = try container.decodeIfPresent(ScreenSharingType.self, forKey: .sharingType)
             ?? .highPerformance
+        standardQuality = try container.decodeIfPresent(StandardRFBQuality.self, forKey: .standardQuality)
+            ?? .high
         virtualDisplayCount = try container.decodeIfPresent(VirtualDisplayCount.self, forKey: .virtualDisplayCount)
             ?? .one
         deviceInfo = try container.decodeIfPresent(AppleRemoteDeviceInfo.self, forKey: .deviceInfo)
+    }
+}
+
+enum StandardRFBQuality: String, Codable, CaseIterable, Sendable {
+    case high
+    case balanced
+    case medium
+    case lowBandwidth
+
+    var title: String {
+        switch self {
+        case .high: "High (32-bit color)"
+        case .balanced: "Balanced (Reduced Color)"
+        case .medium: "Medium (16-level grayscale)"
+        case .lowBandwidth: "Low Bandwidth (Black & White, 1-bit)"
+        }
+    }
+
+    var level: Double {
+        switch self {
+        case .lowBandwidth: 0
+        case .medium: 1
+        case .balanced: 2
+        case .high: 3
+        }
+    }
+
+    init(level: Double) {
+        switch Int(level.rounded()) {
+        case ...0: self = .lowBandwidth
+        case 1: self = .medium
+        case 2: self = .balanced
+        default: self = .high
+        }
     }
 }
 

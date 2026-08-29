@@ -94,14 +94,48 @@ final class AuthenticationCoordinator: ObservableObject {
                 && !sessionFeaturePreferences.usesDynamicResolution
                 ? [.fixed1080p]
                 : initialDisplaySizes
-            guard savedConnection?.sharingType != .standard else {
-                throw AuthenticationCoordinatorError.standardModeUnavailable
-            }
+            let sharingType = savedConnection?.sharingType ?? .highPerformance
+            let standardQuality = savedConnection?.standardQuality ?? .high
             let credentials = try ScreenSharingCredentials(username: username, password: password)
             state = .authenticating
             task = Task {
+                var pendingSession: RFBAuthenticatedSession?
                 do {
-                    let session = try await authenticator.connect(to: endpoint, credentials: credentials)
+                    let session = try await authenticator.connect(
+                        to: endpoint,
+                        credentials: credentials,
+                        sharingType: sharingType
+                    )
+                    pendingSession = session
+                    if sharingType == .standard {
+                        let stream = try StandardRFBVideoStream(
+                            session: session,
+                            quality: standardQuality
+                        )
+                        session.install(videoStream: stream)
+                        let input = AppleInputController(session: session, canvas: stream.canvas)
+                        session.install(inputController: input)
+                        session.install(cursorStore: AppleCursorStore())
+                        session.install(displayLayoutModel: AppleDisplayLayoutModel())
+                        session.install(dynamicResolutionModel: AppleDynamicResolutionModel(
+                            isEnabled: false
+                        ))
+                        session.install(controlState: AppleSessionControlState(session: session))
+                        stream.start()
+                        try await stream.waitForFirstFrame()
+                        try Task.checkCancellation()
+                        sessionManager.install(session)
+                        pendingSession = nil
+                        connectionStore.record(
+                            endpoint,
+                            preferredUsername: credentials.username,
+                            standardQuality: standardQuality
+                        )
+                        onAuthenticated(endpoint)
+                        state = .authenticated
+                        persistCredentialsInBackground(credentials, remember: rememberPassword)
+                        return
+                    }
                     _ = try await controlChannelNegotiator.enableEncryption(
                         for: session,
                         displaySizes: requestedDisplaySizes
@@ -148,7 +182,8 @@ final class AuthenticationCoordinator: ObservableObject {
                     }
                     try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
                     let dynamicResolutionController: AppleDynamicResolutionController?
-                    if virtualDisplayCount == .one, let stream = session.videoStream {
+                    if virtualDisplayCount == .one,
+                       let stream = session.videoStream as? AppleVideoStream {
                         let controller = AppleDynamicResolutionController(
                             initialCanvas: negotiation.canvas,
                             mediaConfiguration: negotiation.configuration,
@@ -266,13 +301,16 @@ final class AuthenticationCoordinator: ObservableObject {
                     }
                     try Task.checkCancellation()
                     sessionManager.install(session)
+                    pendingSession = nil
                     connectionStore.record(endpoint, preferredUsername: credentials.username)
                     onAuthenticated(endpoint)
                     state = .authenticated
                     persistCredentialsInBackground(credentials, remember: rememberPassword)
                 } catch is CancellationError {
+                    pendingSession?.close()
                     state = .idle
                 } catch {
+                    pendingSession?.close()
                     state = .failed(error.localizedDescription)
                 }
             }
@@ -300,13 +338,5 @@ final class AuthenticationCoordinator: ObservableObject {
                 try? credentialStore.delete(for: endpoint)
             }
         }
-    }
-}
-
-enum AuthenticationCoordinatorError: LocalizedError, Equatable {
-    case standardModeUnavailable
-
-    var errorDescription: String? {
-        "Standard Screen Sharing is not implemented yet. Choose High Performance in the connection settings."
     }
 }

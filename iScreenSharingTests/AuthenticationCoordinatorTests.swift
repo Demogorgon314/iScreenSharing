@@ -120,9 +120,10 @@ final class AuthenticationCoordinatorTests: XCTestCase {
     func testAutomaticSignInWithoutSavedCredentialsKeepsCoordinatorIdle() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let sessions = SessionManager()
+        let authenticator = MockAuthenticator(result: .success(try makeSession(endpoint: endpoint)))
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(try makeSession(endpoint: endpoint))),
+            authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
             mediaNegotiator: MockMediaNegotiator(),
             videoStreamStarter: MockVideoStreamStarter(),
@@ -297,8 +298,9 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertTrue(sessions.session(for: endpoint) === session)
     }
 
-    func testPrefillsUsernameAndRejectsUnsupportedStandardMode() async throws {
+    func testPrefillsUsernameAndConnectsStandardMode() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
+        let transport = ControlledAuthenticationTransport()
         let connections = ConnectionStore(defaults: defaults)
         connections.record(endpoint)
         let connection = try XCTUnwrap(connections.connection(for: endpoint))
@@ -308,11 +310,22 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             endpoint: endpoint,
             preferredUsername: "editor",
             sharingType: .standard,
+            standardQuality: .balanced,
             virtualDisplayCount: .one
+        )
+        connections.clearRecentConnections()
+        let authenticator = MockAuthenticator(
+            result: .success(try makeSession(
+                endpoint: endpoint,
+                sharingType: .standard,
+                transport: transport,
+                width: 2,
+                height: 1
+            ))
         )
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(try makeSession(endpoint: endpoint))),
+            authenticator: authenticator,
             controlChannelNegotiator: MockControlChannelNegotiator(),
             mediaNegotiator: MockMediaNegotiator(),
             videoStreamStarter: MockVideoStreamStarter(),
@@ -324,13 +337,67 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.preferredUsername(), "editor")
         coordinator.signIn(username: "editor", password: "password", rememberPassword: false)
 
-        XCTAssertEqual(
-            coordinator.state,
-            .failed(AuthenticationCoordinatorError.standardModeUnavailable.localizedDescription)
-        )
+        try await Task.sleep(for: .milliseconds(20))
+        XCTAssertEqual(coordinator.state, .authenticating)
+        transport.append(Data([
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 0, 0,
+        ]) + Data(repeating: 0x7f, count: 2 * 4))
+        try await waitUntil { coordinator.state == .authenticated }
+        XCTAssertEqual(authenticator.requestedSharingType, .standard)
+        XCTAssertEqual(connections.recentConnections.first?.standardQuality, .balanced)
     }
 
-    private func makeSession(endpoint: ConnectionEndpoint) throws -> RFBAuthenticatedSession {
+    func testCancellationClosesAuthenticatedSessionBeforeInstallation() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let transport = CancellationRecordingTransport()
+        let session = try makeSession(
+            endpoint: endpoint,
+            sharingType: .standard,
+            transport: transport
+        )
+        let connections = ConnectionStore(defaults: defaults)
+        connections.record(endpoint)
+        let connection = try XCTUnwrap(connections.connection(for: endpoint))
+        try connections.update(
+            connection,
+            name: connection.name,
+            endpoint: endpoint,
+            preferredUsername: "",
+            sharingType: .standard,
+            virtualDisplayCount: .one
+        )
+        let authenticator = SuspendingAuthenticator()
+        let sessions = SessionManager()
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            authenticator: authenticator,
+            controlChannelNegotiator: MockControlChannelNegotiator(),
+            mediaNegotiator: MockMediaNegotiator(),
+            videoStreamStarter: MockVideoStreamStarter(),
+            credentialStore: MockCredentialStore(),
+            connectionStore: connections,
+            sessionManager: sessions
+        )
+
+        coordinator.signIn(username: "user", password: "password", rememberPassword: false)
+        try await waitUntil { authenticator.isWaiting }
+        coordinator.cancel()
+        authenticator.resume(returning: session)
+        try await waitUntil { transport.cancelCount == 1 }
+
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertNil(sessions.session(for: endpoint))
+    }
+
+    private func makeSession(
+        endpoint: ConnectionEndpoint,
+        sharingType: ScreenSharingType = .highPerformance,
+        transport: (any RFBTransport)? = nil,
+        width: UInt16 = 1920,
+        height: UInt16 = 1080
+    ) throws -> RFBAuthenticatedSession {
         let remoteAddress = try ResolvedRemoteAddress(
             numericHost: "127.0.0.1",
             port: endpoint.port
@@ -338,14 +405,15 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         return RFBAuthenticatedSession(
             endpoint: endpoint,
             remoteAddress: remoteAddress,
+            sharingType: sharingType,
             masterKey: Data(repeating: 0, count: 16),
             serverInfo: RFBServerInfo(
-                width: 1920,
-                height: 1080,
+                width: width,
+                height: height,
                 pixelFormat: Data(repeating: 0, count: 16),
                 name: "Test Mac"
             ),
-            transport: NWConnectionTransport(remoteAddress: remoteAddress)
+            transport: transport ?? NWConnectionTransport(remoteAddress: remoteAddress)
         )
     }
 
@@ -393,18 +461,112 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
 private final class MockAuthenticator: RFBAuthenticating, @unchecked Sendable {
     let result: Result<RFBAuthenticatedSession, Error>
+    private let lock = NSLock()
+    private var sharingType: ScreenSharingType?
 
     init(result: Result<RFBAuthenticatedSession, Error>) {
         self.result = result
     }
 
+    var requestedSharingType: ScreenSharingType? {
+        lock.withLock { sharingType }
+    }
+
     func connect(
         to endpoint: ConnectionEndpoint,
-        credentials: ScreenSharingCredentials
+        credentials: ScreenSharingCredentials,
+        sharingType: ScreenSharingType
     ) async throws -> RFBAuthenticatedSession {
-        try result.get()
+        lock.withLock { self.sharingType = sharingType }
+        return try result.get()
     }
 }
+
+private final class SuspendingAuthenticator: RFBAuthenticating, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<RFBAuthenticatedSession, Error>?
+
+    var isWaiting: Bool {
+        lock.withLock { continuation != nil }
+    }
+
+    func connect(
+        to endpoint: ConnectionEndpoint,
+        credentials: ScreenSharingCredentials,
+        sharingType: ScreenSharingType
+    ) async throws -> RFBAuthenticatedSession {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock { self.continuation = continuation }
+        }
+    }
+
+    func resume(returning session: RFBAuthenticatedSession) {
+        let continuation = lock.withLock { () -> CheckedContinuation<RFBAuthenticatedSession, Error>? in
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume(returning: session)
+    }
+}
+
+private final class CancellationRecordingTransport: RFBTransport, @unchecked Sendable {
+    private struct PendingRead {
+        let length: Int
+        let continuation: CheckedContinuation<Data, Error>
+    }
+
+    private let lock = NSLock()
+    private var cancellations = 0
+    private var receiveData = Data()
+    private var pendingRead: PendingRead?
+
+    var cancelCount: Int {
+        lock.withLock { cancellations }
+    }
+
+    func start(timeout: Duration) async throws { }
+    func send(_ data: Data) async throws { }
+    func receiveExactly(_ length: Int) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let result = lock.withLock { () -> Result<Data, Error>? in
+                guard receiveData.count >= length else {
+                    precondition(pendingRead == nil)
+                    pendingRead = PendingRead(length: length, continuation: continuation)
+                    return nil
+                }
+                let result = Data(receiveData.prefix(length))
+                receiveData.removeFirst(length)
+                return .success(result)
+            }
+            if let result { continuation.resume(with: result) }
+        }
+    }
+
+    func append(_ data: Data) {
+        let delivery = lock.withLock { () -> (PendingRead, Data)? in
+            receiveData.append(data)
+            guard let pendingRead, receiveData.count >= pendingRead.length else { return nil }
+            let result = Data(receiveData.prefix(pendingRead.length))
+            receiveData.removeFirst(pendingRead.length)
+            self.pendingRead = nil
+            return (pendingRead, result)
+        }
+        if let (pendingRead, result) = delivery {
+            pendingRead.continuation.resume(returning: result)
+        }
+    }
+
+    func cancel() {
+        let pendingRead = lock.withLock { () -> PendingRead? in
+            cancellations += 1
+            defer { self.pendingRead = nil }
+            return self.pendingRead
+        }
+        pendingRead?.continuation.resume(throwing: RFBNetworkError.connectionClosed)
+    }
+}
+
+private typealias ControlledAuthenticationTransport = CancellationRecordingTransport
 
 private final class MockCredentialStore: CredentialStoring, @unchecked Sendable {
     private let lock = NSLock()
