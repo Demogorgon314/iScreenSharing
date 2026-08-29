@@ -30,6 +30,3 @@ typealias AppleClipboardRequest = ScreenSharingProtocol.AppleClipboardRequest
 typealias AppleClipboardMessage = ScreenSharingProtocol.AppleClipboardMessage
 typealias AppleClipboardReassembler = ScreenSharingProtocol.AppleClipboardReassembler
 typealias AppleClipboardError = ScreenSharingProtocol.AppleClipboardError
-typealias AppleCursorImage = ScreenSharingProtocol.AppleCursorImage
-typealias AppleCursorUpdate = ScreenSharingProtocol.AppleCursorUpdate
-typealias AppleRemoteDeviceInfo = ScreenSharingProtocol.AppleRemoteDeviceInfo

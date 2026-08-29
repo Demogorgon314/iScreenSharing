@@ -1,5 +1,6 @@
 import dnssd
 import Foundation
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 
 protocol BonjourDeviceInfoResolving: Sendable {
     func deviceInfo(for endpoint: ConnectionEndpoint) async -> AppleRemoteDeviceInfo?

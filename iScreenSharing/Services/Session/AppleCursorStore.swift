@@ -1,4 +1,6 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleCursorUpdate
+import struct ScreenSharingProtocol.AppleCursorImage
 
 final class AppleCursorStore: @unchecked Sendable {
     typealias Observer = @MainActor @Sendable (AppleCursorImage?) -> Void

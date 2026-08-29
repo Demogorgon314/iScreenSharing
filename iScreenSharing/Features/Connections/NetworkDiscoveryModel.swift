@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 
 struct DiscoveredScreenSharingService: Equatable, Hashable, Sendable {
     let endpoint: ConnectionEndpoint
