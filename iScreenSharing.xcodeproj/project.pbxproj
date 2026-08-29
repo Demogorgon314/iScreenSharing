@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C10000000000000000000001 /* ScreenSharingProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000002 /* ScreenSharingProtocol */; };
 		B10000000000000000000001 /* TailscaleKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* TailscaleKit.framework */; };
 		B10000000000000000000002 /* TailscaleKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* TailscaleKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
@@ -72,6 +73,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C10000000000000000000001 /* ScreenSharingProtocol in Frameworks */,
 				B10000000000000000000001 /* TailscaleKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -127,6 +129,7 @@
 			);
 			name = iScreenSharing;
 			packageProductDependencies = (
+				C10000000000000000000002 /* ScreenSharingProtocol */,
 			);
 			productName = iScreenSharing;
 			productReference = A10000000000000000000004 /* iScreenSharing.app */;
@@ -185,6 +188,9 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A10000000000000000000007 /* Products */;
+			packageReferences = (
+				C10000000000000000000003 /* XCLocalSwiftPackageReference "Packages/ScreenSharingProtocol" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -475,6 +481,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		C10000000000000000000003 /* XCLocalSwiftPackageReference "Packages/ScreenSharingProtocol" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ScreenSharingProtocol;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C10000000000000000000002 /* ScreenSharingProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C10000000000000000000003 /* XCLocalSwiftPackageReference "Packages/ScreenSharingProtocol" */;
+			productName = ScreenSharingProtocol;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A10000000000000000000001 /* Project object */;
 }

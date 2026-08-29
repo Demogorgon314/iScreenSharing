@@ -1,4 +1,5 @@
 import Foundation
+import ScreenSharingProtocol
 
 protocol RFBAuthenticating: Sendable {
     func connect(
