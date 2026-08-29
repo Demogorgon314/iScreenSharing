@@ -124,6 +124,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private var canvasSize = CGSize.zero
     private var compositedCanvas: MTLTexture?
     private let inFlightGate = AppleMetalInFlightGate()
+    var didPresentFrame: (@Sendable () -> Void)?
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
     }
@@ -345,6 +346,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         let presentationSubmittedAt = CACurrentMediaTime()
         let performance = performance
         let logger = Self.logger
+        let didPresentFrame = didPresentFrame
         drawable.addPresentedHandler { drawable in
             guard drawable.presentedTime > 0 else { return }
             performance?.recordDisplay(
@@ -354,6 +356,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             if let batchID {
                 performance?.recordRenderBatchPresented(batchID, at: drawable.presentedTime)
             }
+            didPresentFrame?()
         }
         commandBuffer.present(drawable)
         if let batchID {

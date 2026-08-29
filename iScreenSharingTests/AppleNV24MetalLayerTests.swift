@@ -412,6 +412,25 @@ final class AppleNV24MetalLayerTests: XCTestCase {
         XCTAssertFalse(firstWindowRenderer === auxiliaryWindowRenderer)
     }
 
+    func testRendererNotifiesOnlyTheNextPresentedFrame() async throws {
+        let renderer = AppleVideoRenderer()
+        var presentationCount = 0
+        renderer.notifyWhenNextFrameIsPresented { presentationCount += 1 }
+        let layer = try XCTUnwrap(renderer.displayLayer(
+            synchronizesPresentation: true,
+            showsDeveloperHUD: false,
+            performance: nil
+        ) as? AppleNV24MetalLayer)
+
+        layer.didPresentFrame?()
+        await Task.yield()
+        layer.didPresentFrame?()
+        await Task.yield()
+
+        XCTAssertEqual(presentationCount, 1)
+        XCTAssertNil(layer.didPresentFrame)
+    }
+
     func testVideoCanvasKeepsMetalLayerAfterLiveResizeWhenHUDIsHidden() throws {
         let view = RemoteVideoCanvasNSView(
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),

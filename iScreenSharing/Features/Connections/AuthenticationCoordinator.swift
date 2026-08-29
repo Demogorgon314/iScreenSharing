@@ -122,6 +122,7 @@ final class AuthenticationCoordinator: ObservableObject {
                         ))
                         session.install(controlState: AppleSessionControlState(session: session))
                         stream.start()
+                        try await stream.waitForFirstFrame()
                         try Task.checkCancellation()
                         sessionManager.install(session)
                         pendingSession = nil

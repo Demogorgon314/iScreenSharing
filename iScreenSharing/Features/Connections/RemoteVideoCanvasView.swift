@@ -86,6 +86,12 @@ private final class RemoteVideoCanvasDisplayLinkTarget: NSObject {
 @MainActor
 final class AppleVideoRenderer {
     private var retainedLayer: AppleNV24MetalLayer?
+    private var nextPresentationHandler: (() -> Void)?
+
+    func notifyWhenNextFrameIsPresented(_ handler: @escaping () -> Void) {
+        nextPresentationHandler = handler
+        installPresentationHandler()
+    }
 
     func displayLayer(
         synchronizesPresentation: Bool,
@@ -112,7 +118,25 @@ final class AppleVideoRenderer {
             performance: performance
         )
         retainedLayer = layer
+        installPresentationHandler()
         return layer
+    }
+
+    private func installPresentationHandler() {
+        guard nextPresentationHandler != nil else {
+            retainedLayer?.didPresentFrame = nil
+            return
+        }
+        retainedLayer?.didPresentFrame = { [weak self] in
+            Task { @MainActor in self?.frameDidPresent() }
+        }
+    }
+
+    private func frameDidPresent() {
+        let handler = nextPresentationHandler
+        nextPresentationHandler = nil
+        retainedLayer?.didPresentFrame = nil
+        handler?()
     }
 
     func snapshot() -> NSImage? {

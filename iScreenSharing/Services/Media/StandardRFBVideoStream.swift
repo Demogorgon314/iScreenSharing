@@ -21,6 +21,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     private let lifecycleLock = NSLock()
     private let framebufferStateLock = NSLock()
     private let schedulePublication: PublicationScheduler
+    private let firstFrame = StandardRFBFirstFrameLatch()
     private var initialConfigurationTask: Task<Void, Error>?
     private var receiveTask: Task<Void, Never>?
     private var framebuffer: Data
@@ -125,6 +126,10 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         lifecycleLock.withStandardStreamLock { quality }
     }
 
+    func waitForFirstFrame() async throws {
+        try await firstFrame.wait()
+    }
+
     override var presentsFramesOnlyOnDisplayLink: Bool { true }
 
     override func setDisplayDrivenFrameRequestsEnabled(_ enabled: Bool) {
@@ -220,6 +225,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         }
         tasks.0?.cancel()
         tasks.1?.cancel()
+        firstFrame.fail(CancellationError())
         framebufferStateLock.withStandardStreamLock {
             publicationEpoch &+= 1
             publicationEnabled = false
@@ -237,8 +243,10 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
                 try await readServerMessage(from: session)
             }
         } catch is CancellationError {
+            firstFrame.fail(CancellationError())
             return
         } catch {
+            firstFrame.fail(error)
             Self.logger.error(
                 "Standard stream failed quality=\(self.currentQuality.rawValue, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
             )
@@ -786,6 +794,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         performance.recordDecodedFrame()
         frames.publish(pixelBuffer, at: AppleVideoFrameStore.fullCanvasIndex, decodedAt: now)
+        firstFrame.succeed()
         publishState(.streaming)
     }
 
@@ -844,6 +853,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
             do {
                 try publishLatestFramebufferLocked()
             } catch {
+                firstFrame.fail(error)
                 Self.logger.error(
                     "Standard framebuffer publication failed error=\(error.localizedDescription, privacy: .public)"
                 )
@@ -928,6 +938,74 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
             throw StandardRFBError.framebufferTooLarge
         }
         return count
+    }
+}
+
+private final class StandardRFBFirstFrameLatch: @unchecked Sendable {
+    private enum State {
+        case waiting([UUID: CheckedContinuation<Void, Error>])
+        case ready
+        case failed(Error)
+    }
+
+    private let lock = NSLock()
+    private var state = State.waiting([:])
+
+    func wait() async throws {
+        let identifier = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let result = lock.withStandardStreamLock { () -> Result<Void, Error>? in
+                    if Task.isCancelled { return .failure(CancellationError()) }
+                    switch state {
+                    case .ready:
+                        return .success(())
+                    case .failed(let error):
+                        return .failure(error)
+                    case .waiting(var continuations):
+                        continuations[identifier] = continuation
+                        state = .waiting(continuations)
+                        return nil
+                    }
+                }
+                if let result { continuation.resume(with: result) }
+            }
+        } onCancel: {
+            self.cancel(identifier)
+        }
+    }
+
+    func succeed() {
+        finish(with: .success(()))
+    }
+
+    func fail(_ error: Error) {
+        finish(with: .failure(error))
+    }
+
+    private func cancel(_ identifier: UUID) {
+        let continuation = lock.withStandardStreamLock {
+            () -> CheckedContinuation<Void, Error>? in
+            guard case .waiting(var continuations) = state else { return nil }
+            let continuation = continuations.removeValue(forKey: identifier)
+            state = .waiting(continuations)
+            return continuation
+        }
+        continuation?.resume(throwing: CancellationError())
+    }
+
+    private func finish(with result: Result<Void, Error>) {
+        let continuations = lock.withStandardStreamLock { () -> [CheckedContinuation<Void, Error>] in
+            guard case .waiting(let continuations) = state else { return [] }
+            switch result {
+            case .success:
+                state = .ready
+            case .failure(let error):
+                state = .failed(error)
+            }
+            return Array(continuations.values)
+        }
+        continuations.forEach { $0.resume(with: result) }
     }
 }
 
