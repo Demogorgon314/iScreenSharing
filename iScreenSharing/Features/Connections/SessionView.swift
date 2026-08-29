@@ -368,6 +368,7 @@ private struct ActiveVideoSessionView: View {
             Color.black
             RemoteVideoCanvasView(
                 renderer: renderer,
+                displayFrameSource: stream,
                 canvas: stream.canvas,
                 frames: stream.frames,
                 performance: stream.performance,

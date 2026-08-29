@@ -5,6 +5,7 @@ import SwiftUI
 
 struct RemoteVideoCanvasView: NSViewRepresentable {
     let renderer: AppleVideoRenderer
+    let displayFrameSource: SessionVideoStream
     let canvas: AppleCanvas
     let frames: AppleVideoFrameStore
     let performance: AppleVideoPerformanceMonitor
@@ -26,6 +27,7 @@ struct RemoteVideoCanvasView: NSViewRepresentable {
     func makeNSView(context: Context) -> RemoteVideoCanvasNSView {
         RemoteVideoCanvasNSView(
             renderer: renderer,
+            displayFrameSource: displayFrameSource,
             canvas: canvas,
             frames: frames,
             input: input,
@@ -160,7 +162,14 @@ final class RemoteVideoCanvasNSView: NSView {
             schedulePresentation()
         }
     }
-    var presentsFramesOnlyOnDisplayLink: Bool
+    var presentsFramesOnlyOnDisplayLink: Bool {
+        didSet {
+            guard presentsFramesOnlyOnDisplayLink != oldValue else { return }
+            displayFrameSource?.setDisplayDrivenFrameRequestsEnabled(
+                displayLink != nil && presentsFramesOnlyOnDisplayLink
+            )
+        }
+    }
     var showsDeveloperHUD: Bool {
         didSet {
             guard showsDeveloperHUD != oldValue else { return }
@@ -180,6 +189,7 @@ final class RemoteVideoCanvasNSView: NSView {
     var onLiveResizeChange: (Bool, CGSize) -> Void
 
     private(set) var canvas: AppleCanvas
+    private weak var displayFrameSource: SessionVideoStream?
     private let frames: AppleVideoFrameStore
     private let performance: AppleVideoPerformanceMonitor?
     private var input: AppleInputController?
@@ -210,6 +220,7 @@ final class RemoteVideoCanvasNSView: NSView {
 
     init(
         renderer: AppleVideoRenderer? = nil,
+        displayFrameSource: SessionVideoStream? = nil,
         canvas: AppleCanvas,
         frames: AppleVideoFrameStore,
         input: AppleInputController?,
@@ -229,6 +240,7 @@ final class RemoteVideoCanvasNSView: NSView {
         performance: AppleVideoPerformanceMonitor? = nil
     ) {
         self.canvas = canvas
+        self.displayFrameSource = displayFrameSource
         self.frames = frames
         self.performance = performance
         self.input = input
@@ -898,6 +910,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     fileprivate func displayLinkDidFire(_ displayLink: CADisplayLink) {
+        displayFrameSource?.requestFrameForDisplay()
         let callbackTime = CACurrentMediaTime()
         performance?.recordDisplayLink(
             lead: displayLink.targetTimestamp - callbackTime,
@@ -929,6 +942,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func configureDisplayLink() {
+        displayFrameSource?.setDisplayDrivenFrameRequestsEnabled(false)
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
@@ -949,6 +963,9 @@ final class RemoteVideoCanvasNSView: NSView {
             selector: #selector(RemoteVideoCanvasDisplayLinkTarget.displayLinkDidFire(_:))
         )
         displayLink.add(to: .main, forMode: .common)
+        displayFrameSource?.setDisplayDrivenFrameRequestsEnabled(
+            presentsFramesOnlyOnDisplayLink
+        )
         displayLinkTarget = target
         self.displayLink = displayLink
         updateDisplayLinkFrameRate()

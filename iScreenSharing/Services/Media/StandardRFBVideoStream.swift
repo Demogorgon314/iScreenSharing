@@ -15,6 +15,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     private let zlibDecoder: StandardRFBZlibDecoder
     private let halftoneZlibDecoder: StandardRFBZlibDecoder
     private let lifecycleLock = NSLock()
+    private let framebufferStateLock = NSLock()
     private var receiveTask: Task<Void, Never>?
     private var framebuffer: Data
     private var framebufferPool: CVPixelBufferPool
@@ -22,7 +23,21 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     private var initialCoverage: StandardRFBRegionCoverage
     private var automaticUpdatesEnabled = false
     private var frameCount = 0
+    // Rectangle writes happen only while this flag is set. Display requests
+    // either snapshot the last complete generation or wait for this FBU to
+    // finish, so the renderer can never observe a partially applied update.
+    private var framebufferUpdateInProgress = false
+    private var displayDrivenFrameRequestsEnabled = false
+    private var displayFrameRequested = false
+    private var completedFramebufferGeneration: UInt64 = 0
+    private var publishedFramebufferGeneration: UInt64 = 0
+    private var publicationMetrics = PublicationMetrics()
     private var processingMetrics = ProcessingMetrics()
+
+    private struct PublicationMetrics {
+        var frames = 0
+        var duration = 0.0
+    }
 
     private struct ProcessingMetrics {
         var startedAt = ProcessInfo.processInfo.systemUptime
@@ -37,7 +52,6 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         var inflateDuration = 0.0
         var applyDuration = 0.0
         var hextileDuration = 0.0
-        var publishDuration = 0.0
     }
 
     init(session: RFBAuthenticatedSession, quality: StandardRFBQuality) throws {
@@ -66,6 +80,23 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     }
 
     override var presentsFramesOnlyOnDisplayLink: Bool { true }
+
+    override func setDisplayDrivenFrameRequestsEnabled(_ enabled: Bool) {
+        framebufferStateLock.lock()
+        displayDrivenFrameRequestsEnabled = enabled
+        if !enabled {
+            displayFrameRequested = false
+            publishLatestFramebufferIfIdleLocked()
+        }
+        framebufferStateLock.unlock()
+    }
+
+    override func requestFrameForDisplay() {
+        framebufferStateLock.lock()
+        displayFrameRequested = true
+        publishLatestFramebufferIfIdleLocked()
+        framebufferStateLock.unlock()
+    }
 
     override func start() {
         let task = lifecycleLock.withStandardStreamLock { () -> Task<Void, Never>? in
@@ -139,6 +170,11 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     private func readFramebufferUpdate(from session: RFBAuthenticatedSession) async throws {
         let header = try await receiveStandardBytes(3, from: session)
         let rectangleCount = Int(try header.uint16BE(at: 1))
+        beginFramebufferUpdate()
+        var completedUpdate = false
+        defer {
+            if !completedUpdate { abandonFramebufferUpdate() }
+        }
         var didChange = false
         var requiresFullRefresh = false
         var processingDuration: TimeInterval = 0
@@ -271,13 +307,14 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
                 throw StandardRFBError.unsupportedEncoding(encoding)
             }
         }
-        if didChange, initialCoverage.isComplete {
-            let startedAt = ProcessInfo.processInfo.systemUptime
-            try publishFramebuffer()
-            let publishDuration = ProcessInfo.processInfo.systemUptime - startedAt
-            processingDuration += publishDuration
+        let isPublishable = didChange && initialCoverage.isComplete
+        if isPublishable {
             processingMetrics.updates += 1
-            processingMetrics.publishDuration += publishDuration
+        }
+        let publishDuration = try completeFramebufferUpdate(isPublishable: isPublishable)
+        completedUpdate = true
+        processingDuration += publishDuration
+        if isPublishable {
             performance.recordDecode(duration: processingDuration)
             logProcessingMetricsIfNeeded()
         }
@@ -514,6 +551,61 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         publishState(.streaming)
     }
 
+    private func beginFramebufferUpdate() {
+        framebufferStateLock.withStandardStreamLock {
+            framebufferUpdateInProgress = true
+        }
+    }
+
+    private func abandonFramebufferUpdate() {
+        framebufferStateLock.withStandardStreamLock {
+            framebufferUpdateInProgress = false
+        }
+    }
+
+    private func completeFramebufferUpdate(isPublishable: Bool) throws -> TimeInterval {
+        try framebufferStateLock.withStandardStreamLock {
+            defer { framebufferUpdateInProgress = false }
+            guard isPublishable else { return 0 }
+            completedFramebufferGeneration &+= 1
+            guard shouldPublishLatestFramebufferLocked else { return 0 }
+            return try publishLatestFramebufferLocked()
+        }
+    }
+
+    private var shouldPublishLatestFramebufferLocked: Bool {
+        guard completedFramebufferGeneration > publishedFramebufferGeneration else {
+            return false
+        }
+        return !displayDrivenFrameRequestsEnabled
+            || displayFrameRequested
+            || lifecycleLock.withStandardStreamLock { frameCount == 0 }
+    }
+
+    private func publishLatestFramebufferIfIdleLocked() {
+        guard !framebufferUpdateInProgress,
+              shouldPublishLatestFramebufferLocked else { return }
+        do {
+            _ = try publishLatestFramebufferLocked()
+        } catch {
+            Self.logger.error(
+                "Standard framebuffer publication failed error=\(error.localizedDescription, privacy: .public)"
+            )
+            publishState(.failed(error.localizedDescription))
+        }
+    }
+
+    private func publishLatestFramebufferLocked() throws -> TimeInterval {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        try publishFramebuffer()
+        let duration = ProcessInfo.processInfo.systemUptime - startedAt
+        publishedFramebufferGeneration = completedFramebufferGeneration
+        displayFrameRequested = false
+        publicationMetrics.frames += 1
+        publicationMetrics.duration += duration
+        return duration
+    }
+
     private func publishState(_ state: State) {
         DispatchQueue.main.async { [weak self] in self?.state = state }
     }
@@ -523,11 +615,16 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         let elapsed = now - processingMetrics.startedAt
         guard elapsed >= 1, processingMetrics.updates > 0 else { return }
         let values = processingMetrics
+        let publications = framebufferStateLock.withStandardStreamLock { () -> PublicationMetrics in
+            defer { publicationMetrics = PublicationMetrics() }
+            return publicationMetrics
+        }
         let updates = Double(values.updates)
+        let publishedFrames = Double(max(1, publications.frames))
         let megapixelsPerSecond = Double(values.pixels) / elapsed / 1_000_000
         let sourceMegabitsPerSecond = Double(values.sourceBytes) * 8 / elapsed / 1_000_000
         Self.logger.notice(
-            "Standard phases updates=\(values.updates) rects=\(values.rawRectangles)/\(values.copyRectangles)/\(values.zlibRectangles)/\(values.halftoneRectangles)/\(values.hextileRectangles) source=\(sourceMegabitsPerSecond, format: .fixed(precision: 1))Mb/s pixels=\(megapixelsPerSecond, format: .fixed(precision: 1))MP/s inflate=\(values.inflateDuration * 1_000 / updates, format: .fixed(precision: 2))ms apply=\(values.applyDuration * 1_000 / updates, format: .fixed(precision: 2))ms hextile=\(values.hextileDuration * 1_000 / updates, format: .fixed(precision: 2))ms publish=\(values.publishDuration * 1_000 / updates, format: .fixed(precision: 2))ms"
+            "Standard phases updates=\(values.updates) published=\(publications.frames) rects=\(values.rawRectangles)/\(values.copyRectangles)/\(values.zlibRectangles)/\(values.halftoneRectangles)/\(values.hextileRectangles) source=\(sourceMegabitsPerSecond, format: .fixed(precision: 1))Mb/s pixels=\(megapixelsPerSecond, format: .fixed(precision: 1))MP/s inflate=\(values.inflateDuration * 1_000 / updates, format: .fixed(precision: 2))ms apply=\(values.applyDuration * 1_000 / updates, format: .fixed(precision: 2))ms hextile=\(values.hextileDuration * 1_000 / updates, format: .fixed(precision: 2))ms publish=\(publications.duration * 1_000 / publishedFrames, format: .fixed(precision: 2))ms"
         )
         processingMetrics = ProcessingMetrics()
     }

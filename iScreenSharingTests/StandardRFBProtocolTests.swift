@@ -463,6 +463,56 @@ final class StandardRFBProtocolTests: XCTestCase {
         ])
     }
 
+    func testDisplayDrivenPublicationCoalescesAndRetainsFinalFramebuffer() async throws {
+        let updates = [UInt8(0x10), 0x20, 0x30].reduce(into: Data()) { data, blue in
+            data.append(contentsOf: [
+                0, 0, 0, 1,
+                0, 0, 0, 0, 0, 1, 0, 1,
+                0, 0, 0, 0,
+                blue, 0, 0, 0,
+            ])
+        }
+        let transport = StandardRFBTestTransport(receiveData: updates)
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 1,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+        session.install(videoStream: stream)
+        stream.setDisplayDrivenFrameRequestsEnabled(true)
+
+        stream.start()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while await MainActor.run(body: {
+            if case .failed = stream.state { return false }
+            return true
+        }), clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertEqual(stream.decodedFrameCount, 1)
+        stream.requestFrameForDisplay()
+
+        XCTAssertEqual(stream.decodedFrameCount, 2)
+        let pixelBuffer = try XCTUnwrap(
+            stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
+        )
+        XCTAssertEqual(Self.bytes(from: pixelBuffer, count: 4), [0x30, 0, 0, 0xff])
+        stream.close()
+    }
+
     func testDesktopSizeRequestsFullRefreshWithoutPublishingBlackFrame() async throws {
         let transport = StandardRFBTestTransport(receiveData: Data([
             0, 0, 0, 1,

@@ -28,4 +28,6 @@ class SessionVideoStream: ObservableObject, @unchecked Sendable {
     func start() { }
     func close() { }
     func setDecoderMode(_ mode: AppleVideoDecoderMode) { }
+    func setDisplayDrivenFrameRequestsEnabled(_ enabled: Bool) { }
+    func requestFrameForDisplay() { }
 }
