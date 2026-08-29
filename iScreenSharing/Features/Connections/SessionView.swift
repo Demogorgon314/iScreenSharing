@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleCanvas
 import SwiftUI
 
 struct SessionView: View {

@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
 struct SessionActivationConfiguration {

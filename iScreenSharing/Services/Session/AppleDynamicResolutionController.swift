@@ -1,6 +1,7 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleDisplayConfiguration
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleDisplayLayout
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 

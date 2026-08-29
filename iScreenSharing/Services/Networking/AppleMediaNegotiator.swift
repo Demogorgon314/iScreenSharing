@@ -3,6 +3,7 @@ import enum ScreenSharingProtocol.AppleFramebufferUpdate
 import enum ScreenSharingProtocol.AppleMediaConfiguration
 import enum ScreenSharingProtocol.AppleMediaOffer
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleMediaKeys
 import struct ScreenSharingProtocol.AppleMediaOffers
 

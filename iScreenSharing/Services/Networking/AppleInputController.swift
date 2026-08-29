@@ -1,6 +1,7 @@
 import Carbon
 import Foundation
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleScrollWheelEvent
 
 struct AppleInputDisplaySelection {

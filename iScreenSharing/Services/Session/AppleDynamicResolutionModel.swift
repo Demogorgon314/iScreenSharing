@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleDisplayLayout
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
