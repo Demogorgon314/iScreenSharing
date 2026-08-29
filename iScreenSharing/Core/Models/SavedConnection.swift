@@ -53,12 +53,14 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
 enum StandardRFBQuality: String, Codable, CaseIterable, Sendable {
     case high
     case balanced
+    case medium
     case lowBandwidth
 
     var title: String {
         switch self {
         case .high: "High (32-bit color)"
         case .balanced: "Balanced (16-bit color)"
+        case .medium: "Medium (16-level grayscale)"
         case .lowBandwidth: "Low Bandwidth (monochrome)"
         }
     }

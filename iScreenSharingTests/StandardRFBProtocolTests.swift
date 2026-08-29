@@ -16,16 +16,15 @@ final class StandardRFBProtocolTests: XCTestCase {
         )
     }
 
-    func testLowBandwidthKeepsServerCompatible32BitPixelFormat() {
-        XCTAssertEqual(
-            StandardRFBMessages.setPixelFormat(.forQuality(.lowBandwidth)),
-            Data([
-                0, 0, 0, 0,
-                32, 24, 0, 1,
-                0, 255, 0, 255, 0, 255,
-                16, 8, 0, 0, 0, 0,
-            ])
-        )
+    func testCompressedMonochromeAndGrayscaleKeepServerCompatible32BitPixelFormat() {
+        let expected = Data([
+            0, 0, 0, 0,
+            32, 24, 0, 1,
+            0, 255, 0, 255, 0, 255,
+            16, 8, 0, 0, 0, 0,
+        ])
+        XCTAssertEqual(StandardRFBMessages.setPixelFormat(.forQuality(.medium)), expected)
+        XCTAssertEqual(StandardRFBMessages.setPixelFormat(.forQuality(.lowBandwidth)), expected)
     }
 
     func testBuildsQualitySpecificEncodingPreferences() {
@@ -33,6 +32,18 @@ final class StandardRFBProtocolTests: XCTestCase {
             StandardRFBMessages.setEncodings(for: .high),
             Data([
                 2, 0, 0, 5,
+                0, 0, 0, 1,
+                0, 0, 0, 6,
+                0, 0, 0, 0,
+                0, 0, 0, 5,
+                0xff, 0xff, 0xff, 0x21,
+            ])
+        )
+        XCTAssertEqual(
+            StandardRFBMessages.setEncodings(for: .medium),
+            Data([
+                2, 0, 0, 6,
+                0, 0, 3, 0xe9,
                 0, 0, 0, 1,
                 0, 0, 0, 6,
                 0, 0, 0, 0,
@@ -166,6 +177,50 @@ final class StandardRFBProtocolTests: XCTestCase {
                     into: destination,
                     destinationOffset: 0,
                     destinationBytesPerRow: 36
+                )
+            }
+        )
+    }
+
+    func testDecodesGrayscaleRowsHighNibbleFirstWithRowAlignedPadding() throws {
+        var framebuffer = Data(repeating: 0xaa, count: 40)
+        try framebuffer.withUnsafeMutableBytes { destination in
+            try StandardRFBGrayscaleDecoder.decode(
+                Data([0x01, 0x2f, 0xef, 0x00]),
+                width: 3,
+                height: 2,
+                into: destination,
+                destinationOffset: 4,
+                destinationBytesPerRow: 20
+            )
+        }
+
+        XCTAssertEqual(Array(framebuffer[4..<16]), [
+            0, 0, 0, 255,
+            16, 16, 16, 255,
+            32, 32, 32, 255,
+        ])
+        XCTAssertEqual(Array(framebuffer[24..<36]), [
+            224, 224, 224, 255,
+            255, 255, 255, 255,
+            0, 0, 0, 255,
+        ])
+        XCTAssertEqual(Array(framebuffer[0..<4]), Array(repeating: 0xaa, count: 4))
+        XCTAssertEqual(Array(framebuffer[16..<24]), Array(repeating: 0xaa, count: 8))
+        XCTAssertEqual(Array(framebuffer[36..<40]), Array(repeating: 0xaa, count: 4))
+    }
+
+    func testRejectsMalformedGrayscalePayload() {
+        var framebuffer = Data(count: 12)
+        XCTAssertThrowsError(
+            try framebuffer.withUnsafeMutableBytes { destination in
+                try StandardRFBGrayscaleDecoder.decode(
+                    Data([0x01]),
+                    width: 3,
+                    height: 1,
+                    into: destination,
+                    destinationOffset: 0,
+                    destinationBytesPerRow: 12
                 )
             }
         )
@@ -409,6 +464,60 @@ final class StandardRFBProtocolTests: XCTestCase {
             0, 0, 0, 255,
         ])
         XCTAssertEqual(transport.sentMessages[1], StandardRFBMessages.setEncodings(for: .lowBandwidth))
+    }
+
+    func testMediumConfirmsInitialRefreshBeforePublishing() async throws {
+        var updates = Data([
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 3, 0xe9,
+            0, 0, 0, 9,
+            120, 156, 98, 0, 0, 0, 0, 255, 255,
+        ])
+        updates.append(contentsOf: [
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 3, 0xe9,
+            0, 0, 0, 7,
+            226, 7, 0, 0, 0, 255, 255,
+        ])
+        let transport = StandardRFBTestTransport(receiveData: updates)
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .medium)
+        session.install(videoStream: stream)
+
+        stream.start()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while stream.decodedFrameCount == 0, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        stream.close()
+
+        XCTAssertEqual(stream.decodedFrameCount, 1)
+        let pixelBuffer = try XCTUnwrap(
+            stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
+        )
+        XCTAssertEqual(Self.bytes(from: pixelBuffer), [
+            0, 0, 0, 255,
+            255, 255, 255, 255,
+        ])
+        XCTAssertEqual(transport.sentMessages[1], StandardRFBMessages.setEncodings(for: .medium))
+        XCTAssertEqual(transport.sentMessages.map(\.first), [0, 2, 3, 3, 9])
     }
 
     func testAppliesOverlappingCopyRectangleFromPreviousFramebuffer() async throws {
