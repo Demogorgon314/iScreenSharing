@@ -1,4 +1,5 @@
 import CoreMedia
+import enum ScreenSharingProtocol.AppleMediaOffer
 import VideoToolbox
 import XCTest
 @testable import iScreenSharing

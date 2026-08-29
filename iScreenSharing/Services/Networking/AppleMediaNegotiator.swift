@@ -1,6 +1,8 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleFramebufferUpdate
+import enum ScreenSharingProtocol.AppleMediaOffer
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleMediaOffers
 
 struct AppleMediaNegotiationEnvironment: Sendable {
     let randomBytes: @Sendable (Int) throws -> Data
