@@ -25,7 +25,8 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private(set) var fileTransferService: AppleFileTransferService?
     private(set) var controlState: AppleSessionControlState?
 
-    private let transport: any RFBTransport
+    private let route: any OpenSessionRoute
+    private var transport: any RFBTransport { route.control }
     private let encryptedWriter: AppleEncryptedRecordWriter
     private let standardWriter: RFBStandardWriter
     private let closeLock = NSLock()
@@ -33,24 +34,50 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
 
     init(
         endpoint: ConnectionEndpoint,
-        remoteAddress: ResolvedRemoteAddress,
         sharingType: ScreenSharingType = .highPerformance,
         masterKey: Data,
         serverInfo: RFBServerInfo,
-        transport: any RFBTransport
+        route: any OpenSessionRoute
     ) {
         self.endpoint = endpoint
-        self.remoteAddress = remoteAddress
+        remoteAddress = route.remoteAddress
         self.sharingType = sharingType
         self.masterKey = masterKey
         self.serverInfo = serverInfo
-        self.transport = transport
+        self.route = route
+        let transport = route.control
         encryptedWriter = AppleEncryptedRecordWriter { data in
             try await transport.send(data)
         }
         standardWriter = RFBStandardWriter { data in
             try await transport.send(data)
         }
+    }
+
+    convenience init(
+        endpoint: ConnectionEndpoint,
+        remoteAddress: ResolvedRemoteAddress,
+        sharingType: ScreenSharingType = .highPerformance,
+        masterKey: Data,
+        serverInfo: RFBServerInfo,
+        transport: any RFBTransport
+    ) {
+        self.init(
+            endpoint: endpoint,
+            sharingType: sharingType,
+            masterKey: masterKey,
+            serverInfo: serverInfo,
+            route: ManagedSessionRoute(
+                control: transport,
+                remoteAddress: remoteAddress,
+                sharingType: sharingType
+            ) { address, displayCount in
+                try AppleMediaReceiver(
+                    remoteAddress: address,
+                    displayCount: displayCount
+                )
+            }
+        )
     }
 
     func close() {
@@ -72,7 +99,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         let inputController = inputController
         let recordLayer = recordLayer
         let encryptedWriter = encryptedWriter
-        let transport = transport
+        let route = route
         Task { @MainActor in
             clipboardService?.close()
             keyboardInputSourceService?.close()
@@ -84,8 +111,14 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
                 )
             }
             await inputController?.close()
-            transport.cancel()
+            route.close()
         }
+    }
+
+    func openHighPerformanceMedia(
+        displayCount: Int
+    ) async throws -> any AppleMediaReceiving {
+        try await route.openHighPerformanceMedia(displayCount: displayCount)
     }
 
     func send(_ data: Data) async throws {

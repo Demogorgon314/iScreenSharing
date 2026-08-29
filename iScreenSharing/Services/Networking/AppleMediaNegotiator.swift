@@ -64,20 +64,12 @@ protocol AppleMediaNegotiating: Sendable {
 
 struct AppleMediaNegotiator: AppleMediaNegotiating {
     private static let retryLimit = 16
-    private let receiverFactory: AppleMediaReceiverFactory
-
-    init(receiverFactory: AppleMediaReceiverFactory = AppleMediaReceiverFactory()) {
-        self.receiverFactory = receiverFactory
-    }
 
     func negotiate(
         _ session: RFBAuthenticatedSession,
         displayCount: Int = 1
     ) async throws -> AppleMediaNegotiationResult {
-        let receiver = try await receiverFactory.makeReceiver(
-            for: session,
-            displayCount: displayCount
-        )
+        let receiver = try await session.openHighPerformanceMedia(displayCount: displayCount)
         session.install(mediaReceiver: receiver)
         do {
             return try await negotiate(session, receiver: receiver, displayCount: displayCount)

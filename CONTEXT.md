@@ -23,3 +23,7 @@ _Avoid_: Classic mode, normal VNC
 **High-Performance Mode**:
 Apple's private Screen Sharing path using encrypted control records and negotiated audio/video media resources.
 _Avoid_: Enhanced mode, proprietary VNC
+
+**Session Route**:
+The selected networking path for one session. It opens the control transport and, for High-Performance Mode, lazily creates media through the same Direct or Tailscale Adapter and selected remote peer.
+_Avoid_: Transport factory, connection type
