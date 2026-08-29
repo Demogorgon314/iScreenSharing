@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleKeyboardInputSourceState
 import XCTest
 @testable import iScreenSharing
 
