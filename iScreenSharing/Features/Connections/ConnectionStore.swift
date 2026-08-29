@@ -63,6 +63,17 @@ final class ConnectionStore: ObservableObject {
         persist()
     }
 
+    func updateStandardQuality(_ quality: StandardRFBQuality, for endpoint: ConnectionEndpoint) {
+        let connectionUpdated = Self.updateStandardQuality(quality, for: endpoint, in: &connections)
+        let recentUpdated = Self.updateStandardQuality(
+            quality,
+            for: endpoint,
+            in: &recentConnections
+        )
+        guard connectionUpdated || recentUpdated else { return }
+        persist()
+    }
+
     func delete(_ connection: SavedConnection) {
         connections.removeAll { $0.id == connection.id }
         for index in groups.indices {
@@ -248,6 +259,17 @@ final class ConnectionStore: ObservableObject {
         guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
               connections[index].deviceInfo != deviceInfo else { return false }
         connections[index].deviceInfo = deviceInfo
+        return true
+    }
+
+    private static func updateStandardQuality(
+        _ quality: StandardRFBQuality,
+        for endpoint: ConnectionEndpoint,
+        in connections: inout [SavedConnection]
+    ) -> Bool {
+        guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
+              connections[index].standardQuality != quality else { return false }
+        connections[index].standardQuality = quality
         return true
     }
 

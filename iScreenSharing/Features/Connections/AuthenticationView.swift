@@ -4,6 +4,7 @@ struct AuthenticationView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     @StateObject private var coordinator: AuthenticationCoordinator
     @ObservedObject private var sessions: SessionManager
+    private let connectionStore: ConnectionStore
     @State private var username = ""
     @State private var password = ""
     @State private var rememberPassword = false
@@ -16,13 +17,18 @@ struct AuthenticationView: View {
 
     init(endpoint: ConnectionEndpoint, store: ConnectionStore, sessions: SessionManager) {
         self.sessions = sessions
+        connectionStore = store
         _coordinator = StateObject(
             wrappedValue: AuthenticationCoordinator(
                 endpoint: endpoint,
                 connectionStore: store,
                 sessionManager: sessions,
                 onAuthenticated: { endpoint in
-                    SessionWindowCoordinator.shared.show(endpoint: endpoint, sessions: sessions)
+                    SessionWindowCoordinator.shared.show(
+                        endpoint: endpoint,
+                        sessions: sessions,
+                        connectionStore: store
+                    )
                 }
             )
         )
@@ -37,7 +43,8 @@ struct AuthenticationView: View {
                     DispatchQueue.main.async {
                         SessionWindowCoordinator.shared.show(
                             endpoint: coordinator.endpoint,
-                            sessions: sessions
+                            sessions: sessions,
+                            connectionStore: connectionStore
                         )
                     }
                 case .failed:

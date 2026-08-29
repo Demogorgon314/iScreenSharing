@@ -3,10 +3,10 @@ import XCTest
 @testable import iScreenSharing
 
 final class StandardRFBProtocolTests: XCTestCase {
-    func testBuildsClientInitializationAndHighQualityPixelFormat() {
+    func testBuildsClientInitializationAndStandardPixelFormat() {
         XCTAssertEqual(StandardRFBMessages.clientInit, Data([1]))
         XCTAssertEqual(
-            StandardRFBMessages.setPixelFormat(.forQuality(.high)),
+            StandardRFBMessages.setPixelFormat(.standard),
             Data([
                 0, 0, 0, 0,
                 32, 24, 0, 1,
@@ -16,22 +16,23 @@ final class StandardRFBProtocolTests: XCTestCase {
         )
     }
 
-    func testCompressedMonochromeAndGrayscaleKeepServerCompatible32BitPixelFormat() {
-        let expected = Data([
-            0, 0, 0, 0,
-            32, 24, 0, 1,
-            0, 255, 0, 255, 0, 255,
-            16, 8, 0, 0, 0, 0,
-        ])
-        XCTAssertEqual(StandardRFBMessages.setPixelFormat(.forQuality(.medium)), expected)
-        XCTAssertEqual(StandardRFBMessages.setPixelFormat(.forQuality(.lowBandwidth)), expected)
-    }
-
     func testBuildsQualitySpecificEncodingPreferences() {
         XCTAssertEqual(
             StandardRFBMessages.setEncodings(for: .high),
             Data([
                 2, 0, 0, 5,
+                0, 0, 0, 1,
+                0, 0, 0, 6,
+                0, 0, 0, 0,
+                0, 0, 0, 5,
+                0xff, 0xff, 0xff, 0x21,
+            ])
+        )
+        XCTAssertEqual(
+            StandardRFBMessages.setEncodings(for: .balanced),
+            Data([
+                2, 0, 0, 6,
+                0, 0, 3, 0xea,
                 0, 0, 0, 1,
                 0, 0, 0, 6,
                 0, 0, 0, 0,
@@ -65,6 +66,25 @@ final class StandardRFBProtocolTests: XCTestCase {
         )
     }
 
+    func testReducedColorStartupProfiles() {
+        XCTAssertEqual(
+            StandardRFBMessages.qualityProfile(for: .high).startupQuality,
+            .high
+        )
+        XCTAssertEqual(
+            StandardRFBMessages.qualityProfile(for: .medium).startupQuality,
+            .medium
+        )
+        XCTAssertEqual(
+            StandardRFBMessages.qualityProfile(for: .balanced).startupQuality,
+            .high
+        )
+        XCTAssertEqual(
+            StandardRFBMessages.qualityProfile(for: .lowBandwidth).startupQuality,
+            .high
+        )
+    }
+
     func testDecodesPersistentZlibRectangles() throws {
         let decoder = try StandardRFBZlibDecoder()
         XCTAssertEqual(
@@ -95,7 +115,7 @@ final class StandardRFBProtocolTests: XCTestCase {
         let output = try await StandardRFBHextileDecoder.decode(
             width: 4,
             height: 3,
-            pixelFormat: .forQuality(.high),
+            pixelFormat: .standard,
             read: { try input.read($0) }
         )
 
@@ -105,34 +125,92 @@ final class StandardRFBProtocolTests: XCTestCase {
         XCTAssertEqual(Array(output[44..<48]), [0x10, 0x20, 0x30, 0xff])
     }
 
-    func testDecodesAllQualityFormatsToBGRA() throws {
+    func testDecodesNative32BitPixelFormatToBGRA() throws {
         XCTAssertEqual(
-            try StandardRFBPixelFormat.forQuality(.high).decodeBGRA(
+            try StandardRFBPixelFormat.standard.decodeBGRA(
                 Data([0x33, 0x22, 0x11, 0]),
                 pixelCount: 1
             ),
             Data([0x33, 0x22, 0x11, 0xff])
         )
-        XCTAssertEqual(
-            try StandardRFBPixelFormat.forQuality(.balanced).decodeBGRA(
-                Data([0x00, 0xf8]),
-                pixelCount: 1
-            ),
-            Data([0, 0, 255, 255])
-        )
-        XCTAssertEqual(
-            try StandardRFBPixelFormat.forQuality(.balanced).decodeBGRA(
-                Data([0x10, 0x84]),
-                pixelCount: 1
-            ),
-            Data([132, 130, 132, 255])
-        )
         XCTAssertThrowsError(
-            try StandardRFBPixelFormat.forQuality(.balanced).decodeBGRA(
+            try StandardRFBPixelFormat.standard.decodeBGRA(
                 Data([0]),
                 pixelCount: 1
             )
         )
+    }
+
+    func testDecodesNative32BitPixelFormatIntoPaddedDestination() throws {
+        let source = Data([
+            0x30, 0x20, 0x10, 0x7f,
+            0x60, 0x50, 0x40, 0x00,
+        ])
+        var destination = Data(repeating: 0xee, count: 20)
+
+        try destination.withUnsafeMutableBytes { bytes in
+            try StandardRFBPixelFormat.standard.decodeBGRA(
+                source,
+                width: 1,
+                height: 2,
+                into: bytes,
+                destinationOffset: 4,
+                destinationBytesPerRow: 8
+            )
+        }
+
+        XCTAssertEqual(
+            destination,
+            Data([
+                0xee, 0xee, 0xee, 0xee,
+                0x30, 0x20, 0x10, 0xff,
+                0xee, 0xee, 0xee, 0xee,
+                0x60, 0x50, 0x40, 0xff,
+                0xee, 0xee, 0xee, 0xee,
+            ])
+        )
+    }
+
+    func testQualityLevelsRoundTripAndClamp() {
+        XCTAssertEqual(StandardRFBQuality(level: -1), .lowBandwidth)
+        XCTAssertEqual(StandardRFBQuality(level: 0), .lowBandwidth)
+        XCTAssertEqual(StandardRFBQuality(level: 1), .medium)
+        XCTAssertEqual(StandardRFBQuality(level: 2), .balanced)
+        XCTAssertEqual(StandardRFBQuality(level: 3), .high)
+        XCTAssertEqual(StandardRFBQuality(level: 4), .high)
+        for quality in StandardRFBQuality.allCases {
+            XCTAssertEqual(StandardRFBQuality(level: quality.level), quality)
+        }
+    }
+
+    func testDecodesNativeThousandsRGB555VectorIntoStridedFramebuffer() throws {
+        var framebuffer = Data(repeating: 0xaa, count: 48)
+        try framebuffer.withUnsafeMutableBytes { destination in
+            try StandardRFBThousandsDecoder.decode(
+                Data([
+                    0x7c, 0x00, 0x03, 0xe0, 0x00, 0x1f,
+                    0x7f, 0xff, 0x7f, 0xff, 0x7f, 0xff,
+                ]),
+                width: 3,
+                height: 2,
+                into: destination,
+                destinationOffset: 4,
+                destinationBytesPerRow: 24
+            )
+        }
+
+        XCTAssertEqual(Array(framebuffer[4..<16]), [
+            0, 0, 248, 255,
+            0, 248, 0, 255,
+            248, 0, 0, 255,
+        ])
+        XCTAssertEqual(Array(framebuffer[28..<40]), [
+            255, 255, 255, 255,
+            255, 255, 255, 255,
+            248, 248, 248, 255,
+        ])
+        XCTAssertEqual(Array(framebuffer[16..<28]), Array(repeating: 0xaa, count: 12))
+        XCTAssertEqual(Array(framebuffer[40..<48]), Array(repeating: 0xaa, count: 8))
     }
 
     func testDecodesHalftoneRowsMSBFirstWithByteAlignedPadding() throws {
@@ -226,10 +304,36 @@ final class StandardRFBProtocolTests: XCTestCase {
         )
     }
 
+    func testRejectsMalformedThousandsPayload() {
+        var framebuffer = Data(count: 12)
+        XCTAssertThrowsError(
+            try framebuffer.withUnsafeMutableBytes { destination in
+                try StandardRFBThousandsDecoder.decode(
+                    Data([0x7c, 0x00]),
+                    width: 3,
+                    height: 1,
+                    into: destination,
+                    destinationOffset: 0,
+                    destinationBytesPerRow: 12
+                )
+            }
+        )
+    }
+
     func testDecodesRGB565DirectlyIntoStridedFramebufferRegion() throws {
+        let rgb565 = StandardRFBPixelFormat(
+            bitsPerPixel: 16,
+            depth: 16,
+            redMaximum: 31,
+            greenMaximum: 63,
+            blueMaximum: 31,
+            redShift: 11,
+            greenShift: 5,
+            blueShift: 0
+        )
         var framebuffer = Data(repeating: 0xaa, count: 32)
         try framebuffer.withUnsafeMutableBytes { destination in
-            try StandardRFBPixelFormat.forQuality(.balanced).decodeBGRA(
+            try rgb565.decodeBGRA(
                 Data([
                     0x00, 0xf8, 0xe0, 0x07,
                     0x1f, 0x00, 0xff, 0xff,
@@ -420,15 +524,26 @@ final class StandardRFBProtocolTests: XCTestCase {
         ])
     }
 
-    func testReceivesLowBandwidthHalftoneRectangle() async throws {
-        let update = Data([
+    func testLowBandwidthRetainsFullColorBootstrapUntilConfirmedFrame() async throws {
+        var updates = Data([
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 0, 0,
+            1, 2, 3, 0, 4, 5, 6, 0,
             0, 0, 0, 1,
             0, 0, 0, 0, 0, 2, 0, 1,
             0, 0, 3, 0xe8,
             0, 0, 0, 9,
-            120, 156, 106, 0, 0, 0, 0, 255, 255,
+            120, 156, 98, 0, 0, 0, 0, 255, 255,
         ])
-        let transport = StandardRFBTestTransport(receiveData: update)
+        updates.append(contentsOf: [
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 3, 0xe8,
+            0, 0, 0, 7,
+            106, 0, 0, 0, 0, 255, 255,
+        ])
+        let transport = StandardRFBTestTransport(receiveData: updates)
         let endpoint = try ConnectionEndpoint("example.local")
         let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
         let session = RFBAuthenticatedSession(
@@ -450,12 +565,12 @@ final class StandardRFBProtocolTests: XCTestCase {
         stream.start()
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(1))
-        while stream.decodedFrameCount == 0, clock.now < deadline {
+        while stream.decodedFrameCount < 2, clock.now < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
         stream.close()
 
-        XCTAssertEqual(stream.decodedFrameCount, 1)
+        XCTAssertEqual(stream.decodedFrameCount, 2)
         let pixelBuffer = try XCTUnwrap(
             stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
         )
@@ -463,7 +578,128 @@ final class StandardRFBProtocolTests: XCTestCase {
             255, 255, 255, 255,
             0, 0, 0, 255,
         ])
-        XCTAssertEqual(transport.sentMessages[1], StandardRFBMessages.setEncodings(for: .lowBandwidth))
+        XCTAssertEqual(transport.sentMessages[1], StandardRFBMessages.setEncodings(for: .high))
+        XCTAssertEqual(transport.sentMessages[3], StandardRFBMessages.setEncodings(for: .lowBandwidth))
+        XCTAssertEqual(transport.sentMessages.map(\.first), [0, 2, 3, 2, 3, 9, 3])
+    }
+
+    func testReceivesBalancedThousandsRectangle() async throws {
+        var update = Data([
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 0, 0,
+            1, 2, 3, 0, 4, 5, 6, 0,
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 3, 0xea,
+            0, 0, 0, 12,
+            120, 156, 98, 96, 96, 96, 0, 0, 0, 0, 255, 255,
+        ])
+        update.append(contentsOf: [
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 3, 0xea,
+            0, 0, 0, 10,
+            170, 97, 96, 126, 0, 0, 0, 0, 255, 255,
+        ])
+        let transport = StandardRFBTestTransport(receiveData: update)
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .balanced)
+        session.install(videoStream: stream)
+
+        stream.start()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while stream.decodedFrameCount < 2, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        stream.close()
+
+        XCTAssertEqual(stream.decodedFrameCount, 2)
+        let pixelBuffer = try XCTUnwrap(
+            stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
+        )
+        XCTAssertEqual(Self.bytes(from: pixelBuffer), [
+            0, 0, 248, 255,
+            0, 248, 0, 255,
+        ])
+        XCTAssertEqual(transport.sentMessages[1], StandardRFBMessages.setEncodings(for: .high))
+        XCTAssertEqual(transport.sentMessages[3], StandardRFBMessages.setEncodings(for: .balanced))
+        XCTAssertEqual(transport.sentMessages.map(\.first), [0, 2, 3, 2, 3, 9, 3])
+    }
+
+    func testChangesQualityWithOrderedEncodingsAndFullRefresh() async throws {
+        let transport = StandardRFBTestTransport(receiveData: Data())
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+
+        try await stream.setQuality(.medium)
+
+        XCTAssertEqual(stream.currentQuality, .medium)
+        XCTAssertEqual(transport.sentMessages, [
+            StandardRFBMessages.setEncodings(for: .medium),
+            AppleRFBMessages.framebufferUpdateRequest(width: 2, height: 1),
+        ])
+    }
+
+    func testImmediateQualityChangeFollowsInitialConfiguration() async throws {
+        let transport = StandardRFBTestTransport(receiveData: Data())
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+
+        stream.start()
+        try await stream.setQuality(.medium)
+        stream.close()
+
+        XCTAssertEqual(transport.sentMessages, [
+            StandardRFBMessages.setPixelFormat(.standard),
+            StandardRFBMessages.setEncodings(for: .high),
+            AppleRFBMessages.framebufferUpdateRequest(width: 2, height: 1),
+            StandardRFBMessages.setEncodings(for: .medium),
+            AppleRFBMessages.framebufferUpdateRequest(width: 2, height: 1),
+        ])
     }
 
     func testMediumConfirmsInitialRefreshBeforePublishing() async throws {
@@ -658,6 +894,47 @@ final class StandardRFBProtocolTests: XCTestCase {
         XCTAssertNil(stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex))
         XCTAssertEqual(transport.sentMessages.suffix(2).map(\.first), [3, 9])
         XCTAssertEqual(transport.sentMessages.dropLast().last?.prefix(2), Data([3, 0]))
+    }
+
+    func testRejectsHextileRectangleOutsideFramebuffer() async throws {
+        let transport = StandardRFBTestTransport(receiveData: Data([
+            0, 0, 0, 1,
+            0, 1, 0, 0, 0, 2, 0, 1,
+            0, 0, 0, 5,
+            1,
+            1, 2, 3, 0, 4, 5, 6, 0,
+        ]))
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+        session.install(videoStream: stream)
+
+        stream.start()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while stream.state == .preparing, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        guard case .failed = stream.state else {
+            return XCTFail("Expected an invalid rectangle failure")
+        }
+        XCTAssertEqual(stream.decodedFrameCount, 0)
+        XCTAssertNil(stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex))
+        stream.close()
     }
 
     private static let rawFramebufferUpdate = Data([

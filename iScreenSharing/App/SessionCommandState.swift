@@ -21,6 +21,8 @@ final class SessionCommandState: ObservableObject {
     @Published private(set) var usesSharedClipboard: Bool
     @Published private(set) var isAudioMuted: Bool
     @Published private(set) var supportedRemoteCommands: Set<AppleRemoteSystemCommand>
+    @Published private(set) var standardQuality: StandardRFBQuality
+    @Published private(set) var standardQualityErrorMessage: String?
 
     private weak var session: RFBAuthenticatedSession?
     private let preferences: SessionFeaturePreferences
@@ -32,6 +34,9 @@ final class SessionCommandState: ObservableObject {
     private let audioStream: AppleAudioStream?
     private let supportsCopyPaste: Bool
     private let supportsSharedClipboard: Bool
+    private weak var standardVideoStream: StandardRFBVideoStream?
+    private let standardQualityDidChange: @MainActor (StandardRFBQuality) -> Void
+    private var standardQualityTask: Task<Void, Never>?
     private var subscriptions = Set<AnyCancellable>()
 
     init(
@@ -40,7 +45,8 @@ final class SessionCommandState: ObservableObject {
         displayLayout: AppleDisplayLayoutModel? = nil,
         dynamicResolution: AppleDynamicResolutionModel? = nil,
         controlState: AppleSessionControlState? = nil,
-        preferences: SessionFeaturePreferences = SessionFeaturePreferences()
+        preferences: SessionFeaturePreferences = SessionFeaturePreferences(),
+        standardQualityDidChange: @escaping @MainActor (StandardRFBQuality) -> Void = { _ in }
     ) {
         self.endpoint = endpoint
         self.session = session
@@ -48,6 +54,7 @@ final class SessionCommandState: ObservableObject {
         self.displayLayout = displayLayout
         self.dynamicResolution = dynamicResolution
         self.controlState = controlState
+        self.standardQualityDidChange = standardQualityDidChange
         keyboardInputSource = session?.keyboardInputSourceService
         clipboardService = session?.clipboardService
         audioStream = session?.audioStream
@@ -72,6 +79,9 @@ final class SessionCommandState: ObservableObject {
         usesSharedClipboard = clipboardService?.isSharingEnabled ?? false
         isAudioMuted = audioStream?.isMuted ?? false
         supportedRemoteCommands = session?.remoteSystemCapabilities?.supportedCommands ?? []
+        standardVideoStream = session?.videoStream as? StandardRFBVideoStream
+        standardQuality = standardVideoStream?.currentQuality ?? .high
+        standardQualityErrorMessage = nil
 
         session?.setVideoDecoderMode(videoDecoderMode)
 
@@ -99,6 +109,8 @@ final class SessionCommandState: ObservableObject {
     }
 
     var hasAudio: Bool { audioStream != nil }
+
+    var canChangeStandardQuality: Bool { standardVideoStream != nil }
 
     func setDisplayScale(_ scale: AppleVideoDisplayScale) {
         guard scale != displayScale else { return }
@@ -189,6 +201,32 @@ final class SessionCommandState: ObservableObject {
     func setAudioMuted(_ muted: Bool) {
         guard let audioStream, muted != isAudioMuted else { return }
         audioStream.toggleMute()
+    }
+
+    func setStandardQuality(_ quality: StandardRFBQuality) {
+        guard let standardVideoStream,
+              quality != standardQuality else { return }
+        standardQuality = quality
+        standardQualityErrorMessage = nil
+        let predecessor = standardQualityTask
+        standardQualityTask = Task { [weak self, weak standardVideoStream] in
+            await predecessor?.value
+            guard let self, let standardVideoStream else { return }
+            do {
+                try await standardVideoStream.setQuality(quality)
+                self.standardQualityDidChange(quality)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard self.standardQuality == quality else { return }
+                self.standardQuality = standardVideoStream.currentQuality
+                self.standardQualityErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func clearStandardQualityError() {
+        standardQualityErrorMessage = nil
     }
 
     func getClipboard() {

@@ -32,7 +32,11 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         super.init()
     }
 
-    func show(endpoint: ConnectionEndpoint, sessions: SessionManager) {
+    func show(
+        endpoint: ConnectionEndpoint,
+        sessions: SessionManager,
+        connectionStore: ConnectionStore? = nil
+    ) {
         let primaryKey = WindowKey(endpoint: endpoint, displayIndex: 0)
         if let window = windowControllers[primaryKey]?.window {
             window.makeKeyAndOrderFront(nil)
@@ -49,6 +53,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
             controlState: controlState,
+            connectionStore: connectionStore,
             disconnectsSessionOnDisappear: true
         )
         observeDisplayLayout(
@@ -311,6 +316,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         displayLayout: AppleDisplayLayoutModel,
         dynamicResolution: AppleDynamicResolutionModel,
         controlState: AppleSessionControlState,
+        connectionStore: ConnectionStore? = nil,
         disconnectsSessionOnDisappear: Bool
     ) {
         guard let session = sessions.session(for: key.endpoint) else { return }
@@ -319,7 +325,10 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             session: session,
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
-            controlState: controlState
+            controlState: controlState,
+            standardQualityDidChange: { [weak connectionStore] quality in
+                connectionStore?.updateStandardQuality(quality, for: key.endpoint)
+            }
         )
         commandStates[key.endpoint] = commandState
         let content = SessionView(

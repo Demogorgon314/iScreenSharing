@@ -24,22 +24,11 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
             && blueShift == 0
     }
 
-    static func forQuality(_ quality: StandardRFBQuality) -> Self {
-        switch quality {
-        case .high, .medium, .lowBandwidth:
-            Self(
-                bitsPerPixel: 32, depth: 24,
-                redMaximum: 255, greenMaximum: 255, blueMaximum: 255,
-                redShift: 16, greenShift: 8, blueShift: 0
-            )
-        case .balanced:
-            Self(
-                bitsPerPixel: 16, depth: 16,
-                redMaximum: 31, greenMaximum: 63, blueMaximum: 31,
-                redShift: 11, greenShift: 5, blueShift: 0
-            )
-        }
-    }
+    static let standard = Self(
+        bitsPerPixel: 32, depth: 24,
+        redMaximum: 255, greenMaximum: 255, blueMaximum: 255,
+        redShift: 16, greenShift: 8, blueShift: 0
+    )
 
     var wireData: Data {
         var data = Data([bitsPerPixel, depth, 0, 1])
@@ -89,6 +78,31 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
         }
         try source.withUnsafeBytes { sourceBytes in
             let source = sourceBytes.bindMemory(to: UInt8.self)
+            if isNativeBGRX {
+                var sourceBuffer = vImage_Buffer(
+                    data: UnsafeMutableRawPointer(mutating: sourceBytes.baseAddress!),
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: width * 4
+                )
+                var destinationBuffer = vImage_Buffer(
+                    data: destinationBase.advanced(by: destinationOffset),
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: destinationBytesPerRow
+                )
+                let status = vImageOverwriteChannelsWithScalar_ARGB8888(
+                    255,
+                    &sourceBuffer,
+                    &destinationBuffer,
+                    0x1,
+                    vImage_Flags(kvImageNoFlags)
+                )
+                guard status == kvImageNoError else {
+                    throw StandardRFBError.invalidRectangle
+                }
+                return
+            }
             if isRGB565 {
                 var sourceBuffer = vImage_Buffer(
                     data: UnsafeMutableRawPointer(mutating: sourceBytes.baseAddress!),
@@ -118,17 +132,6 @@ struct StandardRFBPixelFormat: Equatable, Sendable {
                 let destinationRow = destinationBase.advanced(
                     by: destinationOffset + row * destinationBytesPerRow
                 )
-                if isNativeBGRX {
-                    destinationRow.copyMemory(
-                        from: source.baseAddress!.advanced(by: sourcePixelOffset * 4),
-                        byteCount: width * 4
-                    )
-                    let destinationBytes = destinationRow.assumingMemoryBound(to: UInt8.self)
-                    for alphaIndex in stride(from: 3, to: width * 4, by: 4) {
-                        destinationBytes[alphaIndex] = 255
-                    }
-                    continue
-                }
                 let destinationBytes = destinationRow.assumingMemoryBound(to: UInt8.self)
                 for column in 0..<width {
                     let sourceIndex = sourcePixelOffset + column
@@ -347,6 +350,87 @@ enum StandardRFBGrayscaleDecoder {
     }
 }
 
+enum StandardRFBThousandsDecoder {
+    static func packedByteCount(width: Int, height: Int) throws -> Int {
+        guard width > 0, height > 0 else { throw StandardRFBError.invalidRectangle }
+        let (pixelCount, pixelOverflow) = width.multipliedReportingOverflow(by: height)
+        let (byteCount, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 2)
+        guard !pixelOverflow, !byteOverflow else { throw StandardRFBError.invalidRectangle }
+        return byteCount
+    }
+
+    static func decode(
+        _ source: Data,
+        width: Int,
+        height: Int,
+        into destination: UnsafeMutableRawBufferPointer,
+        destinationOffset: Int,
+        destinationBytesPerRow: Int
+    ) throws {
+        let expectedByteCount = try packedByteCount(width: width, height: height)
+        guard source.count == expectedByteCount,
+              destinationOffset >= 0,
+              destinationBytesPerRow >= width * 4 else {
+            throw StandardRFBError.invalidRectangle
+        }
+        let requiredBytes = destinationOffset + (height - 1) * destinationBytesPerRow + width * 4
+        guard requiredBytes <= destination.count,
+              let destinationBase = destination.baseAddress else {
+            throw StandardRFBError.invalidRectangle
+        }
+
+        source.withUnsafeBytes { sourceBytes in
+            let bytes = sourceBytes.bindMemory(to: UInt8.self)
+            let output = destinationBase.bindMemory(to: UInt8.self, capacity: destination.count)
+            var sourceOffset = 0
+            for row in 0..<height {
+                var destinationOffset = destinationOffset + row * destinationBytesPerRow
+                var column = 0
+                while column + 1 < width {
+                    let first = UInt16(bytes[sourceOffset]) << 8 | UInt16(bytes[sourceOffset + 1])
+                    let second = UInt16(bytes[sourceOffset + 2]) << 8 | UInt16(bytes[sourceOffset + 3])
+                    if first == 0x7fff, second == 0x7fff {
+                        Self.writeWhite(into: output, at: destinationOffset)
+                        Self.writeWhite(into: output, at: destinationOffset + 4)
+                    } else {
+                        Self.write(first, into: output, at: destinationOffset)
+                        Self.write(second, into: output, at: destinationOffset + 4)
+                    }
+                    sourceOffset += 4
+                    destinationOffset += 8
+                    column += 2
+                }
+                if column < width {
+                    let value = UInt16(bytes[sourceOffset]) << 8 | UInt16(bytes[sourceOffset + 1])
+                    Self.write(value, into: output, at: destinationOffset)
+                    sourceOffset += 2
+                }
+            }
+        }
+    }
+
+    private static func write(
+        _ value: UInt16,
+        into destination: UnsafeMutablePointer<UInt8>,
+        at offset: Int
+    ) {
+        destination[offset] = UInt8(value & 0x1f) << 3
+        destination[offset + 1] = UInt8((value >> 5) & 0x1f) << 3
+        destination[offset + 2] = UInt8((value >> 10) & 0x1f) << 3
+        destination[offset + 3] = 255
+    }
+
+    private static func writeWhite(
+        into destination: UnsafeMutablePointer<UInt8>,
+        at offset: Int
+    ) {
+        destination[offset] = 255
+        destination[offset + 1] = 255
+        destination[offset + 2] = 255
+        destination[offset + 3] = 255
+    }
+}
+
 struct StandardRFBRegionCoverage: Sendable {
     private let width: Int
     private let height: Int
@@ -471,15 +555,42 @@ final class StandardRFBZlibDecoder: @unchecked Sendable {
 }
 
 enum StandardRFBMessages {
+    struct QualityProfile {
+        let quality: StandardRFBQuality
+        let preferredEncoding: Int32?
+
+        var startupQuality: StandardRFBQuality {
+            switch quality {
+            case .balanced, .lowBandwidth: .high
+            case .high, .medium: quality
+            }
+        }
+
+        var requiresInitialRefreshConfirmation: Bool {
+            quality != .high
+        }
+    }
+
     static let rawEncoding: Int32 = 0
     static let copyRectangleEncoding: Int32 = 1
     static let hextileEncoding: Int32 = 5
     static let zlibEncoding: Int32 = 6
     static let subZlibHalftoneEncoding: Int32 = 1_000
     static let subZlib16GrayEncoding: Int32 = 1_001
+    static let subZlibThousandsEncoding: Int32 = 1_002
     static let desktopSizeEncoding: Int32 = -223
 
     static let clientInit = Data([1])
+
+    static func qualityProfile(for quality: StandardRFBQuality) -> QualityProfile {
+        let encoding: Int32? = switch quality {
+        case .high: nil
+        case .balanced: subZlibThousandsEncoding
+        case .medium: subZlib16GrayEncoding
+        case .lowBandwidth: subZlibHalftoneEncoding
+        }
+        return QualityProfile(quality: quality, preferredEncoding: encoding)
+    }
 
     static func setPixelFormat(_ format: StandardRFBPixelFormat) -> Data {
         Data([0, 0, 0, 0]) + format.wireData
@@ -487,10 +598,8 @@ enum StandardRFBMessages {
 
     static func setEncodings(for quality: StandardRFBQuality) -> Data {
         var encodings = [copyRectangleEncoding, zlibEncoding, rawEncoding, hextileEncoding]
-        if quality == .lowBandwidth {
-            encodings.insert(subZlibHalftoneEncoding, at: 0)
-        } else if quality == .medium {
-            encodings.insert(subZlib16GrayEncoding, at: 0)
+        if let preferredEncoding = qualityProfile(for: quality).preferredEncoding {
+            encodings.insert(preferredEncoding, at: 0)
         }
         encodings.append(desktopSizeEncoding)
         return try! AppleRFBMessages.setEncodings(encodings)

@@ -107,6 +107,100 @@ final class SessionCommandStateTests: XCTestCase {
         withExtendedLifetime(subscription) { }
     }
 
+    func testStandardSessionPublishesAndAppliesLiveQualityChanges() async throws {
+        let transport = SessionCommandTransport()
+        let endpoint = try ConnectionEndpoint(host: "standard-quality.test")
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900),
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+        session.install(videoStream: stream)
+        var persistedQuality: StandardRFBQuality?
+        let state = SessionCommandState(
+            endpoint: endpoint,
+            session: session,
+            preferences: SessionFeaturePreferences(defaults: defaults),
+            standardQualityDidChange: { persistedQuality = $0 }
+        )
+
+        XCTAssertTrue(state.canChangeStandardQuality)
+        XCTAssertEqual(state.standardQuality, .high)
+
+        state.setStandardQuality(.balanced)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while (stream.currentQuality != .balanced || persistedQuality != .balanced),
+              clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertEqual(state.standardQuality, .balanced)
+        XCTAssertEqual(stream.currentQuality, .balanced)
+        XCTAssertEqual(persistedQuality, .balanced)
+        XCTAssertEqual(transport.sentMessages, [
+            StandardRFBMessages.setEncodings(for: .balanced),
+            AppleRFBMessages.framebufferUpdateRequest(width: 2, height: 1),
+        ])
+    }
+
+    func testRapidQualityRoundTripFinishesAtTheLastSelectedLevel() async throws {
+        let transport = SessionCommandTransport(sendDelay: .milliseconds(50))
+        let endpoint = try ConnectionEndpoint(host: "quality-round-trip.test")
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900),
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+        session.install(videoStream: stream)
+        let state = SessionCommandState(
+            endpoint: endpoint,
+            session: session,
+            preferences: SessionFeaturePreferences(defaults: defaults)
+        )
+
+        state.setStandardQuality(.medium)
+        let clock = ContinuousClock()
+        let firstSendDeadline = clock.now.advanced(by: .seconds(1))
+        while transport.sentMessages.isEmpty, clock.now < firstSendDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        state.setStandardQuality(.high)
+
+        let completionDeadline = clock.now.advanced(by: .seconds(1))
+        while (transport.sentMessages.count < 4 || stream.currentQuality != .high),
+              clock.now < completionDeadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        XCTAssertEqual(state.standardQuality, .high)
+        XCTAssertEqual(stream.currentQuality, .high)
+        XCTAssertEqual(transport.sentMessages, [
+            StandardRFBMessages.setEncodings(for: .medium),
+            AppleRFBMessages.framebufferUpdateRequest(width: 2, height: 1),
+            StandardRFBMessages.setEncodings(for: .high),
+            AppleRFBMessages.framebufferUpdateRequest(width: 2, height: 1),
+        ])
+    }
+
     private func makeWindow() -> NSWindow {
         NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
@@ -115,4 +209,39 @@ final class SessionCommandStateTests: XCTestCase {
             defer: false
         )
     }
+}
+
+private final class SessionCommandTransport: RFBTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private let sendDelay: Duration?
+    private var sent = [Data]()
+
+    init(sendDelay: Duration? = nil) {
+        self.sendDelay = sendDelay
+    }
+
+    var sentMessages: [Data] {
+        withLock { sent }
+    }
+
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
+    func start(timeout: Duration) async throws { }
+
+    func send(_ data: Data) async throws {
+        withLock { sent.append(data) }
+        if let sendDelay {
+            try await Task.sleep(for: sendDelay)
+        }
+    }
+
+    func receiveExactly(_ length: Int) async throws -> Data {
+        throw RFBNetworkError.connectionClosed
+    }
+
+    func cancel() { }
 }
