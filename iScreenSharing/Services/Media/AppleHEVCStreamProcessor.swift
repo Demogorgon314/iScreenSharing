@@ -1,5 +1,6 @@
 import Foundation
 import QuartzCore
+import ScreenSharingProtocol
 
 struct AppleHEVCParameterSets: Equatable, Sendable {
     var video = Data()

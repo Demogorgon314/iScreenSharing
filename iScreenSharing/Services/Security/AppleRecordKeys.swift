@@ -1,4 +1,5 @@
 import Foundation
+import ScreenSharingProtocol
 
 extension AppleRekey {
     func unwrap(using key: Data) throws -> AppleRecordKeys {

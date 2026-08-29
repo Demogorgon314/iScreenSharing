@@ -1,3 +1,4 @@
+import ScreenSharingProtocol
 import XCTest
 @testable import iScreenSharing
 

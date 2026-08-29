@@ -52,6 +52,3 @@ typealias AppleScrollWheelEvent = ScreenSharingProtocol.AppleScrollWheelEvent
 typealias AppleRFBInputEncryptionRequest = ScreenSharingProtocol.AppleRFBInputEncryptionRequest
 typealias AppleRFBMessages = ScreenSharingProtocol.AppleRFBMessages
 typealias AppleRFBMessageError = ScreenSharingProtocol.AppleRFBMessageError
-typealias AppleRekey = ScreenSharingProtocol.AppleRekey
-typealias AppleRekeyError = ScreenSharingProtocol.AppleRekeyError
-typealias AppleVideoRateControlInfo = ScreenSharingProtocol.AppleVideoRateControlInfo

@@ -1,4 +1,5 @@
 import Foundation
+import ScreenSharingProtocol
 
 struct AppleRekeyReader {
     func read(from session: RFBAuthenticatedSession) async throws -> AppleRekey {

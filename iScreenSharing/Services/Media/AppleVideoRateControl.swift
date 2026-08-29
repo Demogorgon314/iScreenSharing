@@ -1,4 +1,5 @@
 import Foundation
+import ScreenSharingProtocol
 
 struct AppleVideoPacketObservation: Equatable, Sendable {
     let rtpTimestamp: UInt32
