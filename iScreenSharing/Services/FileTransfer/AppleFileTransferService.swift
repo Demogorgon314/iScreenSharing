@@ -494,8 +494,9 @@ actor AppleFileTransferService {
             frame.transferredBytes
         )
         activeTransfer.transferredBytes = overflow ? .max : transferredBytes
+        if frame.isDone { activeTransfer.sentDone = true }
+        self.activeTransfer = activeTransfer
         if frame.isDone {
-            activeTransfer.sentDone = true
             await history.update(activeTransfer.historyID, progress: 1, state: .completing)
         } else if let totalBytes = activeTransfer.totalBytes, totalBytes > 0 {
             await history.update(
@@ -503,7 +504,6 @@ actor AppleFileTransferService {
                 progress: Double(min(activeTransfer.transferredBytes, totalBytes)) / Double(totalBytes)
             )
         }
-        self.activeTransfer = activeTransfer
     }
 
     private func finishIfReady() async {

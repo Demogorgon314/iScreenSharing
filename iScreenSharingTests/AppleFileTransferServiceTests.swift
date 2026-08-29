@@ -301,9 +301,11 @@ final class AppleFileTransferServiceTests: XCTestCase {
     private func waitUntil(
         _ predicate: @escaping @MainActor () -> Bool
     ) async {
-        for _ in 0..<1_000 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while clock.now < deadline {
             if predicate() { return }
-            await Task.yield()
+            try? await clock.sleep(for: .milliseconds(1))
         }
         XCTFail("Timed out waiting for file transfer state")
     }
