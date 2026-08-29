@@ -46,14 +46,11 @@ public struct AppleScrollWheelEvent: Equatable, Sendable {
     }
 }
 
-/// The deterministic portion of an Apple encrypted input message.
-/// Encrypt `plaintextBlock` with the session content key using AES-ECB without
-/// padding, then append the ciphertext to `header`.
-public struct AppleRFBInputEncryptionRequest: Equatable, Sendable {
-    public let header: Data
-    public let plaintextBlock: Data
+struct AppleRFBInputEncryptionRequest: Equatable, Sendable {
+    let header: Data
+    let plaintextBlock: Data
 
-    fileprivate init(header: Data, plaintextBlock: Data) {
+    init(header: Data, plaintextBlock: Data) {
         precondition(plaintextBlock.count == 16)
         self.header = header
         self.plaintextBlock = plaintextBlock
@@ -190,7 +187,7 @@ public enum AppleRFBMessages {
         return message
     }
 
-    public static func pointerEventEncryptionRequest(
+    static func pointerEventEncryptionRequest(
         buttons: UInt8,
         x: UInt16,
         y: UInt16,
@@ -210,7 +207,7 @@ public enum AppleRFBMessages {
         )
     }
 
-    public static func keyEventEncryptionRequest(
+    static func keyEventEncryptionRequest(
         isDown: Bool,
         keySymbol: UInt32,
         timestampDelta: UInt32,

@@ -37,8 +37,7 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
                 count: virtualDisplayCount.rawValue
             )
         )
-        XCTAssertEqual(recordLayer.contentKey.count, 16)
-        XCTAssertEqual(session.recordLayer?.contentKey, recordLayer.contentKey)
+        XCTAssertTrue(session.recordLayer === recordLayer)
         let media = try await AppleMediaNegotiator().negotiate(
             session,
             displayCount: virtualDisplayCount.rawValue

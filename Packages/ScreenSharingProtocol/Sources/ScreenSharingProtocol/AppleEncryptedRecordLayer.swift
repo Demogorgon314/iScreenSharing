@@ -48,7 +48,7 @@ public final class AppleEncryptedRecordLayer: @unchecked Sendable {
     private static let authenticationCodeLength = 20
     private static let receiveCounterWindow: UInt32 = 6
 
-    public let contentKey: Data
+    let contentKey: Data
 
     private let lock = NSLock()
     private var encryptionIV: Data

@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import ScreenSharingProtocol
+@testable import ScreenSharingProtocol
 
 final class AppleRFBMessagesTests: XCTestCase {
     func testBuildsFramebufferUpdateRequest() {
