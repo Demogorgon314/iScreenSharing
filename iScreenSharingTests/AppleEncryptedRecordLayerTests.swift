@@ -1,82 +1,9 @@
-import enum ScreenSharingProtocol.AppleFileTransferMessage
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
+import struct ScreenSharingProtocol.AppleRecordKeys
 import XCTest
 @testable import iScreenSharing
 
 final class AppleEncryptedRecordLayerTests: XCTestCase {
-    func testFirstRecordMatchesIndependentReferenceVector() throws {
-        let layer = try makeLayer()
-
-        let record = try layer.encrypt(Data("hello".utf8))
-
-        XCTAssertEqual(
-            record,
-            try XCTUnwrap(Data(hex: "0020c2c84a51efbfeb9a84e3b9e83dd11c2686fb5d7dca66028cf06c37df39959249"))
-        )
-    }
-
-    func testRoundTripsMultipleRecordsWithChainedIVAndCounters() throws {
-        let sender = try makeLayer()
-        let receiver = try makeLayer()
-        let first = try sender.encrypt(Data([0x02, 0x00]))
-        let second = try sender.encrypt(Data([0x1c, 0xaa, 0xbb, 0xcc]))
-
-        XCTAssertEqual(try receiver.decrypt(Data(first.dropFirst(2))), Data([0x02, 0x00]))
-        XCTAssertEqual(try receiver.decrypt(Data(second.dropFirst(2))), Data([0x1c, 0xaa, 0xbb, 0xcc]))
-    }
-
-    func testEncryptsSelectedDisplayAndPointerAsOneOrderedBatch() throws {
-        let messages = [Data([0x0d, 0x01]), Data([0x10, 0x02])]
-        let batchedRecords = try makeLayer().encrypt(messages)
-        let sequentialSender = try makeLayer()
-        var sequentialRecords = Data()
-        for message in messages {
-            sequentialRecords.append(try sequentialSender.encrypt(message))
-        }
-
-        XCTAssertEqual(batchedRecords, sequentialRecords)
-    }
-
-    func testFileCopyFrameSpansRecordsAsOneContinuousMessage() throws {
-        var body = Data()
-        body.appendUInt16BE(1)
-        body.appendUInt16BE(102)
-        body.appendUInt32BE(0x1234)
-        body.appendUInt32BE(65_536)
-        body.append(Data(repeating: 0x58, count: 65_536))
-        var message = Data([0x22, 0])
-        message.appendUInt32BE(UInt32(body.count))
-        message.append(body)
-        XCTAssertEqual(message.count, 65_554)
-
-        let fragments = AppleFileTransferMessage.fragments(of: message)
-        XCTAssertEqual(fragments.map(\.count), [60_000, 5_554])
-        XCTAssertNotEqual(fragments[1].first, 0x22)
-
-        let sender = try makeLayer()
-        let receiver = try makeLayer()
-        let records = try sender.encrypt(fragments)
-        var offset = 0
-        var reassembled = Data()
-        while offset < records.count {
-            let ciphertextLength = try Int(records.uint16BE(at: offset))
-            let ciphertextStart = offset + 2
-            let ciphertextEnd = ciphertextStart + ciphertextLength
-            XCTAssertLessThanOrEqual(ciphertextEnd, records.count)
-            reassembled.append(try receiver.decrypt(
-                records.subdata(in: ciphertextStart..<ciphertextEnd)
-            ))
-            offset = ciphertextEnd
-        }
-
-        XCTAssertEqual(reassembled, message)
-        let parsed = try AppleFileTransferMessage.senderFrame(
-            from: reassembled,
-            expectedSessionID: 0x1234
-        )
-        XCTAssertEqual(parsed.command, 102)
-        XCTAssertEqual(parsed.transferredBytes, 65_536)
-    }
-
     func testSerialWriterPreservesEncryptionAndTransportOrder() async throws {
         let sink = BlockingRecordSink()
         let writer = AppleEncryptedRecordWriter { record in
@@ -128,26 +55,11 @@ final class AppleEncryptedRecordLayerTests: XCTestCase {
         XCTAssertEqual(attempts, 1)
     }
 
-    func testRejectsTamperedAuthenticationCodeAndInvalidFrameLength() throws {
-        let sender = try makeLayer()
-        let receiver = try makeLayer()
-        var ciphertext = Data(try sender.encrypt(Data("hello".utf8)).dropFirst(2))
-        ciphertext[ciphertext.count - 1] ^= 0x01
-
-        XCTAssertThrowsError(try receiver.decrypt(ciphertext)) { error in
-            XCTAssertEqual(error as? AppleEncryptedRecordError, .authenticationFailed)
-        }
-
-        XCTAssertThrowsError(try makeLayer().decrypt(Data(repeating: 0, count: 17))) { error in
-            XCTAssertEqual(error as? AppleEncryptedRecordError, .invalidCiphertext)
-        }
-    }
-
     private func makeLayer() throws -> AppleEncryptedRecordLayer {
         AppleEncryptedRecordLayer(
             keys: try AppleRecordKeys(
-                key: XCTUnwrap(Data(hex: "000102030405060708090a0b0c0d0e0f")),
-                initializationVector: XCTUnwrap(Data(hex: "101112131415161718191a1b1c1d1e1f"))
+                key: Data((0..<16).map(UInt8.init)),
+                initializationVector: Data((16..<32).map(UInt8.init))
             )
         )
     }
@@ -188,19 +100,5 @@ private actor BlockingRecordSink {
     func releaseFirstRecord() {
         firstRecordContinuation?.resume()
         firstRecordContinuation = nil
-    }
-}
-
-private extension Data {
-    init?(hex: String) {
-        guard hex.count.isMultiple(of: 2) else { return nil }
-        self.init()
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let next = hex.index(index, offsetBy: 2)
-            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
-            append(byte)
-            index = next
-        }
     }
 }

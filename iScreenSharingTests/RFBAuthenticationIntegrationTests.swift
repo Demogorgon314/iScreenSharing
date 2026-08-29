@@ -1,6 +1,7 @@
 import AVFAudio
 import CoreVideo
 import enum ScreenSharingProtocol.AppleRFBMessages
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
 import struct ScreenSharingProtocol.AppleClipboardArchive
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 import XCTest

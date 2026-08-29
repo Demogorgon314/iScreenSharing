@@ -1,5 +1,7 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleClipboardMessage
+import enum ScreenSharingProtocol.AppleEncryptedRecordError
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
 import struct ScreenSharingProtocol.RFBServerInfo
 
 final class RFBAuthenticatedSession: @unchecked Sendable {
