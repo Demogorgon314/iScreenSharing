@@ -1,6 +1,7 @@
 import CryptoKit
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleDisplayConfigurationTests: XCTestCase {
     func testBuildsVirtualDisplayMessageMatchingIndependentReference() throws {
@@ -108,7 +109,8 @@ final class AppleDisplayConfigurationTests: XCTestCase {
 
         XCTAssertEqual(layout.scaledWidth, 1440)
         XCTAssertEqual(layout.scaledHeight, 900)
-        XCTAssertEqual(layout.canvas(tileCount: 4), AppleCanvas(width: 2880, height: 1800, tileCount: 4))
+        XCTAssertEqual(layout.backingWidth, 2880)
+        XCTAssertEqual(layout.backingHeight, 1800)
         XCTAssertEqual(layout.displays, [
             AppleDisplayRect(
                 displayID: 42,
@@ -139,4 +141,35 @@ final class AppleDisplayConfigurationTests: XCTestCase {
 
 private extension SHA256.Digest {
     var hex: String { map { String(format: "%02x", $0) }.joined() }
+}
+
+private extension Data {
+    func uint16BE(at offset: Int) throws -> UInt16 {
+        guard offset >= 0, count >= offset + 2 else { throw DisplayTestWireError.outOfBounds }
+        return UInt16(self[offset]) << 8 | UInt16(self[offset + 1])
+    }
+
+    func uint32BE(at offset: Int) throws -> UInt32 {
+        guard offset >= 0, count >= offset + 4 else { throw DisplayTestWireError.outOfBounds }
+        return UInt32(self[offset]) << 24
+            | UInt32(self[offset + 1]) << 16
+            | UInt32(self[offset + 2]) << 8
+            | UInt32(self[offset + 3])
+    }
+
+    mutating func writeUInt16BE(_ value: UInt16, at offset: Int) {
+        self[offset] = UInt8(truncatingIfNeeded: value >> 8)
+        self[offset + 1] = UInt8(truncatingIfNeeded: value)
+    }
+
+    mutating func writeUInt32BE(_ value: UInt32, at offset: Int) {
+        self[offset] = UInt8(truncatingIfNeeded: value >> 24)
+        self[offset + 1] = UInt8(truncatingIfNeeded: value >> 16)
+        self[offset + 2] = UInt8(truncatingIfNeeded: value >> 8)
+        self[offset + 3] = UInt8(truncatingIfNeeded: value)
+    }
+}
+
+private enum DisplayTestWireError: Error {
+    case outOfBounds
 }

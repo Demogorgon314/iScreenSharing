@@ -1,41 +1,31 @@
-import CoreGraphics
 import Foundation
 
-struct AppleDynamicResolutionSize: Equatable, Sendable {
-    let width: Int
-    let height: Int
+public struct AppleDynamicResolutionSize: Equatable, Sendable {
+    public let width: Int
+    public let height: Int
+
+    public init(width: Int, height: Int) {
+        self.width = width
+        self.height = height
+    }
 
     /// Screen Sharing's fixed mode is 1080p in logical points. The display
     /// configuration encoder's default 2x backing scale makes it HiDPI.
-    static let fixed1080p = AppleDynamicResolutionSize(width: 1_920, height: 1_080)
-
-    static func normalized(viewport: CGSize) -> AppleDynamicResolutionSize? {
-        guard viewport.width.isFinite, viewport.height.isFinite,
-              viewport.width > 0, viewport.height > 0 else { return nil }
-        let maximumScale = min(1, 1920 / viewport.width, 1080 / viewport.height)
-        let boundedWidth = viewport.width * maximumScale
-        let boundedHeight = viewport.height * maximumScale
-        let desiredMinimumScale = max(1, 320 / boundedWidth, 200 / boundedHeight)
-        let availableScale = min(1920 / boundedWidth, 1080 / boundedHeight)
-        let finalScale = min(desiredMinimumScale, availableScale)
-        let width = max(2, Int((boundedWidth * finalScale).rounded(.down)) & ~1)
-        let height = max(2, Int((boundedHeight * finalScale).rounded(.down)) & ~1)
-        return AppleDynamicResolutionSize(width: width, height: height)
-    }
+    public static let fixed1080p = AppleDynamicResolutionSize(width: 1_920, height: 1_080)
 }
 
-struct AppleDisplayRect: Equatable, Sendable {
-    let displayID: UInt32
-    let x: Int
-    let y: Int
-    let width: Int
-    let height: Int
-    let logicalX: Int
-    let logicalY: Int
-    let logicalWidth: Int
-    let logicalHeight: Int
+public struct AppleDisplayRect: Equatable, Sendable {
+    public let displayID: UInt32
+    public let x: Int
+    public let y: Int
+    public let width: Int
+    public let height: Int
+    public let logicalX: Int
+    public let logicalY: Int
+    public let logicalWidth: Int
+    public let logicalHeight: Int
 
-    init(
+    public init(
         displayID: UInt32,
         x: Int,
         y: Int,
@@ -58,19 +48,29 @@ struct AppleDisplayRect: Equatable, Sendable {
     }
 }
 
-struct AppleDisplayLayout: Equatable, Sendable {
-    let scaledWidth: Int
-    let scaledHeight: Int
-    let backingWidth: Int
-    let backingHeight: Int
-    let displays: [AppleDisplayRect]
+public struct AppleDisplayLayout: Equatable, Sendable {
+    public let scaledWidth: Int
+    public let scaledHeight: Int
+    public let backingWidth: Int
+    public let backingHeight: Int
+    public let displays: [AppleDisplayRect]
 
-    func canvas(tileCount: Int) -> AppleCanvas {
-        AppleCanvas(width: backingWidth, height: backingHeight, tileCount: tileCount)
+    public init(
+        scaledWidth: Int,
+        scaledHeight: Int,
+        backingWidth: Int,
+        backingHeight: Int,
+        displays: [AppleDisplayRect]
+    ) {
+        self.scaledWidth = scaledWidth
+        self.scaledHeight = scaledHeight
+        self.backingWidth = backingWidth
+        self.backingHeight = backingHeight
+        self.displays = displays
     }
 }
 
-enum AppleDisplayConfiguration {
+public enum AppleDisplayConfiguration {
     private static let descriptorHeaderSize = 0x9c
     private static let modeSize = 28
     private static let maximumNameLength = 119
@@ -82,7 +82,7 @@ enum AppleDisplayConfiguration {
         (pixelWidth: 2624, pixelHeight: 1696, pointWidth: 1312, pointHeight: 848),
     ]
 
-    static func message(
+    public static func message(
         width: Int,
         height: Int,
         backingScale: Double = 2,
@@ -104,7 +104,7 @@ enum AppleDisplayConfiguration {
         )
     }
 
-    static func message(
+    public static func message(
         displaySizes: [AppleDynamicResolutionSize],
         backingScale: Double = 2,
         hdr: Bool = false,
@@ -189,7 +189,7 @@ enum AppleDisplayConfiguration {
         return descriptor
     }
 
-    static func layout(from payload: Data) -> AppleDisplayLayout? {
+    public static func layout(from payload: Data) -> AppleDisplayLayout? {
         guard payload.count >= 20,
               let scaledWidth = try? payload.uint16BE(at: 2),
               let scaledHeight = try? payload.uint16BE(at: 4),
@@ -235,16 +235,56 @@ enum AppleDisplayConfiguration {
     }
 }
 
-enum AppleDisplayConfigurationError: LocalizedError, Equatable {
+public enum AppleDisplayConfigurationError: LocalizedError, Equatable {
     case invalidDimensions
     case invalidBackingScale
     case invalidDisplayCount
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidDimensions: "The requested display dimensions are invalid."
         case .invalidBackingScale: "The requested display scale is invalid."
         case .invalidDisplayCount: "Screen Sharing supports one or two virtual displays."
         }
     }
+}
+
+private extension Data {
+    mutating func appendUInt16BE(_ value: UInt16) {
+        BigEndianWire.append(value, to: &self)
+    }
+
+    mutating func appendUInt32BE(_ value: UInt32) {
+        BigEndianWire.append(value, to: &self)
+    }
+
+    mutating func writeUInt16BE(_ value: UInt16, at offset: Int) {
+        precondition(BigEndianWire.write(value, to: &self, at: offset))
+    }
+
+    mutating func writeUInt32BE(_ value: UInt32, at offset: Int) {
+        precondition(BigEndianWire.write(value, to: &self, at: offset))
+    }
+
+    mutating func writeUInt64BE(_ value: UInt64, at offset: Int) {
+        precondition(BigEndianWire.write(value, to: &self, at: offset))
+    }
+
+    func uint16BE(at offset: Int) throws -> UInt16 {
+        guard let value = BigEndianWire.uint16(from: self, at: offset) else {
+            throw DisplayConfigurationWireError.outOfBounds
+        }
+        return value
+    }
+
+    func uint32BE(at offset: Int) throws -> UInt32 {
+        guard let value = BigEndianWire.uint32(from: self, at: offset) else {
+            throw DisplayConfigurationWireError.outOfBounds
+        }
+        return value
+    }
+}
+
+private enum DisplayConfigurationWireError: Error {
+    case outOfBounds
 }
