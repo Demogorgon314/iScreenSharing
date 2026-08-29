@@ -59,5 +59,53 @@ final class MobileVideoCanvasLayoutTests: XCTestCase {
 
         XCTAssertEqual(tiles.count, 4)
         XCTAssertEqual(tiles.reduce(0) { $0 + $1.container.height }, 500, accuracy: 0.001)
+        XCTAssertEqual(tiles[0].container.minY, 50, accuracy: 0.001)
+        XCTAssertEqual(tiles[3].container.maxY, 550, accuracy: 0.001)
+    }
+
+    func testPortraitCanvasAlignsVideoToTop() {
+        let canvas = AppleCanvas(width: 1600, height: 1200, tileCount: 4)
+
+        let layout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: canvas,
+            bounds: CGRect(x: 0, y: 0, width: 400, height: 800)
+        )
+
+        XCTAssertEqual(layout.container.minY, 0, accuracy: 0.001)
+        XCTAssertEqual(layout.container.height, 300, accuracy: 0.001)
+    }
+
+    func testLocalPointMapsRemoteCursorIntoTopAlignedVideo() throws {
+        let canvas = AppleCanvas(width: 1600, height: 1200, tileCount: 4)
+
+        let point = try XCTUnwrap(AppleVideoCanvasLayout.localPoint(
+            remoteX: 800,
+            remoteY: 600,
+            canvas: canvas,
+            bounds: CGRect(x: 0, y: 0, width: 400, height: 800)
+        ))
+
+        XCTAssertEqual(point.x, 200, accuracy: 0.001)
+        XCTAssertEqual(point.y, 150, accuracy: 0.001)
+    }
+
+    func testNativeTileContainersFollowRemoteTopToBottomOrder() {
+        let canvasSize = CGSize(width: 1600, height: 1200)
+
+        let first = AppleVideoCanvasLayout.nativeTileContainer(
+            logicalStart: 0,
+            validHeight: 300,
+            canvasSize: canvasSize,
+            width: 1600
+        )
+        let fourth = AppleVideoCanvasLayout.nativeTileContainer(
+            logicalStart: 900,
+            validHeight: 300,
+            canvasSize: canvasSize,
+            width: 1600
+        )
+
+        XCTAssertEqual(first.minY, 0, accuracy: 0.001)
+        XCTAssertEqual(fourth.maxY, 1200, accuracy: 0.001)
     }
 }

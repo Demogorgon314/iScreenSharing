@@ -102,6 +102,29 @@ final class AppleDynamicResolutionControllerTests: XCTestCase {
         XCTAssertEqual(restartCount, 1)
     }
 
+    func testRequestedResolutionRestartsMediaWhenHostKeepsSameCanvas() async throws {
+        let recorder = MessageRecorder()
+        let applied = CanvasRecorder()
+        let restarts = MediaRestartRecorder()
+        let controller = makeController(
+            recorder: recorder,
+            applied: applied,
+            restarts: restarts
+        )
+        let unchangedLayout = makeLayout(width: 1920, height: 1080)
+
+        try await controller.receive(unchangedLayout)
+        try await controller.request(width: 1280, height: 720)
+        try await controller.receive(unchangedLayout)
+
+        let messages = await recorder.messages
+        let canvases = await applied.canvases
+        let restartCount = await restarts.count
+        XCTAssertEqual(messages.map(\.first), [0x03, 0x1d, 0x03, 0x1c])
+        XCTAssertTrue(canvases.isEmpty)
+        XCTAssertEqual(restartCount, 1)
+    }
+
     func testInitialLayoutOnlyRearmsFramebufferUpdatesEvenWhenItDiffers() async throws {
         let recorder = MessageRecorder()
         let applied = CanvasRecorder()

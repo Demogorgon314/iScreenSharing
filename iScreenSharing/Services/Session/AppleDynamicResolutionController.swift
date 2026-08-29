@@ -16,6 +16,7 @@ actor AppleDynamicResolutionController {
     private let applyCanvas: ApplyCanvas
     private let prepareMediaRestart: PrepareMediaRestart
     private var mediaRestartPending = false
+    private var mediaRestartPrepared = false
     private var hasReceivedInitialLayout = false
     private var combinedDisplaySelectionPending = false
 
@@ -56,7 +57,20 @@ actor AppleDynamicResolutionController {
             hdr: hdr
         )
         combinedDisplaySelectionPending = displaySizes.count > 1
-        try await sendMessage(configuration)
+        // The host resets its media sender for every accepted display
+        // configuration, even when the resulting canvas dimensions are
+        // unchanged. The following layout response is the synchronization
+        // point where the receive generation and media offer are replayed.
+        mediaRestartPending = true
+        mediaRestartPrepared = false
+        do {
+            try await sendMessage(configuration)
+        } catch {
+            combinedDisplaySelectionPending = false
+            mediaRestartPending = false
+            mediaRestartPrepared = false
+            throw error
+        }
     }
 
     func receive(_ layout: AppleDisplayLayout) async throws {
@@ -74,18 +88,24 @@ actor AppleDynamicResolutionController {
         if updatedCanvas != canvas {
             canvas = updatedCanvas
             await applyCanvas(updatedCanvas)
-            await prepareMediaRestart()
             mediaRestartPending = true
+            mediaRestartPrepared = false
         }
         guard mediaRestartPending else { return }
+        if !mediaRestartPrepared {
+            await prepareMediaRestart()
+            mediaRestartPrepared = true
+        }
         try await sendMessage(mediaConfiguration)
         mediaRestartPending = false
+        mediaRestartPrepared = false
     }
 
     func receiveMediaCanvas(_ updatedCanvas: AppleCanvas) async {
         guard updatedCanvas.isUsable, updatedCanvas != canvas else { return }
         canvas = updatedCanvas
         mediaRestartPending = false
+        mediaRestartPrepared = false
         await applyCanvas(updatedCanvas)
     }
 }

@@ -11,9 +11,12 @@ enum AppleVideoCanvasLayout {
             return Tile(container: .zero, content: .zero)
         }
         let size = fittedSize(canvas: canvas, bounds: bounds)
+        let originY = bounds.height > bounds.width
+            ? bounds.minY
+            : bounds.midY - size.height / 2
         let container = CGRect(
             x: bounds.midX - size.width / 2,
-            y: bounds.midY - size.height / 2,
+            y: originY,
             width: size.width,
             height: size.height
         )
@@ -38,7 +41,7 @@ enum AppleVideoCanvasLayout {
                 : outputSlotHeight
             let container = CGRect(
                 x: full.container.minX,
-                y: full.container.maxY - outputSlotHeight * CGFloat(index + 1),
+                y: full.container.minY + outputSlotHeight * CGFloat(index),
                 width: full.container.width,
                 height: outputHeight
             )
@@ -62,6 +65,36 @@ enum AppleVideoCanvasLayout {
         return (
             min(canvas.width - 1, max(0, x)),
             min(canvas.height - 1, max(0, y))
+        )
+    }
+
+    static func localPoint(
+        remoteX: Int,
+        remoteY: Int,
+        canvas: AppleCanvas,
+        bounds: CGRect
+    ) -> CGPoint? {
+        let layout = fullCanvas(canvas: canvas, bounds: bounds).container
+        guard !layout.isEmpty, canvas.width > 0, canvas.height > 0 else { return nil }
+        let x = min(canvas.width - 1, max(0, remoteX))
+        let y = min(canvas.height - 1, max(0, remoteY))
+        return CGPoint(
+            x: layout.minX + CGFloat(x) / CGFloat(canvas.width) * layout.width,
+            y: layout.minY + CGFloat(y) / CGFloat(canvas.height) * layout.height
+        )
+    }
+
+    static func nativeTileContainer(
+        logicalStart: CGFloat,
+        validHeight: CGFloat,
+        canvasSize: CGSize,
+        width: CGFloat
+    ) -> CGRect {
+        CGRect(
+            x: 0,
+            y: logicalStart,
+            width: min(width, canvasSize.width),
+            height: validHeight
         )
     }
 

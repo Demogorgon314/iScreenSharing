@@ -616,8 +616,13 @@ final class AppleNV24MetalLayer: CAMetalLayer {
 
         let left = Float((container.minX - bounds.minX) / bounds.width * 2 - 1)
         let right = Float((container.maxX - bounds.minX) / bounds.width * 2 - 1)
+#if os(iOS)
+        let bottom = Float(1 - (container.maxY - bounds.minY) / bounds.height * 2)
+        let top = Float(1 - (container.minY - bounds.minY) / bounds.height * 2)
+#else
         let bottom = Float((container.minY - bounds.minY) / bounds.height * 2 - 1)
         let top = Float((container.maxY - bounds.minY) / bounds.height * 2 - 1)
+#endif
         let u0 = Float((0 - content.minX) / content.width)
         let u1 = Float((container.width - content.minX) / content.width)
         let vBottom = Float(1 - (0 - content.minY) / content.height)
@@ -667,12 +672,21 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             }
             let validHeight = min(slotHeight, max(0, canvasSize.height - logicalStart))
             guard width > 0, validHeight > 0 else { return nil }
+#if os(iOS)
+            let container = AppleVideoCanvasLayout.nativeTileContainer(
+                logicalStart: logicalStart,
+                validHeight: validHeight,
+                canvasSize: canvasSize,
+                width: width
+            )
+#else
             let container = CGRect(
                 x: 0,
                 y: canvasSize.height - logicalStart - validHeight,
                 width: min(width, canvasSize.width),
                 height: validHeight
             )
+#endif
             let content = CGRect(
                 x: 0,
                 y: validHeight - slotHeight,

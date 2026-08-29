@@ -46,8 +46,8 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     private var displayLink: CADisplayLink?
     private var displayLinkTarget: MobileVideoDisplayLinkTarget?
     private var displayScheduler = AppleVideoDisplayScheduler()
-    private var lastRemotePoint: (x: Int, y: Int)?
-    private var lastLocalPoint: CGPoint?
+    private var pointerState = MobileRemotePointerState()
+    private var dragPreviousLocation: CGPoint?
     private var cursorHotspot = CGPoint.zero
     private var inputTail = Task<Void, Never> {}
 
@@ -90,6 +90,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         metalLayer.frame = bounds
         metalLayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         updateLayout()
+        updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
         displayScheduler.markNeedsPresentation()
     }
 
@@ -113,6 +114,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
             if let frameObserver { self.stream.frames.removeObserver(frameObserver) }
             self.stream = stream
             displayScheduler.reset()
+            updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
             observeFrames()
             setNeedsLayout()
         }
@@ -264,16 +266,28 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
 
     private func installGestures() {
         let tap = UITapGestureRecognizer(target: self, action: #selector(didTap(_:)))
-        let drag = UIPanGestureRecognizer(target: self, action: #selector(didDrag(_:)))
-        drag.maximumNumberOfTouches = 1
+        tap.numberOfTouchesRequired = 1
+        let move = UIPanGestureRecognizer(target: self, action: #selector(didMovePointer(_:)))
+        move.maximumNumberOfTouches = 1
+        let drag = UILongPressGestureRecognizer(target: self, action: #selector(didDrag(_:)))
+        drag.numberOfTapsRequired = 1
+        // After the first tap, the second touch is the mouse-down. Requiring a
+        // stationary hold here makes a natural double-tap-and-drag fail before
+        // the recognizer can claim the movement.
+        drag.minimumPressDuration = 0
+        drag.allowableMovement = 18
         let scroll = UIPanGestureRecognizer(target: self, action: #selector(didScroll(_:)))
         scroll.minimumNumberOfTouches = 2
         scroll.maximumNumberOfTouches = 2
-        let rightClick = UITapGestureRecognizer(target: self, action: #selector(didRightClick(_:)))
+        let rightClick = UITapGestureRecognizer(
+            target: self,
+            action: #selector(didRightClick(_:))
+        )
         rightClick.numberOfTouchesRequired = 2
-        tap.require(toFail: drag)
-        tap.require(toFail: rightClick)
+        move.require(toFail: drag)
+        scroll.require(toFail: rightClick)
         addGestureRecognizer(tap)
+        addGestureRecognizer(move)
         addGestureRecognizer(drag)
         addGestureRecognizer(scroll)
         addGestureRecognizer(rightClick)
@@ -283,34 +297,54 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     }
 
     @objc private func didTap(_ recognizer: UITapGestureRecognizer) {
-        let location = recognizer.location(in: self)
-        guard let point = remotePoint(for: location) else { return }
-        updateCursorPosition(location)
-        lastRemotePoint = point
+        let point = pointerState.currentPoint(canvas: stream.canvas)
         enqueueInput { input in
             await input.pointer(buttons: AppleInputController.leftButton, x: point.x, y: point.y, clickCount: 1)
             await input.pointer(buttons: 0, x: point.x, y: point.y, clickCount: 1)
         }
     }
 
-    @objc private func didDrag(_ recognizer: UIPanGestureRecognizer) {
-        let isEnding = recognizer.state == .ended || recognizer.state == .cancelled
+    @objc private func didMovePointer(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .changed else { return }
+        let point = pointerState.move(
+            by: recognizer.translation(in: self),
+            canvas: stream.canvas,
+            bounds: bounds
+        )
+        recognizer.setTranslation(.zero, in: self)
+        updateCursorPosition(point)
+        sendPointer(buttons: 0, point: point)
+    }
+
+    @objc private func didDrag(_ recognizer: UILongPressGestureRecognizer) {
         let location = recognizer.location(in: self)
-        guard let point = remotePoint(for: location)
-            ?? (isEnding ? lastRemotePoint : nil) else { return }
-        if bounds.contains(location) { updateCursorPosition(location) }
-        lastRemotePoint = point
-        let buttons: UInt8 = recognizer.state == .ended || recognizer.state == .cancelled
-            ? 0
-            : AppleInputController.leftButton
-        enqueueInput { input in
-            await input.pointer(buttons: buttons, x: point.x, y: point.y, clickCount: 1)
+        switch recognizer.state {
+        case .began:
+            dragPreviousLocation = location
+            let point = pointerState.currentPoint(canvas: stream.canvas)
+            sendPointer(buttons: AppleInputController.leftButton, point: point, clickCount: 1)
+        case .changed:
+            let previous = dragPreviousLocation ?? location
+            dragPreviousLocation = location
+            let point = pointerState.move(
+                by: CGPoint(x: location.x - previous.x, y: location.y - previous.y),
+                canvas: stream.canvas,
+                bounds: bounds
+            )
+            updateCursorPosition(point)
+            sendPointer(buttons: AppleInputController.leftButton, point: point, clickCount: 1)
+        case .ended, .cancelled, .failed:
+            dragPreviousLocation = nil
+            let point = pointerState.currentPoint(canvas: stream.canvas)
+            sendPointer(buttons: 0, point: point, clickCount: 1)
+        default:
+            break
         }
     }
 
     @objc private func didScroll(_ recognizer: UIPanGestureRecognizer) {
-        guard recognizer.state == .changed,
-              let point = lastRemotePoint ?? remotePoint(for: recognizer.location(in: self)) else { return }
+        guard recognizer.state == .changed else { return }
+        let point = pointerState.currentPoint(canvas: stream.canvas)
         let translation = recognizer.translation(in: self)
         let vertical = Int(-translation.y / 12)
         let horizontal = Int(translation.x / 12)
@@ -327,54 +361,79 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     }
 
     @objc private func didRightClick(_ recognizer: UITapGestureRecognizer) {
-        let location = recognizer.location(in: self)
-        guard let point = remotePoint(for: location) else { return }
-        updateCursorPosition(location)
-        lastRemotePoint = point
+        let point = pointerState.currentPoint(canvas: stream.canvas)
         enqueueInput { input in
-            await input.pointer(buttons: AppleInputController.rightButton, x: point.x, y: point.y, clickCount: 1)
+            await input.pointer(
+                buttons: AppleInputController.rightButton,
+                x: point.x,
+                y: point.y,
+                clickCount: 1
+            )
             await input.pointer(buttons: 0, x: point.x, y: point.y, clickCount: 1)
         }
     }
 
     @objc private func didHover(_ recognizer: UIHoverGestureRecognizer) {
         let location = recognizer.location(in: self)
-        guard let point = remotePoint(for: location) else { return }
-        updateCursorPosition(location)
-        lastRemotePoint = point
-        enqueueInput { input in
-            await input.pointer(buttons: 0, x: point.x, y: point.y)
-        }
-    }
-
-    private func remotePoint(for location: CGPoint) -> (x: Int, y: Int)? {
-        AppleVideoCanvasLayout.remotePoint(location: location, canvas: stream.canvas, bounds: bounds)
+        guard let point = pointerState.setAbsolute(
+            localPoint: location,
+            canvas: stream.canvas,
+            bounds: bounds
+        ) else { return }
+        updateCursorPosition(point)
+        sendPointer(buttons: 0, point: point)
     }
 
     private func applyCursor(_ image: AppleCursorImage?) {
-        guard let image, let cgImage = Self.cursorImage(from: image) else {
-            cursorLayer.isHidden = true
-            cursorLayer.contents = nil
-            return
+        let cursor: (image: CGImage, size: CGSize, hotspot: CGPoint)?
+        if let image, let cgImage = Self.cursorImage(from: image) {
+            cursor = (
+                cgImage,
+                CGSize(width: image.width, height: image.height),
+                CGPoint(x: image.hotspotX, y: image.hotspotY)
+            )
+        } else {
+            cursor = Self.fallbackCursor()
         }
-        cursorHotspot = CGPoint(x: image.hotspotX, y: image.hotspotY)
-        cursorLayer.bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
-        cursorLayer.contents = cgImage
+        guard let cursor else { return }
+        cursorHotspot = cursor.hotspot
+        cursorLayer.bounds = CGRect(origin: .zero, size: cursor.size)
+        cursorLayer.contents = cursor.image
         cursorLayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
-        if let lastLocalPoint { updateCursorPosition(lastLocalPoint) }
+        updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
     }
 
-    private func updateCursorPosition(_ point: CGPoint) {
-        lastLocalPoint = point
-        guard cursorLayer.contents != nil else { return }
+    private func updateCursorPosition(_ point: MobileRemotePointerState.Point) {
+        guard cursorLayer.contents != nil,
+              let localPoint = AppleVideoCanvasLayout.localPoint(
+                  remoteX: point.x,
+                  remoteY: point.y,
+                  canvas: stream.canvas,
+                  bounds: bounds
+              ) else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         cursorLayer.position = CGPoint(
-            x: point.x - cursorHotspot.x + cursorLayer.bounds.width / 2,
-            y: point.y - cursorHotspot.y + cursorLayer.bounds.height / 2
+            x: localPoint.x - cursorHotspot.x + cursorLayer.bounds.width / 2,
+            y: localPoint.y - cursorHotspot.y + cursorLayer.bounds.height / 2
         )
         cursorLayer.isHidden = false
         CATransaction.commit()
+    }
+
+    private func sendPointer(
+        buttons: UInt8,
+        point: MobileRemotePointerState.Point,
+        clickCount: Int = 0
+    ) {
+        enqueueInput { input in
+            await input.pointer(
+                buttons: buttons,
+                x: point.x,
+                y: point.y,
+                clickCount: clickCount
+            )
+        }
     }
 
     private static func cursorImage(from image: AppleCursorImage) -> CGImage? {
@@ -398,6 +457,32 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
             shouldInterpolate: false,
             intent: .defaultIntent
         )
+    }
+
+    private static func fallbackCursor() -> (image: CGImage, size: CGSize, hotspot: CGPoint)? {
+        let size = CGSize(width: 18, height: 24)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: 1, y: 1))
+            path.addLine(to: CGPoint(x: 1, y: 20))
+            path.addLine(to: CGPoint(x: 6, y: 15))
+            path.addLine(to: CGPoint(x: 10, y: 23))
+            path.addLine(to: CGPoint(x: 14, y: 21))
+            path.addLine(to: CGPoint(x: 10, y: 14))
+            path.addLine(to: CGPoint(x: 17, y: 14))
+            path.close()
+            UIColor.white.setFill()
+            path.fill()
+            UIColor.black.setStroke()
+            path.lineWidth = 1.5
+            path.lineJoinStyle = .round
+            path.stroke()
+        }
+        guard let cgImage = image.cgImage else { return nil }
+        return (cgImage, size, CGPoint(x: 1, y: 1))
     }
 
     private func sendKey(symbol: UInt32) {

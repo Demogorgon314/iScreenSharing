@@ -13,6 +13,8 @@ final class MobileSessionController: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var session: RFBAuthenticatedSession?
+    @Published private(set) var selectedResolutionPreset: MobileResolutionPreset?
+    @Published private(set) var resolutionErrorMessage: String?
 
     let endpoint: ConnectionEndpoint
 
@@ -24,6 +26,7 @@ final class MobileSessionController: ObservableObject {
     private var isActive = true
     private var streamStateObserver: AnyCancellable?
     private var connectionTask: Task<Void, Never>?
+    private var resolutionTask: Task<Void, Never>?
     private var viewportSize: CGSize?
 
     init(
@@ -142,6 +145,7 @@ final class MobileSessionController: ObservableObject {
             )
             session.install(controlMessageService: controlMessages, clipboardService: clipboard)
             session.install(controlState: AppleSessionControlState(session: session))
+            try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: false))
             configureAudio(for: session, negotiation: negotiation)
             clipboard.start()
             clipboard.setActive(isActive)
@@ -151,7 +155,6 @@ final class MobileSessionController: ObservableObject {
             connectionTask = nil
             controlMessages.start()
             persist(credentials, remember: rememberPassword)
-            scheduleViewportUpdate(waitsForViewportToSettle: false)
         } catch is CancellationError {
             connectingSession?.close()
             if session === connectingSession { session = nil }
@@ -170,11 +173,15 @@ final class MobileSessionController: ObservableObject {
     func disconnect() {
         connectionTask?.cancel()
         connectionTask = nil
+        resolutionTask?.cancel()
+        resolutionTask = nil
         streamStateObserver = nil
         (session?.clipboardService as? MobileClipboardService)?.setActive(false)
         session?.close()
         session = nil
         state = .idle
+        selectedResolutionPreset = nil
+        resolutionErrorMessage = nil
         deactivateAudioSession()
     }
 
@@ -186,7 +193,34 @@ final class MobileSessionController: ObservableObject {
     func updateViewport(_ size: CGSize) {
         guard size.width > 0, size.height > 0, viewportSize != size else { return }
         viewportSize = size
-        scheduleViewportUpdate(waitsForViewportToSettle: true)
+    }
+
+    func requestResolution(_ preset: MobileResolutionPreset) {
+        guard let viewportSize,
+              let session,
+              let controller = session.dynamicResolutionController,
+              let size = preset.size(for: viewportSize) else { return }
+        resolutionTask?.cancel()
+        resolutionTask = Task { [weak self, weak session] in
+            do {
+                try await controller.request(displaySizes: [size])
+                try Task.checkCancellation()
+                guard let self, let session, self.session === session else { return }
+                selectedResolutionPreset = preset
+                resolutionErrorMessage = nil
+                resolutionTask = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self, let session, self.session === session else { return }
+                resolutionErrorMessage = error.localizedDescription
+                resolutionTask = nil
+            }
+        }
+    }
+
+    func clearResolutionError() {
+        resolutionErrorMessage = nil
     }
 
     private func observe(_ stream: AppleVideoStream, session: RFBAuthenticatedSession) {
@@ -196,25 +230,15 @@ final class MobileSessionController: ObservableObject {
         }
     }
 
-    private func scheduleViewportUpdate(waitsForViewportToSettle: Bool) {
-        guard let viewportSize,
-              let session,
-              let stream = session.videoStream,
-              let model = session.dynamicResolutionModel,
-              let controller = session.dynamicResolutionController else { return }
-        model.schedule(
-            viewport: viewportSize,
-            canvas: stream.canvas,
-            controller: controller,
-            waitsForViewportToSettle: waitsForViewportToSettle
-        )
-    }
-
     private func connectionDidFail(_ message: String, session failedSession: RFBAuthenticatedSession?) {
         guard let failedSession, session === failedSession else { return }
+        resolutionTask?.cancel()
+        resolutionTask = nil
         streamStateObserver = nil
         failedSession.close()
         session = nil
+        selectedResolutionPreset = nil
+        resolutionErrorMessage = nil
         deactivateAudioSession()
         state = .failed(message)
     }

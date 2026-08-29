@@ -161,6 +161,21 @@ private struct MobileConnectionPlaceholderView: View {
                     } label: {
                         Label("Keyboard", systemImage: "keyboard")
                     }
+                    Menu {
+                        ForEach(MobileResolutionPreset.allCases) { preset in
+                            Button {
+                                controller.requestResolution(preset)
+                            } label: {
+                                if controller.selectedResolutionPreset == preset {
+                                    Label(preset.title, systemImage: "checkmark")
+                                } else {
+                                    Text(preset.title)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Resolution", systemImage: "display")
+                    }
                     Button(role: .destructive) {
                         controller.disconnect()
                     } label: {
@@ -177,6 +192,17 @@ private struct MobileConnectionPlaceholderView: View {
             proxy.size
         } action: { size in
             controller.updateViewport(size)
+        }
+        .alert(
+            "Unable to Change Resolution",
+            isPresented: Binding(
+                get: { controller.resolutionErrorMessage != nil },
+                set: { if !$0 { controller.clearResolutionError() } }
+            )
+        ) {
+            Button("OK") { controller.clearResolutionError() }
+        } message: {
+            Text(controller.resolutionErrorMessage ?? "The remote Mac rejected the display change.")
         }
     }
 
