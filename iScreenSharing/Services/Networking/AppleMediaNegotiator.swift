@@ -15,8 +15,8 @@ struct AppleMediaNegotiationEnvironment: Sendable {
     let operatingSystemVersion: String
 
     static let system = Self(
-        randomBytes: Cryptography.randomBytes,
-        randomUInt32: Cryptography.randomUInt32,
+        randomBytes: { try Cryptography.randomBytes(count: $0) },
+        randomUInt32: { try Cryptography.randomUInt32() },
         timestamp: {
             UInt64(Date().timeIntervalSince1970 * 1_000_000_000)
         },
