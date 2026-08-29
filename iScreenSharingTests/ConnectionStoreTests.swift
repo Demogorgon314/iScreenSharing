@@ -151,6 +151,21 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(restored.recentConnections.first?.standardQuality, .balanced)
     }
 
+    func testRecordAppliesInitialStandardQualityToNewRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = ConnectionStore(defaults: defaults)
+        _ = store.networkConfiguration(for: endpoint, deviceInfo: nil)
+        store.clearRecentConnections()
+
+        store.record(endpoint, standardQuality: .lowBandwidth)
+
+        XCTAssertEqual(store.connection(for: endpoint)?.standardQuality, .lowBandwidth)
+        XCTAssertEqual(store.recentConnections.first?.standardQuality, .lowBandwidth)
+        let restored = ConnectionStore(defaults: defaults)
+        XCTAssertEqual(restored.connection(for: endpoint)?.standardQuality, .lowBandwidth)
+        XCTAssertEqual(restored.recentConnections.first?.standardQuality, .lowBandwidth)
+    }
+
     func testDeleteRemovesPersistedConnection() throws {
         let store = ConnectionStore(defaults: defaults)
         store.record(try ConnectionEndpoint("example.local"))

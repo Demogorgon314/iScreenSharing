@@ -3,6 +3,8 @@ import Foundation
 import OSLog
 
 final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
+    typealias PublicationScheduler = @Sendable (@escaping @Sendable () -> Void) -> Void
+
     private static let maximumFramebufferBytes = 256 * 1_024 * 1_024
     private static let logger = Logger(
         subsystem: "com.wangkai.iShareScreen",
@@ -18,6 +20,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     private let thousandsZlibDecoder: StandardRFBZlibDecoder
     private let lifecycleLock = NSLock()
     private let framebufferStateLock = NSLock()
+    private let schedulePublication: PublicationScheduler
     private var initialConfigurationTask: Task<Void, Error>?
     private var receiveTask: Task<Void, Never>?
     private var framebuffer: Data
@@ -32,9 +35,13 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     private var framebufferUpdateInProgress = false
     private var displayDrivenFrameRequestsEnabled = false
     private var displayFrameRequested = false
+    private var publicationScheduled = false
+    private var publicationEpoch: UInt64 = 0
+    private var publicationEnabled = false
     private var completedFramebufferGeneration: UInt64 = 0
     private var publishedFramebufferGeneration: UInt64 = 0
     private var pendingInitialQuality: StandardRFBQuality?
+    private var pendingLiveQuality: StandardRFBQuality?
     private var needsInitialRefreshConfirmation: Bool
     private var publicationMetrics = PublicationMetrics()
     private var processingMetrics = ProcessingMetrics()
@@ -70,9 +77,22 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         var duration: TimeInterval { inflateDuration + applyDuration }
     }
 
-    init(session: RFBAuthenticatedSession, quality: StandardRFBQuality) throws {
+    init(
+        session: RFBAuthenticatedSession,
+        quality: StandardRFBQuality,
+        schedulePublication: PublicationScheduler? = nil
+    ) throws {
         self.session = session
         self.quality = quality
+        if let schedulePublication {
+            self.schedulePublication = schedulePublication
+        } else {
+            let queue = DispatchQueue(
+                label: "com.wangkai.iShareScreen.standard-publication",
+                qos: .userInteractive
+            )
+            self.schedulePublication = { work in queue.async(execute: work) }
+        }
         pixelFormat = .standard
         zlibDecoder = try StandardRFBZlibDecoder()
         halftoneZlibDecoder = try StandardRFBZlibDecoder()
@@ -108,20 +128,22 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     override var presentsFramesOnlyOnDisplayLink: Bool { true }
 
     override func setDisplayDrivenFrameRequestsEnabled(_ enabled: Bool) {
-        framebufferStateLock.lock()
-        displayDrivenFrameRequestsEnabled = enabled
-        if !enabled {
-            displayFrameRequested = false
-            publishLatestFramebufferIfIdleLocked()
+        let epoch = framebufferStateLock.withStandardStreamLock { () -> UInt64? in
+            displayDrivenFrameRequestsEnabled = enabled
+            if !enabled { displayFrameRequested = false }
+            return schedulePublicationIfNeededLocked()
         }
-        framebufferStateLock.unlock()
+        if let epoch { schedulePublication(epoch: epoch) }
     }
 
     override func requestFrameForDisplay() {
-        framebufferStateLock.lock()
+        // The display-link callback must not wait behind a full-frame copy.
+        // A missed request is harmless because the next display tick retries.
+        guard framebufferStateLock.try() else { return }
         displayFrameRequested = true
-        publishLatestFramebufferIfIdleLocked()
+        let epoch = schedulePublicationIfNeededLocked()
         framebufferStateLock.unlock()
+        if let epoch { schedulePublication(epoch: epoch) }
     }
 
     func setQuality(_ quality: StandardRFBQuality) async throws {
@@ -132,22 +154,38 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
             self.initialConfigurationTask
         }
         try await initialConfigurationTask?.value
-        try await session.sendStandard([
-            StandardRFBMessages.setEncodings(for: quality),
-            AppleRFBMessages.framebufferUpdateRequest(
-                width: UInt16(framebufferCanvas.width),
-                height: UInt16(framebufferCanvas.height)
-            ),
-        ])
+        lifecycleLock.withStandardStreamLock { pendingInitialQuality = nil }
+        let dimensions = framebufferStateLock.withStandardStreamLock { () -> (UInt16, UInt16) in
+            pendingLiveQuality = quality
+            return (UInt16(framebufferCanvas.width), UInt16(framebufferCanvas.height))
+        }
+        do {
+            try await session.sendStandard([
+                StandardRFBMessages.setEncodings(for: quality),
+                AppleRFBMessages.framebufferUpdateRequest(
+                    width: dimensions.0,
+                    height: dimensions.1
+                ),
+            ])
+        } catch {
+            framebufferStateLock.withStandardStreamLock {
+                if pendingLiveQuality == quality { pendingLiveQuality = nil }
+            }
+            throw error
+        }
         lifecycleLock.withStandardStreamLock {
             self.quality = quality
-            pendingInitialQuality = nil
         }
         Self.logger.info("Changed Standard quality=\(quality.rawValue, privacy: .public)")
     }
 
     override func start() {
         guard let session else { return }
+        framebufferStateLock.withStandardStreamLock {
+            publicationEpoch &+= 1
+            publicationEnabled = true
+            publicationScheduled = false
+        }
         let task = lifecycleLock.withStandardStreamLock { () -> Task<Void, Never>? in
             guard receiveTask == nil else { return nil }
             let initialQuality = quality
@@ -182,6 +220,12 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         }
         tasks.0?.cancel()
         tasks.1?.cancel()
+        framebufferStateLock.withStandardStreamLock {
+            publicationEpoch &+= 1
+            publicationEnabled = false
+            publicationScheduled = false
+            displayFrameRequested = false
+        }
         publishState(.stopped)
     }
 
@@ -228,7 +272,15 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     private func readFramebufferUpdate(from session: RFBAuthenticatedSession) async throws {
         let header = try await receiveStandardBytes(3, from: session)
         let rectangleCount = Int(try header.uint16BE(at: 1))
-        beginFramebufferUpdate()
+        if let quality = beginFramebufferUpdate() {
+            initialCoverage = StandardRFBRegionCoverage(
+                width: framebufferCanvas.width,
+                height: framebufferCanvas.height
+            )
+            needsInitialRefreshConfirmation = StandardRFBMessages
+                .qualityProfile(for: quality)
+                .requiresInitialRefreshConfirmation
+        }
         var completedUpdate = false
         defer {
             if !completedUpdate { abandonFramebufferUpdate() }
@@ -243,6 +295,9 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
             let width = Int(try rectangle.uint16BE(at: 4))
             let height = Int(try rectangle.uint16BE(at: 6))
             let encoding = try rectangle.int32BE(at: 8)
+            if encoding != StandardRFBMessages.desktopSizeEncoding {
+                try validateFramebufferRectangle(x: x, y: y, width: width, height: height)
+            }
             switch encoding {
             case StandardRFBMessages.rawEncoding:
                 let pixelCount = try Self.checkedPixelCount(width: width, height: height)
@@ -409,9 +464,9 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         if isPublishable {
             processingMetrics.updates += 1
         }
-        let publishDuration = try completeFramebufferUpdate(isPublishable: isPublishable)
+        let publicationEpoch = completeFramebufferUpdate(isPublishable: isPublishable)
         completedUpdate = true
-        processingDuration += publishDuration
+        if let publicationEpoch { schedulePublication(epoch: publicationEpoch) }
         if isPublishable {
             performance.recordDecode(duration: processingDuration)
             logProcessingMetricsIfNeeded()
@@ -660,11 +715,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
             _ destinationBytesPerRow: Int
         ) throws -> Void
     ) throws {
-        guard x >= 0, y >= 0, width > 0, height > 0,
-              x + width <= framebufferCanvas.width,
-              y + height <= framebufferCanvas.height else {
-            throw StandardRFBError.invalidRectangle
-        }
+        try validateFramebufferRectangle(x: x, y: y, width: width, height: height)
         let destinationBytesPerRow = framebufferCanvas.width * 4
         try framebuffer.withUnsafeMutableBytes { destination in
             try decode(
@@ -675,14 +726,29 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         }
     }
 
+    private func validateFramebufferRectangle(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int
+    ) throws {
+        guard x >= 0, y >= 0, width > 0, height > 0,
+              width <= framebufferCanvas.width - x,
+              height <= framebufferCanvas.height - y else {
+            throw StandardRFBError.invalidRectangle
+        }
+    }
+
     private func resize(width: Int, height: Int) async throws {
         let newFramebuffer = try Self.makeFramebuffer(width: width, height: height)
         let newFramebufferPool = try Self.makePixelBufferPool(width: width, height: height)
-        framebuffer = newFramebuffer
-        framebufferPool = newFramebufferPool
         let newCanvas = AppleCanvas(width: width, height: height, tileCount: 1)
-        framebufferCanvas = newCanvas
-        initialCoverage = StandardRFBRegionCoverage(width: width, height: height)
+        framebufferStateLock.withStandardStreamLock {
+            framebuffer = newFramebuffer
+            framebufferPool = newFramebufferPool
+            framebufferCanvas = newCanvas
+            initialCoverage = StandardRFBRegionCoverage(width: width, height: height)
+        }
         await MainActor.run { canvas = newCanvas }
         await session?.inputController?.update(canvas: newCanvas)
     }
@@ -723,9 +789,11 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         publishState(.streaming)
     }
 
-    private func beginFramebufferUpdate() {
+    private func beginFramebufferUpdate() -> StandardRFBQuality? {
         framebufferStateLock.withStandardStreamLock {
             framebufferUpdateInProgress = true
+            defer { pendingLiveQuality = nil }
+            return pendingLiveQuality
         }
     }
 
@@ -735,13 +803,12 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         }
     }
 
-    private func completeFramebufferUpdate(isPublishable: Bool) throws -> TimeInterval {
-        try framebufferStateLock.withStandardStreamLock {
-            defer { framebufferUpdateInProgress = false }
-            guard isPublishable else { return 0 }
+    private func completeFramebufferUpdate(isPublishable: Bool) -> UInt64? {
+        framebufferStateLock.withStandardStreamLock {
+            framebufferUpdateInProgress = false
+            guard isPublishable else { return nil }
             completedFramebufferGeneration &+= 1
-            guard shouldPublishLatestFramebufferLocked else { return 0 }
-            return try publishLatestFramebufferLocked()
+            return schedulePublicationIfNeededLocked()
         }
     }
 
@@ -754,20 +821,38 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
             || lifecycleLock.withStandardStreamLock { frameCount == 0 }
     }
 
-    private func publishLatestFramebufferIfIdleLocked() {
-        guard !framebufferUpdateInProgress,
-              shouldPublishLatestFramebufferLocked else { return }
-        do {
-            _ = try publishLatestFramebufferLocked()
-        } catch {
-            Self.logger.error(
-                "Standard framebuffer publication failed error=\(error.localizedDescription, privacy: .public)"
-            )
-            publishState(.failed(error.localizedDescription))
+    private func schedulePublicationIfNeededLocked() -> UInt64? {
+        guard publicationEnabled,
+              !publicationScheduled,
+              !framebufferUpdateInProgress,
+              shouldPublishLatestFramebufferLocked else { return nil }
+        publicationScheduled = true
+        return publicationEpoch
+    }
+
+    private func schedulePublication(epoch: UInt64) {
+        schedulePublication { [weak self] in self?.publishScheduledFramebuffer(epoch: epoch) }
+    }
+
+    private func publishScheduledFramebuffer(epoch: UInt64) {
+        framebufferStateLock.withStandardStreamLock {
+            guard epoch == publicationEpoch else { return }
+            publicationScheduled = false
+            guard publicationEnabled,
+                  !framebufferUpdateInProgress,
+                  shouldPublishLatestFramebufferLocked else { return }
+            do {
+                try publishLatestFramebufferLocked()
+            } catch {
+                Self.logger.error(
+                    "Standard framebuffer publication failed error=\(error.localizedDescription, privacy: .public)"
+                )
+                publishState(.failed(error.localizedDescription))
+            }
         }
     }
 
-    private func publishLatestFramebufferLocked() throws -> TimeInterval {
+    private func publishLatestFramebufferLocked() throws {
         let startedAt = ProcessInfo.processInfo.systemUptime
         try publishFramebuffer()
         let duration = ProcessInfo.processInfo.systemUptime - startedAt
@@ -775,7 +860,6 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         displayFrameRequested = false
         publicationMetrics.frames += 1
         publicationMetrics.duration += duration
-        return duration
     }
 
     private func publishState(_ state: State) {

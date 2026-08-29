@@ -103,7 +103,7 @@ actor AppleInputController {
         do {
             if session.sharingType == .standard {
                 try await session.sendStandard(StandardRFBMessages.pointerEvent(
-                    buttons: buttons,
+                    buttons: Self.standardButtonMask(buttons),
                     x: point.x,
                     y: point.y
                 ))
@@ -205,6 +205,15 @@ actor AppleInputController {
             let button = ticks > 0 ? positiveButton : negativeButton
             return [button, 0]
         }
+    }
+
+    private static func standardButtonMask(_ appleMask: UInt8) -> UInt8 {
+        let rightPressed = appleMask & rightButton != 0
+        let middlePressed = appleMask & middleButton != 0
+        var standardMask = appleMask & ~(rightButton | middleButton)
+        if rightPressed { standardMask |= 1 << 2 }
+        if middlePressed { standardMask |= 1 << 1 }
+        return standardMask
     }
 
     func selectDisplay(_ displayID: UInt32?) async {

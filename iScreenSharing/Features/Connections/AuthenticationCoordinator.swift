@@ -99,12 +99,14 @@ final class AuthenticationCoordinator: ObservableObject {
             let credentials = try ScreenSharingCredentials(username: username, password: password)
             state = .authenticating
             task = Task {
+                var pendingSession: RFBAuthenticatedSession?
                 do {
                     let session = try await authenticator.connect(
                         to: endpoint,
                         credentials: credentials,
                         sharingType: sharingType
                     )
+                    pendingSession = session
                     if sharingType == .standard {
                         let stream = try StandardRFBVideoStream(
                             session: session,
@@ -122,7 +124,12 @@ final class AuthenticationCoordinator: ObservableObject {
                         stream.start()
                         try Task.checkCancellation()
                         sessionManager.install(session)
-                        connectionStore.record(endpoint, preferredUsername: credentials.username)
+                        pendingSession = nil
+                        connectionStore.record(
+                            endpoint,
+                            preferredUsername: credentials.username,
+                            standardQuality: standardQuality
+                        )
                         onAuthenticated(endpoint)
                         state = .authenticated
                         persistCredentialsInBackground(credentials, remember: rememberPassword)
@@ -293,13 +300,16 @@ final class AuthenticationCoordinator: ObservableObject {
                     }
                     try Task.checkCancellation()
                     sessionManager.install(session)
+                    pendingSession = nil
                     connectionStore.record(endpoint, preferredUsername: credentials.username)
                     onAuthenticated(endpoint)
                     state = .authenticated
                     persistCredentialsInBackground(credentials, remember: rememberPassword)
                 } catch is CancellationError {
+                    pendingSession?.close()
                     state = .idle
                 } catch {
+                    pendingSession?.close()
                     state = .failed(error.localizedDescription)
                 }
             }

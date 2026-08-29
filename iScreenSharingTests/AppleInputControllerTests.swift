@@ -2,6 +2,45 @@ import XCTest
 @testable import iScreenSharing
 
 final class AppleInputControllerTests: XCTestCase {
+    func testStandardPointerRemapsAppleRightAndMiddleButtons() async throws {
+        let transport = InputTestTransport()
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(),
+            serverInfo: RFBServerInfo(
+                width: 100,
+                height: 100,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let input = AppleInputController(
+            session: session,
+            canvas: AppleCanvas(width: 100, height: 100, tileCount: 1)
+        )
+
+        await input.pointer(
+            buttons: AppleInputController.rightButton,
+            x: 10,
+            y: 20
+        )
+        await input.pointer(
+            buttons: AppleInputController.middleButton,
+            x: 30,
+            y: 40
+        )
+
+        XCTAssertEqual(transport.sentMessages, [
+            StandardRFBMessages.pointerEvent(buttons: 1 << 2, x: 10, y: 20),
+            StandardRFBMessages.pointerEvent(buttons: 1 << 1, x: 30, y: 40),
+        ])
+    }
+
     func testClampsPointerToCanvasAndWireCoordinateLimits() {
         let canvas = AppleCanvas(width: 70_000, height: 100, tileCount: 1)
         let low = AppleInputController.clampedPoint(x: -10, y: -1, canvas: canvas)
@@ -65,4 +104,29 @@ final class AppleInputControllerTests: XCTestCase {
         XCTAssertEqual(timestamp.next(at: 0xffff_fff0), 0xffff_fff0)
         XCTAssertEqual(timestamp.next(at: 0x1_0000_0010), 0x20)
     }
+}
+
+private final class InputTestTransport: RFBTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var sent = [Data]()
+
+    var sentMessages: [Data] {
+        lock.lock()
+        defer { lock.unlock() }
+        return sent
+    }
+
+    func start(timeout: Duration) async throws { }
+
+    func send(_ data: Data) async throws {
+        lock.lock()
+        sent.append(data)
+        lock.unlock()
+    }
+
+    func receiveExactly(_ length: Int) async throws -> Data {
+        throw RFBNetworkError.connectionClosed
+    }
+
+    func cancel() { }
 }

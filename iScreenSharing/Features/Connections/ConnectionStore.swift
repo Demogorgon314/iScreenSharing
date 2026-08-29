@@ -43,11 +43,24 @@ final class ConnectionStore: ObservableObject {
     func record(
         _ endpoint: ConnectionEndpoint,
         preferredUsername: String? = nil,
+        standardQuality: StandardRFBQuality? = nil,
         deviceInfo: AppleRemoteDeviceInfo? = nil,
         at date: Date = .now
     ) {
-        Self.record(endpoint, deviceInfo: deviceInfo, at: date, in: &connections)
-        Self.record(endpoint, deviceInfo: deviceInfo, at: date, in: &recentConnections)
+        Self.record(
+            endpoint,
+            standardQuality: standardQuality,
+            deviceInfo: deviceInfo,
+            at: date,
+            in: &connections
+        )
+        Self.record(
+            endpoint,
+            standardQuality: standardQuality,
+            deviceInfo: deviceInfo,
+            at: date,
+            in: &recentConnections
+        )
         if let preferredUsername,
            let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
             connections[index].preferredUsername = preferredUsername
@@ -232,6 +245,7 @@ final class ConnectionStore: ObservableObject {
 
     private static func record(
         _ endpoint: ConnectionEndpoint,
+        standardQuality: StandardRFBQuality?,
         deviceInfo: AppleRemoteDeviceInfo?,
         at date: Date,
         in connections: inout [SavedConnection]
@@ -241,10 +255,14 @@ final class ConnectionStore: ObservableObject {
             if let deviceInfo {
                 connections[index].deviceInfo = deviceInfo
             }
+            if let standardQuality {
+                connections[index].standardQuality = standardQuality
+            }
         } else {
             connections.append(SavedConnection(
                 endpoint: endpoint,
                 lastConnectedAt: date,
+                standardQuality: standardQuality ?? .high,
                 deviceInfo: deviceInfo
             ))
         }

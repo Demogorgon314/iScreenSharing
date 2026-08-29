@@ -702,6 +702,64 @@ final class StandardRFBProtocolTests: XCTestCase {
         ])
     }
 
+    func testLiveQualityChangeWaitsForConfirmedReplacementCoverage() async throws {
+        let transport = ControlledStandardRFBTransport(receiveData: Data([
+            0, 0, 0, 1,
+            0, 0, 0, 0, 0, 2, 0, 1,
+            0, 0, 0, 0,
+            0x10, 0, 0, 0,
+            0x20, 0, 0, 0,
+        ]))
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+        session.install(videoStream: stream)
+        stream.start()
+        try await waitUntil { stream.decodedFrameCount == 1 }
+
+        try await stream.setQuality(.medium)
+        var receiveCount = transport.successfulReceiveCount
+        transport.append(Self.rawRectangleUpdate(x: 0, blue: 0x30))
+        try await waitUntil { transport.successfulReceiveCount >= receiveCount + 4 }
+        XCTAssertEqual(stream.decodedFrameCount, 1)
+
+        receiveCount = transport.successfulReceiveCount
+        transport.append(Self.rawRectangleUpdate(x: 1, blue: 0x40))
+        try await waitUntil { transport.successfulReceiveCount >= receiveCount + 4 }
+        XCTAssertEqual(stream.decodedFrameCount, 1)
+
+        receiveCount = transport.successfulReceiveCount
+        transport.append(Self.rawRectangleUpdate(x: 0, blue: 0x50))
+        try await waitUntil { transport.successfulReceiveCount >= receiveCount + 4 }
+        XCTAssertEqual(stream.decodedFrameCount, 1)
+
+        transport.append(Self.rawRectangleUpdate(x: 1, blue: 0x60))
+        try await waitUntil { stream.decodedFrameCount == 2 }
+
+        let pixelBuffer = try XCTUnwrap(
+            stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
+        )
+        XCTAssertEqual(Self.bytes(from: pixelBuffer), [
+            0x50, 0, 0, 0xff,
+            0x60, 0, 0, 0xff,
+        ])
+        stream.close()
+        transport.cancel()
+    }
+
     func testMediumConfirmsInitialRefreshBeforePublishing() async throws {
         var updates = Data([
             0, 0, 0, 1,
@@ -809,6 +867,7 @@ final class StandardRFBProtocolTests: XCTestCase {
     }
 
     func testDisplayDrivenPublicationCoalescesAndRetainsFinalFramebuffer() async throws {
+        let publicationScheduler = ManualPublicationScheduler()
         let updates = [UInt8(0x10), 0x20, 0x30].reduce(into: Data()) { data, blue in
             data.append(contentsOf: [
                 0, 0, 0, 1,
@@ -833,7 +892,11 @@ final class StandardRFBProtocolTests: XCTestCase {
             ),
             transport: transport
         )
-        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+        let stream = try StandardRFBVideoStream(
+            session: session,
+            quality: .high,
+            schedulePublication: publicationScheduler.schedule
+        )
         session.install(videoStream: stream)
         stream.setDisplayDrivenFrameRequestsEnabled(true)
 
@@ -847,10 +910,14 @@ final class StandardRFBProtocolTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
 
-        XCTAssertEqual(stream.decodedFrameCount, 1)
+        XCTAssertEqual(stream.decodedFrameCount, 0)
+        XCTAssertEqual(publicationScheduler.pendingCount, 1)
         stream.requestFrameForDisplay()
+        XCTAssertEqual(stream.decodedFrameCount, 0)
+        XCTAssertEqual(publicationScheduler.pendingCount, 1)
+        publicationScheduler.runNext()
 
-        XCTAssertEqual(stream.decodedFrameCount, 2)
+        XCTAssertEqual(stream.decodedFrameCount, 1)
         let pixelBuffer = try XCTUnwrap(
             stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
         )
@@ -934,6 +1001,45 @@ final class StandardRFBProtocolTests: XCTestCase {
         }
         XCTAssertEqual(stream.decodedFrameCount, 0)
         XCTAssertNil(stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex))
+        XCTAssertEqual(transport.receivedLengths, [1, 3, 12])
+        stream.close()
+    }
+
+    func testRejectsRawRectangleOutsideFramebufferBeforeReadingPayload() async throws {
+        let transport = StandardRFBTestTransport(receiveData: Data([
+            0, 0, 0, 1,
+            0, 1, 0, 0, 0, 2, 0, 1,
+            0, 0, 0, 0,
+        ]))
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            sharingType: .standard,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 2,
+                height: 1,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test VNC"
+            ),
+            transport: transport
+        )
+        let stream = try StandardRFBVideoStream(session: session, quality: .high)
+        session.install(videoStream: stream)
+
+        stream.start()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while stream.state == .preparing, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+
+        guard case .failed = stream.state else {
+            return XCTFail("Expected an invalid rectangle failure")
+        }
+        XCTAssertEqual(transport.receivedLengths, [1, 3, 12])
         stream.close()
     }
 
@@ -945,11 +1051,51 @@ final class StandardRFBProtocolTests: XCTestCase {
         0x66, 0x55, 0x44, 0,
     ])
 
+    private static func rawRectangleUpdate(x: UInt16, blue: UInt8) -> Data {
+        Data([
+            0, 0, 0, 1,
+            UInt8(x >> 8), UInt8(truncatingIfNeeded: x),
+            0, 0, 0, 1, 0, 1,
+            0, 0, 0, 0,
+            blue, 0, 0, 0,
+        ])
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(condition())
+    }
+
     private static func bytes(from pixelBuffer: CVPixelBuffer, count: Int = 8) -> [UInt8] {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         guard let address = CVPixelBufferGetBaseAddress(pixelBuffer) else { return [] }
         return Array(UnsafeRawBufferPointer(start: address, count: count))
+    }
+}
+
+private final class ManualPublicationScheduler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var work = [@Sendable () -> Void]()
+
+    var pendingCount: Int {
+        lock.withStandardTestLock { work.count }
+    }
+
+    func schedule(_ operation: @escaping @Sendable () -> Void) {
+        lock.withStandardTestLock { work.append(operation) }
+    }
+
+    func runNext() {
+        let operation = lock.withStandardTestLock { work.isEmpty ? nil : work.removeFirst() }
+        operation?()
     }
 }
 
@@ -972,6 +1118,7 @@ private final class StandardRFBTestTransport: RFBTransport, @unchecked Sendable 
     private let lock = NSLock()
     private var receiveData: Data
     private var sent = [Data]()
+    private var received = [Int]()
 
     init(receiveData: Data) {
         self.receiveData = receiveData
@@ -979,6 +1126,10 @@ private final class StandardRFBTestTransport: RFBTransport, @unchecked Sendable 
 
     var sentMessages: [Data] {
         lock.withStandardTestLock { sent }
+    }
+
+    var receivedLengths: [Int] {
+        lock.withStandardTestLock { received }
     }
 
     func start(timeout: Duration) async throws { }
@@ -989,6 +1140,7 @@ private final class StandardRFBTestTransport: RFBTransport, @unchecked Sendable 
 
     func receiveExactly(_ length: Int) async throws -> Data {
         try lock.withStandardTestLock {
+            received.append(length)
             guard length >= 0, receiveData.count >= length else {
                 throw RFBNetworkError.connectionClosed
             }
@@ -999,6 +1151,78 @@ private final class StandardRFBTestTransport: RFBTransport, @unchecked Sendable 
     }
 
     func cancel() { }
+}
+
+private final class ControlledStandardRFBTransport: RFBTransport, @unchecked Sendable {
+    private struct PendingRead {
+        let length: Int
+        let continuation: CheckedContinuation<Data, Error>
+    }
+
+    private let lock = NSLock()
+    private var receiveData: Data
+    private var sent = [Data]()
+    private var pendingRead: PendingRead?
+    private var receiveCount = 0
+    private var isCancelled = false
+
+    init(receiveData: Data) {
+        self.receiveData = receiveData
+    }
+
+    var successfulReceiveCount: Int {
+        lock.withStandardTestLock { receiveCount }
+    }
+
+    func start(timeout: Duration) async throws { }
+
+    func send(_ data: Data) async throws {
+        lock.withStandardTestLock { sent.append(data) }
+    }
+
+    func receiveExactly(_ length: Int) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let result = lock.withStandardTestLock { () -> Result<Data, Error>? in
+                guard !isCancelled else {
+                    return .failure(RFBNetworkError.connectionClosed)
+                }
+                guard receiveData.count >= length else {
+                    precondition(pendingRead == nil)
+                    pendingRead = PendingRead(length: length, continuation: continuation)
+                    return nil
+                }
+                let data = Data(receiveData.prefix(length))
+                receiveData.removeFirst(length)
+                receiveCount += 1
+                return .success(data)
+            }
+            if let result { continuation.resume(with: result) }
+        }
+    }
+
+    func append(_ data: Data) {
+        let delivery = lock.withStandardTestLock { () -> (PendingRead, Data)? in
+            receiveData.append(data)
+            guard let pendingRead, receiveData.count >= pendingRead.length else { return nil }
+            let result = Data(receiveData.prefix(pendingRead.length))
+            receiveData.removeFirst(pendingRead.length)
+            self.pendingRead = nil
+            receiveCount += 1
+            return (pendingRead, result)
+        }
+        if let (pendingRead, result) = delivery {
+            pendingRead.continuation.resume(returning: result)
+        }
+    }
+
+    func cancel() {
+        let pending = lock.withStandardTestLock { () -> PendingRead? in
+            isCancelled = true
+            defer { pendingRead = nil }
+            return pendingRead
+        }
+        pending?.continuation.resume(throwing: RFBNetworkError.connectionClosed)
+    }
 }
 
 private extension NSLock {
