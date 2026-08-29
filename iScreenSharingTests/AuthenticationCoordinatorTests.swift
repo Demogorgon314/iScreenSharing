@@ -32,10 +32,11 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         var authenticatedEndpoint: ConnectionEndpoint?
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: authenticator,
-            controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: authenticator,
+                connectionStore: connections,
+                controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes)
+            ),
             credentialStore: credentials,
             connectionStore: connections,
             viewportStore: viewportStore,
@@ -65,14 +66,17 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         preferences.setSharesKeyboardInputSource(true)
         preferences.setUsesDynamicResolution(false)
         let displaySizes = DisplaySizeRecorder()
+        let connections = ConnectionStore(defaults: defaults)
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(session)),
-            controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: MockAuthenticator(result: .success(session)),
+                connectionStore: connections,
+                preferences: preferences,
+                controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes)
+            ),
             credentialStore: MockCredentialStore(),
-            connectionStore: ConnectionStore(defaults: defaults),
+            connectionStore: connections,
             sessionFeaturePreferences: preferences,
             sessionManager: SessionManager()
         )
@@ -99,14 +103,15 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
         try credentials.save(savedCredentials, for: endpoint)
         let sessions = SessionManager()
+        let connections = ConnectionStore(defaults: defaults)
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(session)),
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: MockAuthenticator(result: .success(session)),
+                connectionStore: connections
+            ),
             credentialStore: credentials,
-            connectionStore: ConnectionStore(defaults: defaults),
+            connectionStore: connections,
             sessionManager: sessions
         )
 
@@ -121,14 +126,15 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let endpoint = try ConnectionEndpoint("example.local")
         let sessions = SessionManager()
         let authenticator = MockAuthenticator(result: .success(try makeSession(endpoint: endpoint)))
+        let connections = ConnectionStore(defaults: defaults)
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: authenticator,
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: authenticator,
+                connectionStore: connections
+            ),
             credentialStore: MockCredentialStore(),
-            connectionStore: ConnectionStore(defaults: defaults),
+            connectionStore: connections,
             sessionManager: sessions
         )
 
@@ -147,16 +153,17 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             password: "stale-password"
         )
         try credentials.save(savedCredentials, for: endpoint)
+        let connections = ConnectionStore(defaults: defaults)
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(
-                result: .failure(AppleRSA1Error.authenticationRejected(1))
+            sessionActivator: makeSessionActivator(
+                authenticator: MockAuthenticator(
+                    result: .failure(AppleRSA1Error.authenticationRejected(1))
+                ),
+                connectionStore: connections
             ),
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
             credentialStore: credentials,
-            connectionStore: ConnectionStore(defaults: defaults),
+            connectionStore: connections,
             sessionManager: SessionManager()
         )
 
@@ -192,10 +199,11 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let displaySizes = DisplaySizeRecorder()
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(session)),
-            controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: MockAuthenticator(result: .success(session)),
+                connectionStore: connections,
+                controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes)
+            ),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             viewportStore: viewportStore,
@@ -229,10 +237,13 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(session)),
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(pendingMessages: [dualDisplayLayoutMessage()]),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: MockAuthenticator(result: .success(session)),
+                connectionStore: connections,
+                mediaNegotiator: MockMediaNegotiator(
+                    pendingMessages: [dualDisplayLayoutMessage()]
+                )
+            ),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             sessionManager: SessionManager()
@@ -258,10 +269,10 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let sessions = SessionManager()
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: authenticator,
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: authenticator,
+                connectionStore: connections
+            ),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             sessionManager: sessions
@@ -281,14 +292,15 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let endpoint = try ConnectionEndpoint("example.local")
         let session = try makeSession(endpoint: endpoint)
         let sessions = SessionManager()
+        let connections = ConnectionStore(defaults: defaults)
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: MockAuthenticator(result: .success(session)),
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: MockAuthenticator(result: .success(session)),
+                connectionStore: connections
+            ),
             credentialStore: FailingCredentialStore(),
-            connectionStore: ConnectionStore(defaults: defaults),
+            connectionStore: connections,
             sessionManager: sessions
         )
 
@@ -325,10 +337,10 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         )
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: authenticator,
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: authenticator,
+                connectionStore: connections
+            ),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             sessionManager: SessionManager()
@@ -372,10 +384,10 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let sessions = SessionManager()
         let coordinator = AuthenticationCoordinator(
             endpoint: endpoint,
-            authenticator: authenticator,
-            controlChannelNegotiator: MockControlChannelNegotiator(),
-            mediaNegotiator: MockMediaNegotiator(),
-            videoStreamStarter: MockVideoStreamStarter(),
+            sessionActivator: makeSessionActivator(
+                authenticator: authenticator,
+                connectionStore: connections
+            ),
             credentialStore: MockCredentialStore(),
             connectionStore: connections,
             sessionManager: sessions
@@ -389,6 +401,25 @@ final class AuthenticationCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.state, .idle)
         XCTAssertNil(sessions.session(for: endpoint))
+    }
+
+    private func makeSessionActivator(
+        authenticator: any RFBAuthenticating,
+        connectionStore: ConnectionStore,
+        preferences: SessionFeaturePreferences? = nil,
+        controlChannelNegotiator: any AppleControlChannelNegotiating = MockControlChannelNegotiator(),
+        mediaNegotiator: any AppleMediaNegotiating = MockMediaNegotiator(),
+        videoStreamStarter: any AppleVideoStreamStarting = MockVideoStreamStarter()
+    ) -> SessionActivation {
+        SessionActivation(
+            authenticator: authenticator,
+            controlChannelNegotiator: controlChannelNegotiator,
+            mediaNegotiator: mediaNegotiator,
+            videoStreamStarter: videoStreamStarter,
+            connectionStore: connectionStore,
+            sessionFeaturePreferences: preferences
+                ?? SessionFeaturePreferences(defaults: defaults)
+        )
     }
 
     private func makeSession(
