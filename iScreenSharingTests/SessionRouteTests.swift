@@ -25,6 +25,42 @@ final class SessionRouteTests: XCTestCase {
         }
     }
 
+    func testAuthenticationReportsUnsupportedAppleRSAAndClosesRoute() async throws {
+        let transport = RecordingRouteTransport(receivePackets: [
+            Data("RFB 003.889\n".utf8),
+            Data([1]),
+            Data([30]),
+        ])
+        let route = ManagedSessionRoute(
+            control: transport,
+            remoteAddress: try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900),
+            sharingType: .highPerformance
+        ) { _, _ in RecordingMediaReceiver() }
+        let service = RFBAuthenticationService(routeOpener: FixedRouteOpener(route: route))
+
+        do {
+            _ = try await service.connect(
+                to: ConnectionEndpoint(host: "shared-mac.local"),
+                credentials: ScreenSharingCredentials(username: "viewer", password: "secret")
+            )
+            XCTFail("Expected the missing Apple RSA security type to fail authentication")
+        } catch let error as RFBAuthenticationError {
+            XCTAssertEqual(error, .unsupportedAppleRSA)
+            XCTAssertEqual(transport.cancelCount, 1)
+        }
+    }
+
+    func testAuthenticationRejectsServerNameAboveTransportLimit() {
+        XCTAssertNoThrow(try RFBAuthenticationService.validateServerNameLength(
+            RFBAuthenticationService.maximumServerNameLength
+        ))
+        XCTAssertThrowsError(try RFBAuthenticationService.validateServerNameLength(
+            RFBAuthenticationService.maximumServerNameLength + 1
+        )) {
+            XCTAssertEqual($0 as? RFBAuthenticationError, .serverNameTooLong)
+        }
+    }
+
     func testOpenerSelectsOnlyEndpointRouteAdapter() async throws {
         let directRoute = try makeRoute(host: "127.0.0.1")
         let tailscaleRoute = try makeRoute(host: "100.64.0.10")
@@ -151,6 +187,7 @@ final class SessionRouteTests: XCTestCase {
 
 private enum RouteTestError: Error {
     case connectionFailed
+    case invalidRead
 }
 
 private struct StubAddressResolver: RemoteAddressResolving {
@@ -198,14 +235,17 @@ private final class RecordingRouteTransport: RFBTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let startError: Error?
     private let onCancel: @Sendable () -> Void
+    private var receivePackets: [Data]?
     private var starts = 0
     private var cancellations = 0
 
     init(
         startError: Error? = nil,
+        receivePackets: [Data]? = nil,
         onCancel: @escaping @Sendable () -> Void = { }
     ) {
         self.startError = startError
+        self.receivePackets = receivePackets
         self.onCancel = onCancel
     }
 
@@ -220,7 +260,14 @@ private final class RecordingRouteTransport: RFBTransport, @unchecked Sendable {
     func send(_ data: Data) async throws { }
 
     func receiveExactly(_ length: Int) async throws -> Data {
-        Data(repeating: 0, count: length)
+        try lock.withRouteTestLock {
+            guard receivePackets != nil else { return Data(repeating: 0, count: length) }
+            guard let packet = receivePackets?.first, packet.count == length else {
+                throw RouteTestError.invalidRead
+            }
+            receivePackets?.removeFirst()
+            return packet
+        }
     }
 
     func cancel() {
@@ -313,9 +360,9 @@ private final class EventRecorder: @unchecked Sendable {
 }
 
 private extension NSLock {
-    func withRouteTestLock<T>(_ body: () -> T) -> T {
+    func withRouteTestLock<T>(_ body: () throws -> T) rethrows -> T {
         lock()
         defer { unlock() }
-        return body()
+        return try body()
     }
 }

@@ -92,7 +92,6 @@ public enum AppleRSA1Error: LocalizedError, Equatable {
     case invalidEncryptedPayload
     case invalidSecurityResult
     case authenticationRejected(UInt32)
-    case unsupportedServer
 
     public var errorDescription: String? {
         switch self {
@@ -106,8 +105,6 @@ public enum AppleRSA1Error: LocalizedError, Equatable {
             "The Mac returned an invalid authentication result."
         case .authenticationRejected:
             "The account name or password was not accepted."
-        case .unsupportedServer:
-            "This Mac doesn’t offer the supported Apple RSA authentication method."
         }
     }
 }

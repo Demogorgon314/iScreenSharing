@@ -9,15 +9,35 @@ protocol RFBAuthenticating: Sendable {
     ) async throws -> RFBAuthenticatedSession
 }
 
+enum RFBAuthenticationError: LocalizedError, Equatable {
+    case unsupportedAppleRSA
+    case serverNameTooLong
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedAppleRSA:
+            "This Mac doesn’t offer the supported Apple RSA authentication method."
+        case .serverNameTooLong:
+            "The Mac returned a display name that is too large."
+        }
+    }
+}
+
 struct RFBAuthenticationService: RFBAuthenticating {
     private static let maximumPublicKeyPacketLength = 64 * 1024
-    private static let maximumServerNameLength = 1024 * 1024
+    static let maximumServerNameLength = 1024 * 1024
     private let routeOpener: any SessionRouteOpening
 
     init(
         routeOpener: any SessionRouteOpening = SessionRouteOpener()
     ) {
         self.routeOpener = routeOpener
+    }
+
+    static func validateServerNameLength(_ length: Int) throws {
+        guard length <= maximumServerNameLength else {
+            throw RFBAuthenticationError.serverNameTooLong
+        }
     }
 
     func connect(
@@ -30,7 +50,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
         do {
             let probe = try await performVersionHandshake(on: transport)
             guard probe.securityTypes.contains(.appleRSA) else {
-                throw AppleRSA1Error.unsupportedServer
+                throw RFBAuthenticationError.unsupportedAppleRSA
             }
 
             let masterKey = try await authenticateRSA1(
@@ -112,9 +132,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
         )
         let header = try await transport.receiveExactly(24)
         let nameLength = try Int(header.uint32BE(at: 20))
-        guard nameLength <= Self.maximumServerNameLength else {
-            throw RFBServerInitError.nameTooLong
-        }
+        try Self.validateServerNameLength(nameLength)
         let name = try await transport.receiveExactly(nameLength)
         return try RFBServerInfo.parse(header: header, nameData: name)
     }

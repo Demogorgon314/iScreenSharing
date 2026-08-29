@@ -90,7 +90,6 @@ public struct RFBServerInfo: Equatable, Sendable {
 public enum RFBServerInitError: LocalizedError, Equatable {
     case invalidMessage
     case invalidDimensions
-    case nameTooLong
 
     public var errorDescription: String? {
         switch self {
@@ -98,8 +97,6 @@ public enum RFBServerInitError: LocalizedError, Equatable {
             "The Mac returned an invalid display description."
         case .invalidDimensions:
             "The Mac returned an invalid display size."
-        case .nameTooLong:
-            "The Mac returned a display name that is too large."
         }
     }
 }
