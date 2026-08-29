@@ -1,5 +1,6 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleFramebufferUpdate
+import enum ScreenSharingProtocol.AppleMediaConfiguration
 import struct ScreenSharingProtocol.AppleDisplayLayout
 
 final class AppleControlMessageService: @unchecked Sendable {

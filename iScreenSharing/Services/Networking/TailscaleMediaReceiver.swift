@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import QuartzCore
+import struct ScreenSharingProtocol.AppleMediaPorts
 import TailscaleKit
 
 final class TailscaleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {

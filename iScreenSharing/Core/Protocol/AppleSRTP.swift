@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import struct ScreenSharingProtocol.AppleMediaKeys
 
 struct AppleRTPFramePacketInfo: Equatable, Sendable {
     let totalPacketsPerFrame: UInt16

@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.AppleMediaPorts
 import XCTest
 @testable import iScreenSharing
 

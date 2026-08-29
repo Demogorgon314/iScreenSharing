@@ -1,7 +1,9 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleFramebufferUpdate
+import enum ScreenSharingProtocol.AppleMediaConfiguration
 import enum ScreenSharingProtocol.AppleMediaOffer
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleMediaKeys
 import struct ScreenSharingProtocol.AppleMediaOffers
 
 struct AppleMediaNegotiationEnvironment: Sendable {

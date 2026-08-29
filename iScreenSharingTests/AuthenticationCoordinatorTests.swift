@@ -1,4 +1,5 @@
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
+import struct ScreenSharingProtocol.AppleMediaKeys
 import XCTest
 @testable import iScreenSharing
 
