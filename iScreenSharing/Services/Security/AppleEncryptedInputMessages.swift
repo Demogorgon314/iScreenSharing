@@ -1,4 +1,6 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleRFBInputEncryptionRequest
 
 enum AppleEncryptedInputMessages {
     static func pointerEvent(

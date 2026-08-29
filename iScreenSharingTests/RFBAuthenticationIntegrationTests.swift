@@ -1,5 +1,6 @@
 import AVFAudio
 import CoreVideo
+import enum ScreenSharingProtocol.AppleRFBMessages
 import XCTest
 @testable import iScreenSharing
 

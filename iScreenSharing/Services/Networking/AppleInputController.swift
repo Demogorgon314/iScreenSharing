@@ -1,5 +1,7 @@
 import Carbon
 import Foundation
+import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleScrollWheelEvent
 
 struct AppleInputDisplaySelection {
     private var selectedDisplayID: UInt32?

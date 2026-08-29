@@ -1,4 +1,5 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleRFBMessages
 
 protocol AppleControlChannelNegotiating: Sendable {
     func enableEncryption(

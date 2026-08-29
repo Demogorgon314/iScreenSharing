@@ -1,4 +1,5 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleRFBMessages
 
 actor AppleDynamicResolutionController {
     typealias SendMessage = @Sendable (Data) async throws -> Void

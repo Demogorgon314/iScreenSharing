@@ -1,5 +1,6 @@
 import Accelerate
 import Foundation
+import enum ScreenSharingProtocol.AppleRFBMessages
 import zlib
 
 struct StandardRFBPixelFormat: Equatable, Sendable {

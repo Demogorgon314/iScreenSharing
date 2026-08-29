@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import enum ScreenSharingProtocol.AppleRFBMessages
 import XCTest
 @testable import iScreenSharing
 

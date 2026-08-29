@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import enum ScreenSharingProtocol.AppleRFBMessages
 
 @MainActor
 final class AppleSessionControlState: ObservableObject {

@@ -1,6 +1,7 @@
 import CoreVideo
 import OSLog
 import QuartzCore
+import struct ScreenSharingProtocol.AppleScrollWheelEvent
 import SwiftUI
 
 struct RemoteVideoCanvasView: NSViewRepresentable {
