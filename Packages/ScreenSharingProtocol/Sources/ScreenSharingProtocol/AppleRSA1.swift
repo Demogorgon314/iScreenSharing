@@ -1,8 +1,9 @@
 import Foundation
 
-enum AppleRSA1 {
-    static let credentialFieldLength = 64
-    static let publicKeyRequest = Data([
+/// Apple RSA1 authentication messages used by high-performance Screen Sharing.
+public enum AppleRSA1 {
+    public static let credentialFieldLength = 64
+    public static let publicKeyRequest = Data([
         0x21,
         0x00, 0x00, 0x00, 0x0a,
         0x01, 0x00,
@@ -11,18 +12,18 @@ enum AppleRSA1 {
         0x00, 0x00,
     ])
 
-    static func parsePublicKeyResponse(_ packet: Data) throws -> Data {
-        guard packet.count >= 6 else {
-            throw AppleRSA1Error.invalidPublicKeyResponse
-        }
-        let keyLength = try Int(packet.uint32BE(at: 2))
-        guard keyLength > 0, keyLength <= packet.count - 6 else {
+    public static func parsePublicKeyResponse(_ packet: Data) throws -> Data {
+        guard packet.count >= 6,
+              let rawKeyLength = BigEndianWire.uint32(from: packet, at: 2),
+              let keyLength = Int(exactly: rawKeyLength),
+              keyLength > 0,
+              keyLength <= packet.count - 6 else {
             throw AppleRSA1Error.invalidPublicKeyResponse
         }
         return packet.subdata(in: 6..<(6 + keyLength))
     }
 
-    static func credentialPlaintext(
+    public static func credentialPlaintext(
         username: String,
         password: String,
         randomBytes: (Int) throws -> Data
@@ -32,7 +33,7 @@ enum AppleRSA1 {
         return usernameField + passwordField
     }
 
-    static func authenticationRequest(
+    public static func authenticationRequest(
         encryptedCredentials: Data,
         encryptedAESKey: Data
     ) throws -> Data {
@@ -49,16 +50,16 @@ enum AppleRSA1 {
         body.append(encryptedAESKey)
 
         var framed = Data()
-        framed.appendUInt32BE(UInt32(body.count))
+        BigEndianWire.append(UInt32(body.count), to: &framed)
         framed.append(body)
         return framed
     }
 
-    static func parseSecurityResult(_ data: Data) throws {
-        guard data.count == 4 else {
+    public static func parseSecurityResult(_ data: Data) throws {
+        guard data.count == 4,
+              let result = BigEndianWire.uint32(from: data, at: 0) else {
             throw AppleRSA1Error.invalidSecurityResult
         }
-        let result = try data.uint32BE(at: 0)
         guard result == 0 else {
             throw AppleRSA1Error.authenticationRejected(result)
         }
@@ -84,7 +85,7 @@ enum AppleRSA1 {
     }
 }
 
-enum AppleRSA1Error: LocalizedError, Equatable {
+public enum AppleRSA1Error: LocalizedError, Equatable {
     case invalidPublicKeyResponse
     case credentialTooLong
     case invalidRandomPadding
@@ -93,7 +94,7 @@ enum AppleRSA1Error: LocalizedError, Equatable {
     case authenticationRejected(UInt32)
     case unsupportedServer
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidPublicKeyResponse:
             "The Mac returned an invalid RSA public key."
@@ -110,4 +111,3 @@ enum AppleRSA1Error: LocalizedError, Equatable {
         }
     }
 }
-

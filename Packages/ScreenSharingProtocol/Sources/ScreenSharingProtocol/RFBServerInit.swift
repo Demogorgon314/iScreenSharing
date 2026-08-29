@@ -1,14 +1,15 @@
 import Foundation
 
-struct RFBServerInfo: Equatable, Sendable {
-    let width: UInt16
-    let height: UInt16
-    let pixelFormat: Data
-    let name: String
-    let serverFlags: UInt32?
-    let commandBitmap: Data?
+/// The display metadata and advertised server-command capabilities from ServerInit.
+public struct RFBServerInfo: Equatable, Sendable {
+    public let width: UInt16
+    public let height: UInt16
+    public let pixelFormat: Data
+    public let name: String
+    public let serverFlags: UInt32?
+    public let commandBitmap: Data?
 
-    init(
+    public init(
         width: UInt16,
         height: UInt16,
         pixelFormat: Data,
@@ -24,7 +25,7 @@ struct RFBServerInfo: Equatable, Sendable {
         self.commandBitmap = commandBitmap
     }
 
-    func supportsServerCommand(_ command: UInt8) -> Bool {
+    public func supportsServerCommand(_ command: UInt8) -> Bool {
         guard let commandBitmap, commandBitmap.count == 16 else { return false }
         let byteIndex = Int(command >> 3)
         guard byteIndex < commandBitmap.count else { return false }
@@ -32,33 +33,40 @@ struct RFBServerInfo: Equatable, Sendable {
         return commandBitmap[byteIndex] & mask != 0
     }
 
-    var supportsViewerToHostFileTransfer: Bool {
+    public var supportsViewerToHostFileTransfer: Bool {
         supportsServerCommand(32) && supportsServerCommand(34)
     }
 
-    var supportsCopyPaste: Bool {
+    public var supportsCopyPaste: Bool {
         supportsServerCommand(11) && supportsServerCommand(31)
     }
 
-    var supportsSharedPasteboard: Bool {
+    public var supportsSharedPasteboard: Bool {
         supportsCopyPaste && supportsServerCommand(21)
     }
 
-    static func parse(header: Data, nameData: Data) throws -> Self {
+    public static func parse(header: Data, nameData: Data) throws -> Self {
         guard header.count == 24,
-              nameData.count == Int(try header.uint32BE(at: 20)) else {
+              let rawNameLength = BigEndianWire.uint32(from: header, at: 20),
+              let nameLength = Int(exactly: rawNameLength),
+              nameData.count == nameLength,
+              let width = BigEndianWire.uint16(from: header, at: 0),
+              let height = BigEndianWire.uint16(from: header, at: 2) else {
             throw RFBServerInitError.invalidMessage
         }
-        let width = try header.uint16BE(at: 0)
-        let height = try header.uint16BE(at: 2)
         guard width > 0, height > 0 else {
             throw RFBServerInitError.invalidDimensions
         }
+
         let enhanced: (flags: UInt32?, commands: Data?, name: Data)
-        if nameData.count >= 2, try nameData.uint16BE(at: 0) == 0 {
-            guard nameData.count >= 22 else { throw RFBServerInitError.invalidMessage }
+        if nameData.count >= 2,
+           BigEndianWire.uint16(from: nameData, at: 0) == 0 {
+            guard nameData.count >= 22,
+                  let flags = BigEndianWire.uint32(from: nameData, at: 2) else {
+                throw RFBServerInitError.invalidMessage
+            }
             enhanced = (
-                try nameData.uint32BE(at: 2),
+                flags,
                 nameData.subdata(in: 6..<22),
                 nameData.subdata(in: 22..<nameData.count)
             )
@@ -79,12 +87,12 @@ struct RFBServerInfo: Equatable, Sendable {
     }
 }
 
-enum RFBServerInitError: LocalizedError, Equatable {
+public enum RFBServerInitError: LocalizedError, Equatable {
     case invalidMessage
     case invalidDimensions
     case nameTooLong
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidMessage:
             "The Mac returned an invalid display description."
