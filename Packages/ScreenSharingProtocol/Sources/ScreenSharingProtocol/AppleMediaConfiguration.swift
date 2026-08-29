@@ -1,16 +1,16 @@
 import Foundation
 
-struct AppleMediaKeys: Equatable, Sendable {
-    static let blobLength = 46
+public struct AppleMediaKeys: Equatable, Sendable {
+    public static let blobLength = 46
 
-    let audioViewer: Data
-    let audioServer: Data
-    let videoViewer: Data
-    let videoServer: Data
-    let secondaryVideoViewer: Data?
-    let secondaryVideoServer: Data?
+    public let audioViewer: Data
+    public let audioServer: Data
+    public let videoViewer: Data
+    public let videoServer: Data
+    public let secondaryVideoViewer: Data?
+    public let secondaryVideoServer: Data?
 
-    init(
+    public init(
         audioViewer: Data,
         audioServer: Data,
         videoViewer: Data,
@@ -26,18 +26,7 @@ struct AppleMediaKeys: Equatable, Sendable {
         self.secondaryVideoServer = secondaryVideoServer
     }
 
-    static func random(includeSecondaryVideo: Bool = false) throws -> AppleMediaKeys {
-        try AppleMediaKeys(
-            audioViewer: Cryptography.randomBytes(count: blobLength),
-            audioServer: Cryptography.randomBytes(count: blobLength),
-            videoViewer: Cryptography.randomBytes(count: blobLength),
-            videoServer: Cryptography.randomBytes(count: blobLength),
-            secondaryVideoViewer: includeSecondaryVideo ? Cryptography.randomBytes(count: blobLength) : nil,
-            secondaryVideoServer: includeSecondaryVideo ? Cryptography.randomBytes(count: blobLength) : nil
-        )
-    }
-
-    func validate() throws {
+    public func validate() throws {
         let secondaryKeys = [secondaryVideoViewer, secondaryVideoServer].compactMap { $0 }
         guard [audioViewer, audioServer, videoViewer, videoServer].allSatisfy({ $0.count == Self.blobLength }),
               secondaryKeys.count != 1,
@@ -47,32 +36,43 @@ struct AppleMediaKeys: Equatable, Sendable {
     }
 }
 
-struct AppleCanvas: Equatable, Hashable, Sendable {
-    let width: Int
-    let height: Int
-    let tileCount: Int
+public struct AppleCanvas: Equatable, Hashable, Sendable {
+    public let width: Int
+    public let height: Int
+    public let tileCount: Int
 
-    var isUsable: Bool { width > 0 && height > 0 }
+    public init(width: Int, height: Int, tileCount: Int) {
+        self.width = width
+        self.height = height
+        self.tileCount = tileCount
+    }
+
+    public var isUsable: Bool { width > 0 && height > 0 }
 }
 
-struct AppleMediaPorts: Equatable, Sendable {
-    let audio: UInt16
-    let videos: [UInt16]
+public struct AppleMediaPorts: Equatable, Sendable {
+    public let audio: UInt16
+    public let videos: [UInt16]
+
+    public init(audio: UInt16, videos: [UInt16]) {
+        self.audio = audio
+        self.videos = videos
+    }
 }
 
-enum AppleMediaAnswer: Equatable, Sendable {
+public enum AppleMediaAnswer: Equatable, Sendable {
     case unrelated
     case degenerate
     case canvas(AppleCanvas)
 }
 
-enum AppleMediaConfiguration {
-    static func message(
+public enum AppleMediaConfiguration {
+    public static func message(
         audioOffer: Data,
         videoOffer: Data,
         secondaryVideoOffer: Data? = nil,
         keys: AppleMediaKeys,
-        callID: UUID = UUID()
+        callID: UUID
     ) throws -> Data {
         try keys.validate()
         let secondaryVideoOffer = secondaryVideoOffer ?? Data()
@@ -91,15 +91,15 @@ enum AppleMediaConfiguration {
 
         var message = Data(repeating: 0, count: messageSize + 4)
         message[0] = 0x1c
-        message.writeUInt16BE(UInt16(messageSize), at: 2)
-        message.writeUInt16BE(3, at: 4)
+        precondition(BigEndianWire.write(UInt16(messageSize), to: &message, at: 2))
+        precondition(BigEndianWire.write(UInt16(3), to: &message, at: 4))
         // Bit 0 enables 60 FPS for video 1, bit 1 does the same for video 2,
         // and bit 2 tells the server not to composite its cursor into video.
         let flags: UInt32 = secondaryVideoOffer.isEmpty ? 0x05 : 0x07
-        message.writeUInt32BE(flags, at: 6)
-        message.writeUInt16BE(UInt16(audioOffer.count), at: 10)
-        message.writeUInt16BE(UInt16(videoOffer.count), at: 12)
-        message.writeUInt16BE(UInt16(secondaryVideoOffer.count), at: 14)
+        precondition(BigEndianWire.write(flags, to: &message, at: 6))
+        precondition(BigEndianWire.write(UInt16(audioOffer.count), to: &message, at: 10))
+        precondition(BigEndianWire.write(UInt16(videoOffer.count), to: &message, at: 12))
+        precondition(BigEndianWire.write(UInt16(secondaryVideoOffer.count), to: &message, at: 14))
         withUnsafeBytes(of: callID.uuid) { message.replaceSubrange(0x14..<0x24, with: $0) }
         message.replaceSubrange(0x24..<0x52, with: keys.audioViewer)
         message.replaceSubrange(0x52..<0x80, with: keys.audioServer)
@@ -125,27 +125,28 @@ enum AppleMediaConfiguration {
         return message
     }
 
-    static func canvas(from answer: Data) -> AppleCanvas? {
+    public static func canvas(from answer: Data) -> AppleCanvas? {
         guard case let .canvas(canvas) = answerStatus(from: answer) else { return nil }
         return canvas
     }
 
-    static func answerStatus(from answer: Data) -> AppleMediaAnswer {
+    public static func answerStatus(from answer: Data) -> AppleMediaAnswer {
         guard answer.first == 0 else { return .unrelated }
         if let canvas = canvases(from: answer).first { return .canvas(canvas) }
         return containsMediaAnswer(in: answer) ? .degenerate : .unrelated
     }
 
-    static func ports(from answer: Data) -> AppleMediaPorts? {
+    public static func ports(from answer: Data) -> AppleMediaPorts? {
         guard answer.count >= 0x14,
-              (try? answer.uint16BE(at: 2)) == 1,
-              let version = try? answer.uint16BE(at: 4), version != 0,
-              let audio = try? answer.uint16BE(at: 0x0a), audio != 0,
-              let primaryVideo = try? answer.uint16BE(at: 0x10), primaryVideo != 0,
-              (try? answer.uint16BE(at: 0x12)) == 1 else { return nil }
+              BigEndianWire.uint16(from: answer, at: 2) == 1,
+              let version = BigEndianWire.uint16(from: answer, at: 4), version != 0,
+              let audio = BigEndianWire.uint16(from: answer, at: 0x0a), audio != 0,
+              let primaryVideo = BigEndianWire.uint16(from: answer, at: 0x10), primaryVideo != 0,
+              BigEndianWire.uint16(from: answer, at: 0x12) == 1 else { return nil }
         var videos = [primaryVideo]
         if answer.count > 0x18, answer[0x18] & 1 != 0 {
-            guard let secondaryVideo = try? answer.uint16BE(at: 0x16), secondaryVideo != 0 else {
+            guard let secondaryVideo = BigEndianWire.uint16(from: answer, at: 0x16),
+                  secondaryVideo != 0 else {
                 return nil
             }
             videos.append(secondaryVideo)
@@ -153,7 +154,7 @@ enum AppleMediaConfiguration {
         return AppleMediaPorts(audio: audio, videos: videos)
     }
 
-    static func canvases(from answer: Data) -> [AppleCanvas] {
+    public static func canvases(from answer: Data) -> [AppleCanvas] {
         guard answer.first == 0 else { return [] }
         let signature = Data("bplist".utf8)
         var searchStart = answer.startIndex
@@ -250,12 +251,12 @@ private struct ProtobufReader {
     private mutating func skip(_ count: Int) -> Bool { read(count) != nil }
 }
 
-enum AppleMediaConfigurationError: LocalizedError, Equatable {
+public enum AppleMediaConfigurationError: LocalizedError, Equatable {
     case invalidKeyLength
     case invalidSecondaryVideo
     case offerTooLarge
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidKeyLength: "The media encryption key has an invalid length."
         case .invalidSecondaryVideo: "The second display media offer is incomplete."

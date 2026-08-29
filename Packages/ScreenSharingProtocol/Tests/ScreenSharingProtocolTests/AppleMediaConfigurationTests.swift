@@ -1,7 +1,10 @@
+import Foundation
 import XCTest
-@testable import iScreenSharing
+@testable import ScreenSharingProtocol
 
 final class AppleMediaConfigurationTests: XCTestCase {
+    private let callID = UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!
+
     func testBuildsExpectedWireLayout() throws {
         let audio = Data([0xa1, 0xa2, 0xa3])
         let video = Data([0xb1, 0xb2])
@@ -11,8 +14,6 @@ final class AppleMediaConfigurationTests: XCTestCase {
             videoViewer: Data(repeating: 0x33, count: 46),
             videoServer: Data(repeating: 0x44, count: 46)
         )
-        let callID = UUID(uuidString: "00112233-4455-6677-8899-AABBCCDDEEFF")!
-
         let message = try AppleMediaConfiguration.message(
             audioOffer: audio,
             videoOffer: video,
@@ -54,7 +55,8 @@ final class AppleMediaConfigurationTests: XCTestCase {
             audioOffer: Data([0xa1]),
             videoOffer: Data([0xb1, 0xb2]),
             secondaryVideoOffer: Data([0xc1, 0xc2, 0xc3]),
-            keys: keys
+            keys: keys,
+            callID: callID
         )
         XCTAssertEqual(message[6..<10], Data([0, 0, 0, 0x07]))
         XCTAssertEqual(try message.uint16BE(at: 14), 3)
@@ -69,9 +71,55 @@ final class AppleMediaConfigurationTests: XCTestCase {
             videoServer: Data(repeating: 0, count: 46)
         )
         XCTAssertThrowsError(
-            try AppleMediaConfiguration.message(audioOffer: Data(), videoOffer: Data(), keys: keys)
+            try AppleMediaConfiguration.message(
+                audioOffer: Data(),
+                videoOffer: Data(),
+                keys: keys,
+                callID: callID
+            )
         ) { error in
             XCTAssertEqual(error as? AppleMediaConfigurationError, .invalidKeyLength)
+        }
+    }
+
+    func testRejectsSecondaryOfferWithoutSecondaryKeys() {
+        let keys = AppleMediaKeys(
+            audioViewer: Data(repeating: 0x11, count: 46),
+            audioServer: Data(repeating: 0x22, count: 46),
+            videoViewer: Data(repeating: 0x33, count: 46),
+            videoServer: Data(repeating: 0x44, count: 46)
+        )
+
+        XCTAssertThrowsError(
+            try AppleMediaConfiguration.message(
+                audioOffer: Data(),
+                videoOffer: Data(),
+                secondaryVideoOffer: Data([0xc1]),
+                keys: keys,
+                callID: callID
+            )
+        ) { error in
+            XCTAssertEqual(error as? AppleMediaConfigurationError, .invalidSecondaryVideo)
+        }
+    }
+
+    func testRejectsOfferThatCannotFitWireLength() {
+        let keys = AppleMediaKeys(
+            audioViewer: Data(repeating: 0x11, count: 46),
+            audioServer: Data(repeating: 0x22, count: 46),
+            videoViewer: Data(repeating: 0x33, count: 46),
+            videoServer: Data(repeating: 0x44, count: 46)
+        )
+
+        XCTAssertThrowsError(
+            try AppleMediaConfiguration.message(
+                audioOffer: Data(repeating: 0, count: Int(UInt16.max)),
+                videoOffer: Data(),
+                keys: keys,
+                callID: callID
+            )
+        ) { error in
+            XCTAssertEqual(error as? AppleMediaConfigurationError, .offerTooLarge)
         }
     }
 
@@ -129,4 +177,21 @@ final class AppleMediaConfigurationTests: XCTestCase {
     func testRejectsMalformedExplicitMediaPorts() {
         XCTAssertNil(AppleMediaConfiguration.ports(from: Data(repeating: 0, count: 0x19)))
     }
+}
+
+private extension Data {
+    mutating func writeUInt16BE(_ value: UInt16, at offset: Int) {
+        precondition(BigEndianWire.write(value, to: &self, at: offset))
+    }
+
+    func uint16BE(at offset: Int) throws -> UInt16 {
+        guard let value = BigEndianWire.uint16(from: self, at: offset) else {
+            throw AppleMediaConfigurationTestError.outOfBounds
+        }
+        return value
+    }
+}
+
+private enum AppleMediaConfigurationTestError: Error {
+    case outOfBounds
 }
