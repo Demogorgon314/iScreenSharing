@@ -1,12 +1,12 @@
 import Foundation
 
-enum AppleFramebufferUpdate {
-    struct Contents: Equatable {
-        let displayLayouts: [AppleDisplayLayout]
-        let cursorUpdates: [AppleCursorUpdate]
-        let vendorKeySymbols: [Set<UInt32>]
-        let keyboardInputSources: [AppleKeyboardInputSourceState]
-        let deviceInfos: [AppleRemoteDeviceInfo]
+public enum AppleFramebufferUpdate {
+    public struct Contents: Equatable, Sendable {
+        public let displayLayouts: [AppleDisplayLayout]
+        public let cursorUpdates: [AppleCursorUpdate]
+        public let vendorKeySymbols: [Set<UInt32>]
+        public let keyboardInputSources: [AppleKeyboardInputSourceState]
+        public let deviceInfos: [AppleRemoteDeviceInfo]
     }
 
     private static let lengthPrefixedEncodings: Set<Int32> = [
@@ -14,15 +14,15 @@ enum AppleFramebufferUpdate {
         0x3ea, 0x3f2, 0x3f3, 0x453, 0x455, 0x456,
     ]
 
-    static func displayLayouts(from message: Data) -> [AppleDisplayLayout] {
+    public static func displayLayouts(from message: Data) -> [AppleDisplayLayout] {
         contents(from: message).displayLayouts
     }
 
-    static func cursorUpdates(from message: Data) -> [AppleCursorUpdate] {
+    public static func cursorUpdates(from message: Data) -> [AppleCursorUpdate] {
         contents(from: message).cursorUpdates
     }
 
-    static func contents(from message: Data) -> Contents {
+    public static func contents(from message: Data) -> Contents {
         var layouts = [AppleDisplayLayout]()
         var cursors = [AppleCursorUpdate]()
         var vendorKeySymbols = [Set<UInt32>]()
@@ -48,23 +48,28 @@ enum AppleFramebufferUpdate {
 
     private static func events(from message: Data) -> [Event] {
         guard message.count >= 4, message[0] == 0,
-              let rectangleCount = try? message.uint16BE(at: 2) else { return [] }
+              let rectangleCount = BigEndianWire.uint16(from: message, at: 2) else {
+            return []
+        }
 
         var events: [Event] = []
         var offset = 4
         for _ in 0..<rectangleCount {
             guard offset <= message.count - 12,
-                  let hotspotX = try? message.uint16BE(at: offset),
-                  let hotspotY = try? message.uint16BE(at: offset + 2),
-                  let width = try? message.uint16BE(at: offset + 4),
-                  let height = try? message.uint16BE(at: offset + 6),
-                  let encoding = try? message.int32BE(at: offset + 8) else { return events }
+                  let hotspotX = BigEndianWire.uint16(from: message, at: offset),
+                  let hotspotY = BigEndianWire.uint16(from: message, at: offset + 2),
+                  let width = BigEndianWire.uint16(from: message, at: offset + 4),
+                  let height = BigEndianWire.uint16(from: message, at: offset + 6),
+                  let rawEncoding = BigEndianWire.uint32(from: message, at: offset + 8) else {
+                return events
+            }
+            let encoding = Int32(bitPattern: rawEncoding)
             offset += 12
 
             if encoding == 0x450 {
                 guard offset <= message.count - 8,
-                      let cacheID = try? message.uint32BE(at: offset),
-                      let compressedLength = try? message.uint32BE(at: offset + 4),
+                      let cacheID = BigEndianWire.uint32(from: message, at: offset),
+                      let compressedLength = BigEndianWire.uint32(from: message, at: offset + 4),
                       Int(compressedLength) <= message.count - offset - 8 else { return events }
                 let payloadStart = offset + 8
                 let payloadEnd = payloadStart + Int(compressedLength)
@@ -85,7 +90,7 @@ enum AppleFramebufferUpdate {
 
             guard lengthPrefixedEncodings.contains(encoding) || encoding == 0x451,
                   offset <= message.count - 2,
-                  let payloadLength = try? message.uint16BE(at: offset),
+                  let payloadLength = BigEndianWire.uint16(from: message, at: offset),
                   Int(payloadLength) <= message.count - offset - 2 else { return events }
             let payloadStart = offset + 2
             let payloadEnd = payloadStart + Int(payloadLength)
@@ -117,20 +122,28 @@ enum AppleFramebufferUpdate {
 
     private static func vendorKeySymbols(from payload: Data) -> Set<UInt32>? {
         guard payload.count >= 4,
-              (try? payload.uint16BE(at: 0)) == 1,
-              let count = try? Int(payload.uint16BE(at: 2)),
-              count <= (payload.count - 4) / 4 else { return nil }
-        return Set((0..<count).compactMap { try? payload.uint32BE(at: 4 + $0 * 4) })
+              BigEndianWire.uint16(from: payload, at: 0) == 1,
+              let rawCount = BigEndianWire.uint16(from: payload, at: 2) else { return nil }
+        let count = Int(rawCount)
+        guard count <= (payload.count - 4) / 4 else { return nil }
+        return Set((0..<count).compactMap {
+            BigEndianWire.uint32(from: payload, at: 4 + $0 * 4)
+        })
     }
 
     private static func deviceInfo(from payload: Data) -> AppleRemoteDeviceInfo? {
         guard payload.count >= 16,
-              let version = try? payload.uint16BE(at: 0),
-              let flags = try? payload.uint32BE(at: 2),
-              let modelLength = try? Int(payload.uint16BE(at: 10)),
-              let deviceColorLength = try? Int(payload.uint16BE(at: 12)),
-              let enclosureColorLength = try? Int(payload.uint16BE(at: 14)),
-              modelLength > 0,
+              let version = BigEndianWire.uint16(from: payload, at: 0),
+              let flags = BigEndianWire.uint32(from: payload, at: 2),
+              let rawModelLength = BigEndianWire.uint16(from: payload, at: 10),
+              let rawDeviceColorLength = BigEndianWire.uint16(from: payload, at: 12),
+              let rawEnclosureColorLength = BigEndianWire.uint16(from: payload, at: 14) else {
+            return nil
+        }
+        let modelLength = Int(rawModelLength)
+        let deviceColorLength = Int(rawDeviceColorLength)
+        let enclosureColorLength = Int(rawEnclosureColorLength)
+        guard modelLength > 0,
               deviceColorLength > 0,
               enclosureColorLength > 0 else { return nil }
 
@@ -160,7 +173,8 @@ enum AppleFramebufferUpdate {
             | (UInt32(payload[7]) << 8)
             | (UInt32(payload[8]) << 16)
             | (UInt32(payload[9]) << 24)
-        let housingColor = version >= 2 ? try? payload.uint32BE(at: offset) : nil
+        let housingColor = version >= 2
+            ? BigEndianWire.uint32(from: payload, at: offset) : nil
         return AppleRemoteDeviceInfo(
             modelIdentifier: modelIdentifier,
             deviceColor: deviceColor,

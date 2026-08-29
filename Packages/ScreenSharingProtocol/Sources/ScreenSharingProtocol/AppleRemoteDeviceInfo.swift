@@ -1,14 +1,14 @@
 import Foundation
 
-struct AppleRemoteDeviceInfo: Codable, Equatable, Hashable, Sendable {
-    let modelIdentifier: String
-    let deviceColor: String?
-    let enclosureColor: String?
-    let enclosureRGBColorComponents: UInt32?
-    let housingColor: UInt32?
-    let flags: UInt32
+public struct AppleRemoteDeviceInfo: Codable, Equatable, Hashable, Sendable {
+    public let modelIdentifier: String
+    public let deviceColor: String?
+    public let enclosureColor: String?
+    public let enclosureRGBColorComponents: UInt32?
+    public let housingColor: UInt32?
+    public let flags: UInt32
 
-    init(
+    public init(
         modelIdentifier: String,
         deviceColor: String? = nil,
         enclosureColor: String? = nil,
@@ -24,7 +24,7 @@ struct AppleRemoteDeviceInfo: Codable, Equatable, Hashable, Sendable {
         self.flags = flags
     }
 
-    var enclosureColorIndex: Int32? {
+    public var enclosureColorIndex: Int32? {
         Self.colorIndex(from: deviceColor)
             ?? Self.colorIndex(from: enclosureColor)
     }

@@ -44,3 +44,7 @@ typealias AppleMediaPorts = ScreenSharingProtocol.AppleMediaPorts
 typealias AppleMediaAnswer = ScreenSharingProtocol.AppleMediaAnswer
 typealias AppleMediaConfiguration = ScreenSharingProtocol.AppleMediaConfiguration
 typealias AppleMediaConfigurationError = ScreenSharingProtocol.AppleMediaConfigurationError
+typealias AppleCursorImage = ScreenSharingProtocol.AppleCursorImage
+typealias AppleCursorUpdate = ScreenSharingProtocol.AppleCursorUpdate
+typealias AppleRemoteDeviceInfo = ScreenSharingProtocol.AppleRemoteDeviceInfo
+typealias AppleFramebufferUpdate = ScreenSharingProtocol.AppleFramebufferUpdate

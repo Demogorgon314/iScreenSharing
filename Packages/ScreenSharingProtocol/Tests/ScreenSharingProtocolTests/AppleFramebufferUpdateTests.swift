@@ -1,5 +1,6 @@
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleFramebufferUpdateTests: XCTestCase {
     func testExtractsLayoutAfterLengthPrefixedConfigurationRect() throws {
@@ -16,7 +17,8 @@ final class AppleFramebufferUpdateTests: XCTestCase {
 
         let layout = try XCTUnwrap(layouts.first)
         XCTAssertEqual(layouts.count, 1)
-        XCTAssertEqual(layout.canvas(tileCount: 4), AppleCanvas(width: 2880, height: 1800, tileCount: 4))
+        XCTAssertEqual(layout.backingWidth, 2_880)
+        XCTAssertEqual(layout.backingHeight, 1_800)
         XCTAssertEqual(layout.displays.first?.displayID, 42)
     }
 
@@ -90,16 +92,22 @@ final class AppleFramebufferUpdateTests: XCTestCase {
     }
 
     func testParsesVersionOneVendorKeySymbolCapabilities() {
+        let expectedSymbols: [UInt32] = [
+            0x1008_fd02,
+            0x1008_fd03,
+            0x1008_fd01,
+            0x1008_fd00,
+        ]
         var message = Data([0, 0, 0, 1])
         message.append(rectangleHeader(encoding: 1107))
         message.appendUInt16BE(20)
         message.appendUInt16BE(1)
         message.appendUInt16BE(4)
-        AppleRemoteSystemCommand.allCases.forEach { message.appendUInt32BE($0.rawValue) }
+        expectedSymbols.forEach { message.appendUInt32BE($0) }
 
         XCTAssertEqual(
             AppleFramebufferUpdate.contents(from: message).vendorKeySymbols,
-            [Set(AppleRemoteSystemCommand.allCases.map(\.rawValue))]
+            [Set(expectedSymbols)]
         )
     }
 
@@ -116,7 +124,7 @@ final class AppleFramebufferUpdateTests: XCTestCase {
         truncated.appendUInt16BE(8)
         truncated.appendUInt16BE(1)
         truncated.appendUInt16BE(2)
-        truncated.appendUInt32BE(AppleRemoteSystemCommand.desktop.rawValue)
+        truncated.appendUInt32BE(0x1008_fd01)
         XCTAssertTrue(AppleFramebufferUpdate.contents(from: truncated).vendorKeySymbols.isEmpty)
     }
 
@@ -218,5 +226,35 @@ final class AppleFramebufferUpdateTests: XCTestCase {
         payload.writeUInt16BE(1800, at: 52)
         payload.writeUInt16BE(2880, at: 54)
         return payload
+    }
+}
+
+private extension Data {
+    mutating func appendUInt16BE(_ value: UInt16) {
+        append(UInt8(truncatingIfNeeded: value >> 8))
+        append(UInt8(truncatingIfNeeded: value))
+    }
+
+    mutating func appendUInt32BE(_ value: UInt32) {
+        append(UInt8(truncatingIfNeeded: value >> 24))
+        append(UInt8(truncatingIfNeeded: value >> 16))
+        append(UInt8(truncatingIfNeeded: value >> 8))
+        append(UInt8(truncatingIfNeeded: value))
+    }
+
+    mutating func appendInt32BE(_ value: Int32) {
+        appendUInt32BE(UInt32(bitPattern: value))
+    }
+
+    mutating func writeUInt16BE(_ value: UInt16, at offset: Int) {
+        self[offset] = UInt8(truncatingIfNeeded: value >> 8)
+        self[offset + 1] = UInt8(truncatingIfNeeded: value)
+    }
+
+    mutating func writeUInt32BE(_ value: UInt32, at offset: Int) {
+        self[offset] = UInt8(truncatingIfNeeded: value >> 24)
+        self[offset + 1] = UInt8(truncatingIfNeeded: value >> 16)
+        self[offset + 2] = UInt8(truncatingIfNeeded: value >> 8)
+        self[offset + 3] = UInt8(truncatingIfNeeded: value)
     }
 }
