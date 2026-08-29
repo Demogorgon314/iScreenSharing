@@ -527,25 +527,27 @@ final class StandardRFBProtocolTests: XCTestCase {
     }
 
     func testLowBandwidthRetainsFullColorBootstrapUntilConfirmedFrame() async throws {
-        var updates = Data([
+        let bootstrapUpdate = Data([
             0, 0, 0, 1,
             0, 0, 0, 0, 0, 2, 0, 1,
             0, 0, 0, 0,
             1, 2, 3, 0, 4, 5, 6, 0,
+        ])
+        var reducedColorUpdates = Data([
             0, 0, 0, 1,
             0, 0, 0, 0, 0, 2, 0, 1,
             0, 0, 3, 0xe8,
             0, 0, 0, 9,
             120, 156, 98, 0, 0, 0, 0, 255, 255,
         ])
-        updates.append(contentsOf: [
+        reducedColorUpdates.append(contentsOf: [
             0, 0, 0, 1,
             0, 0, 0, 0, 0, 2, 0, 1,
             0, 0, 3, 0xe8,
             0, 0, 0, 7,
             106, 0, 0, 0, 0, 255, 255,
         ])
-        let transport = StandardRFBTestTransport(receiveData: updates)
+        let transport = ControlledStandardRFBTransport(receiveData: bootstrapUpdate)
         let endpoint = try ConnectionEndpoint("example.local")
         let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
         let session = RFBAuthenticatedSession(
@@ -565,12 +567,18 @@ final class StandardRFBProtocolTests: XCTestCase {
         session.install(videoStream: stream)
 
         stream.start()
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(1))
-        while stream.decodedFrameCount < 2, clock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        try await waitUntil { stream.decodedFrameCount == 1 }
+        let bootstrapFrame = try XCTUnwrap(
+            stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
+        )
+        XCTAssertEqual(Self.bytes(from: bootstrapFrame), [
+            1, 2, 3, 255,
+            4, 5, 6, 255,
+        ])
+        transport.append(reducedColorUpdates)
+        try await waitUntil { stream.decodedFrameCount == 2 }
         stream.close()
+        transport.cancel()
 
         XCTAssertEqual(stream.decodedFrameCount, 2)
         let pixelBuffer = try XCTUnwrap(
@@ -586,25 +594,27 @@ final class StandardRFBProtocolTests: XCTestCase {
     }
 
     func testReceivesBalancedThousandsRectangle() async throws {
-        var update = Data([
+        let bootstrapUpdate = Data([
             0, 0, 0, 1,
             0, 0, 0, 0, 0, 2, 0, 1,
             0, 0, 0, 0,
             1, 2, 3, 0, 4, 5, 6, 0,
+        ])
+        var reducedColorUpdates = Data([
             0, 0, 0, 1,
             0, 0, 0, 0, 0, 2, 0, 1,
             0, 0, 3, 0xea,
             0, 0, 0, 12,
             120, 156, 98, 96, 96, 96, 0, 0, 0, 0, 255, 255,
         ])
-        update.append(contentsOf: [
+        reducedColorUpdates.append(contentsOf: [
             0, 0, 0, 1,
             0, 0, 0, 0, 0, 2, 0, 1,
             0, 0, 3, 0xea,
             0, 0, 0, 10,
             170, 97, 96, 126, 0, 0, 0, 0, 255, 255,
         ])
-        let transport = StandardRFBTestTransport(receiveData: update)
+        let transport = ControlledStandardRFBTransport(receiveData: bootstrapUpdate)
         let endpoint = try ConnectionEndpoint("example.local")
         let address = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
         let session = RFBAuthenticatedSession(
@@ -624,12 +634,18 @@ final class StandardRFBProtocolTests: XCTestCase {
         session.install(videoStream: stream)
 
         stream.start()
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(1))
-        while stream.decodedFrameCount < 2, clock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        try await waitUntil { stream.decodedFrameCount == 1 }
+        let bootstrapFrame = try XCTUnwrap(
+            stream.frames.frame(at: AppleVideoFrameStore.fullCanvasIndex)
+        )
+        XCTAssertEqual(Self.bytes(from: bootstrapFrame), [
+            1, 2, 3, 255,
+            4, 5, 6, 255,
+        ])
+        transport.append(reducedColorUpdates)
+        try await waitUntil { stream.decodedFrameCount == 2 }
         stream.close()
+        transport.cancel()
 
         XCTAssertEqual(stream.decodedFrameCount, 2)
         let pixelBuffer = try XCTUnwrap(
@@ -1174,6 +1190,10 @@ private final class ControlledStandardRFBTransport: RFBTransport, @unchecked Sen
 
     var successfulReceiveCount: Int {
         lock.withStandardTestLock { receiveCount }
+    }
+
+    var sentMessages: [Data] {
+        lock.withStandardTestLock { sent }
     }
 
     func start(timeout: Duration) async throws { }
