@@ -1,6 +1,8 @@
 import Carbon
 import Foundation
+import enum ScreenSharingProtocol.AppleClipboardMessage
 import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleClipboardArchive
 import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleScrollWheelEvent
 

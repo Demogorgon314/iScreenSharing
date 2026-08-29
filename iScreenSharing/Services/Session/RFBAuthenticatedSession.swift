@@ -1,4 +1,5 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleClipboardMessage
 import struct ScreenSharingProtocol.RFBServerInfo
 
 final class RFBAuthenticatedSession: @unchecked Sendable {

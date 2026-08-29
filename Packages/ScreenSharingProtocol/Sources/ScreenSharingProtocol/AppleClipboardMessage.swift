@@ -43,11 +43,18 @@ public struct AppleClipboardFlavor: Equatable, Sendable {
     public let type: String
     public let aliases: [AppleClipboardTypeAlias]
     public let value: Data
+    public let reserved: UInt32
 
-    public init(type: String, aliases: [AppleClipboardTypeAlias], value: Data) {
+    public init(
+        type: String,
+        aliases: [AppleClipboardTypeAlias],
+        value: Data,
+        reserved: UInt32 = 0
+    ) {
         self.type = type
         self.aliases = aliases
         self.value = value
+        self.reserved = reserved
     }
 }
 
@@ -208,7 +215,7 @@ public enum AppleClipboardMessage {
                 let type = Data(flavor.type.utf8)
                 try validateMetadata(type, total: &metadataBytes)
                 try data.appendClipboardData(type)
-                data.appendUInt32BE(0)
+                data.appendUInt32BE(flavor.reserved)
                 totalAliasCount += flavor.aliases.count
                 guard totalAliasCount <= maximumAliasCount,
                       !flavor.type.isEmpty || !flavor.aliases.isEmpty else {
@@ -246,7 +253,7 @@ public enum AppleClipboardMessage {
             flavors.reserveCapacity(flavorCount)
             for _ in 0..<flavorCount {
                 let type = try reader.readString(metadataBytes: &metadataBytes)
-                _ = try reader.readUInt32()
+                let reserved = try reader.readUInt32()
                 let aliasCount = try Int(reader.readUInt32())
                 totalAliasCount += aliasCount
                 guard totalAliasCount <= maximumAliasCount,
@@ -264,7 +271,8 @@ public enum AppleClipboardMessage {
                 flavors.append(AppleClipboardFlavor(
                     type: type,
                     aliases: aliases,
-                    value: try reader.readData()
+                    value: try reader.readData(),
+                    reserved: reserved
                 ))
             }
             items.append(AppleClipboardItem(flavors: flavors))
