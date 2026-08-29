@@ -1,6 +1,5 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleFileCopyToolOutput
-import enum ScreenSharingProtocol.AppleFileTransferError
 import enum ScreenSharingProtocol.AppleFileTransferMessage
 import XCTest
 @testable import iScreenSharing
@@ -200,11 +199,27 @@ final class AppleFileTransferServiceTests: XCTestCase {
         XCTAssertTrue(history.preventsNewDrop)
 
         await XCTAssertThrowsErrorAsync(try await service.beginDrop(fileURL: secondURL)) {
-            XCTAssertEqual($0 as? AppleFileTransferError, .transferAlreadyInProgress)
+            XCTAssertEqual($0 as? AppleFileTransferServiceError, .transferAlreadyInProgress)
         }
 
         await service.close()
         sender.finish()
+    }
+
+    func testRejectsDropWithServiceErrorWhileObserving() async throws {
+        let fileURL = try makeTemporaryFile(contents: Data())
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let service = AppleFileTransferService(
+            remoteName: "Remote Mac",
+            history: AppleFileTransferHistory(),
+            sender: FakeFileCopySender(outputs: []),
+            send: { _ in }
+        )
+        await service.setControlling(false)
+
+        await XCTAssertThrowsErrorAsync(try await service.beginDrop(fileURL: fileURL)) {
+            XCTAssertEqual($0 as? AppleFileTransferServiceError, .notControlling)
+        }
     }
 
     func testCancellingPendingDropSendsNativeCancelAndAllowsAnotherDrop() async throws {

@@ -347,23 +347,14 @@ public struct AppleFileCopyToolMessageParser {
 }
 
 public enum AppleFileTransferError: LocalizedError, Equatable {
-    case unavailable
     case invalidMessage
     case payloadTooLarge
     case sessionMismatch
     case unsupportedCommand
     case invalidToolOutput
-    case transferAlreadyInProgress
-    case requestExpired
-    case unsupportedItem
-    case senderFailed
-    case remoteRejected
-    case closed
 
     public var errorDescription: String? {
         switch self {
-        case .unavailable:
-            "File transfer is unavailable on this version of macOS."
         case .invalidMessage, .invalidToolOutput:
             "The file transfer protocol returned invalid data."
         case .payloadTooLarge:
@@ -372,18 +363,6 @@ public enum AppleFileTransferError: LocalizedError, Equatable {
             "The remote Mac returned a mismatched file transfer session."
         case .unsupportedCommand:
             "The remote Mac returned an unsupported file transfer command."
-        case .transferAlreadyInProgress:
-            "Another file transfer is already in progress."
-        case .requestExpired:
-            "The remote Mac did not accept the file drop in time."
-        case .unsupportedItem:
-            "Only one regular file can be transferred at a time."
-        case .senderFailed:
-            "The file could not be read for transfer."
-        case .remoteRejected:
-            "The remote Mac could not receive the file."
-        case .closed:
-            "The Screen Sharing session is closed."
         }
     }
 }

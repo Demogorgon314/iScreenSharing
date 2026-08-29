@@ -94,7 +94,9 @@ final class AppleFileTransferMessageTests: XCTestCase {
         XCTAssertThrowsError(try AppleFileTransferMessage.senderFrame(
             from: dataFrame,
             expectedSessionID: 0x4321
-        ))
+        )) {
+            XCTAssertEqual($0 as? AppleFileTransferError, .sessionMismatch)
+        }
     }
 
     func testParsesNativeSenderMetadataVectors() throws {
@@ -215,6 +217,14 @@ final class AppleFileTransferMessageTests: XCTestCase {
             [.frame(frame), .finished(status: 0)]
         )
         XCTAssertNoThrow(try parser.finish())
+
+        var invalidCommand = Data()
+        invalidCommand.appendUInt32LE(2)
+        invalidCommand.appendUInt16LE(9)
+        var invalidParser = AppleFileCopyToolMessageParser()
+        XCTAssertThrowsError(try invalidParser.process(invalidCommand)) {
+            XCTAssertEqual($0 as? AppleFileTransferError, .invalidToolOutput)
+        }
     }
 
     func testFragmentsFileDataWithoutExceedingEncryptedRecordLimit() {

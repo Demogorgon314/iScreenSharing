@@ -1,11 +1,42 @@
 import Foundation
 import enum ScreenSharingProtocol.AppleFileCopyToolOutput
-import enum ScreenSharingProtocol.AppleFileTransferError
 import enum ScreenSharingProtocol.AppleFileTransferMessage
 import enum ScreenSharingProtocol.AppleFileTransferResponse
 import struct ScreenSharingProtocol.AppleFileCopyFrame
 import struct ScreenSharingProtocol.AppleFileCopyToolMessageParser
 import struct ScreenSharingProtocol.AppleFileTransferRequest
+
+enum AppleFileTransferServiceError: LocalizedError, Equatable {
+    case unavailable
+    case transferAlreadyInProgress
+    case notControlling
+    case unsupportedItem
+    case senderFailed
+    case invalidSenderOutput
+    case remoteRejected
+    case closed
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            "File transfer is unavailable on this version of macOS."
+        case .transferAlreadyInProgress:
+            "Another file transfer is already in progress."
+        case .notControlling:
+            "File transfer is unavailable while observing the remote Mac."
+        case .unsupportedItem:
+            "Only one regular file can be transferred at a time."
+        case .senderFailed:
+            "The file could not be read for transfer."
+        case .invalidSenderOutput:
+            "The file transfer protocol returned invalid data."
+        case .remoteRejected:
+            "The remote Mac could not receive the file."
+        case .closed:
+            "The Screen Sharing session is closed."
+        }
+    }
+}
 
 enum AppleFileTransferState: Equatable, Sendable {
     case waitingForRemote
@@ -106,10 +137,10 @@ struct AppleSystemFileCopySender: AppleFileCopySenderRunning {
         sessionID: UInt32,
         receive: @escaping @Sendable (AppleFileCopyToolOutput) async throws -> Void
     ) async throws {
-        guard isAvailable else { throw AppleFileTransferError.unavailable }
+        guard isAvailable else { throw AppleFileTransferServiceError.unavailable }
         let path = Data(fileURL.path.utf8)
         guard !path.isEmpty, path.count <= Int(UInt16.max), !path.contains(0) else {
-            throw AppleFileTransferError.unsupportedItem
+            throw AppleFileTransferServiceError.unsupportedItem
         }
         var request = Data()
         request.appendUInt16LE(1)
@@ -143,7 +174,7 @@ struct AppleSystemFileCopySender: AppleFileCopySenderRunning {
                 process.waitUntilExit()
                 try parser.finish()
                 guard process.terminationReason == .exit, process.terminationStatus == 0 else {
-                    throw AppleFileTransferError.senderFailed
+                    throw AppleFileTransferServiceError.senderFailed
                 }
             } catch {
                 if process.isRunning {
@@ -228,14 +259,17 @@ actor AppleFileTransferService {
 
     func beginDrop(fileURL: URL) async throws -> UInt32 {
         guard canAcceptDrop else {
-            if !sender.isAvailable { throw AppleFileTransferError.unavailable }
+            if !sender.isAvailable { throw AppleFileTransferServiceError.unavailable }
             if activeTransfer != nil {
-                throw AppleFileTransferError.transferAlreadyInProgress
+                throw AppleFileTransferServiceError.transferAlreadyInProgress
             }
-            throw AppleFileTransferError.closed
+            if isClosed { throw AppleFileTransferServiceError.closed }
+            throw AppleFileTransferServiceError.notControlling
         }
         let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
-        guard values.isRegularFile == true else { throw AppleFileTransferError.unsupportedItem }
+        guard values.isRegularFile == true else {
+            throw AppleFileTransferServiceError.unsupportedItem
+        }
 
         var sessionID = makeSessionID() & 0x7fff_ffff
         if sessionID == 0 { sessionID = 1 }
@@ -323,7 +357,7 @@ actor AppleFileTransferService {
         if let activeTransfer {
             await history.update(
                 activeTransfer.historyID,
-                state: .failed(AppleFileTransferError.closed.localizedDescription)
+                state: .failed(AppleFileTransferServiceError.closed.localizedDescription)
             )
             stopAccessing(activeTransfer)
             self.activeTransfer = nil
@@ -356,7 +390,7 @@ actor AppleFileTransferService {
             if isClosed {
                 await history.update(
                     historyID,
-                    state: .failed(AppleFileTransferError.closed.localizedDescription)
+                    state: .failed(AppleFileTransferServiceError.closed.localizedDescription)
                 )
             }
             return
@@ -403,7 +437,7 @@ actor AppleFileTransferService {
                   latestTransfer.sessionID == request.sessionID,
                   latestTransfer.toolReportedFinished,
                   latestTransfer.sentDone else {
-                throw AppleFileTransferError.senderFailed
+                throw AppleFileTransferServiceError.senderFailed
             }
             latestTransfer.senderFinished = true
             self.activeTransfer = latestTransfer
@@ -433,7 +467,7 @@ actor AppleFileTransferService {
             try await send(fragments)
             await senderFrameDidSend(frame)
             if let status = frame.status, status != 0 {
-                throw AppleFileTransferError.senderFailed
+                throw AppleFileTransferServiceError.senderFailed
             }
         case .itemInfo(let message):
             let frame = try AppleFileTransferMessage.senderItemInfo(
@@ -445,9 +479,9 @@ actor AppleFileTransferService {
             guard var activeTransfer,
                   activeTransfer.sessionID == sessionID,
                   !activeTransfer.toolReportedFinished else {
-                throw AppleFileTransferError.invalidToolOutput
+                throw AppleFileTransferServiceError.invalidSenderOutput
             }
-            guard status == 0 else { throw AppleFileTransferError.senderFailed }
+            guard status == 0 else { throw AppleFileTransferServiceError.senderFailed }
             activeTransfer.toolReportedFinished = true
             self.activeTransfer = activeTransfer
         }
@@ -484,7 +518,7 @@ actor AppleFileTransferService {
         } else {
             await history.update(
                 activeTransfer.historyID,
-                state: .failed(AppleFileTransferError.remoteRejected.localizedDescription)
+                state: .failed(AppleFileTransferServiceError.remoteRejected.localizedDescription)
             )
         }
         stopAccessing(activeTransfer)
