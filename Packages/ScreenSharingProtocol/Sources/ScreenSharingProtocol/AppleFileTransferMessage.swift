@@ -1,31 +1,52 @@
 import Foundation
 
-struct AppleFileTransferRequest: Equatable, Sendable {
-    let sessionID: UInt32
-    let destinationPath: String
+public struct AppleFileTransferRequest: Equatable, Sendable {
+    public let sessionID: UInt32
+    public let destinationPath: String
+
+    public init(sessionID: UInt32, destinationPath: String) {
+        self.sessionID = sessionID
+        self.destinationPath = destinationPath
+    }
 }
 
-struct AppleFileCopyFrame: Equatable, Sendable {
-    let command: UInt16
-    let sessionID: UInt32
-    let totalBytes: UInt64?
-    let transferredBytes: UInt64
-    let isDone: Bool
-    let status: Int32?
+public struct AppleFileCopyFrame: Equatable, Sendable {
+    public let command: UInt16
+    public let sessionID: UInt32
+    public let totalBytes: UInt64?
+    public let transferredBytes: UInt64
+    public let isDone: Bool
+    public let status: Int32?
+
+    public init(
+        command: UInt16,
+        sessionID: UInt32,
+        totalBytes: UInt64?,
+        transferredBytes: UInt64,
+        isDone: Bool,
+        status: Int32?
+    ) {
+        self.command = command
+        self.sessionID = sessionID
+        self.totalBytes = totalBytes
+        self.transferredBytes = transferredBytes
+        self.isDone = isDone
+        self.status = status
+    }
 }
 
-enum AppleFileTransferResponse: Equatable, Sendable {
+public enum AppleFileTransferResponse: Equatable, Sendable {
     case completed(sessionID: UInt32, errorCode: UInt16, name: String)
     case progress(sessionID: UInt32, fraction: Double)
 }
 
-enum AppleFileTransferMessage {
-    static let maximumDropPayloadLength = 0x70_0000
-    static let maximumDestinationPathLength = 0x3ff
-    static let maximumFileCopyBodyLength = 1 * 1_024 * 1_024
-    static let maximumRecordPlaintextLength = 60_000
+public enum AppleFileTransferMessage {
+    public static let maximumDropPayloadLength = 0x70_0000
+    public static let maximumDestinationPathLength = 0x3ff
+    public static let maximumFileCopyBodyLength = 1 * 1_024 * 1_024
+    public static let maximumRecordPlaintextLength = 60_000
 
-    static func beginDrop(fileURL: URL, sessionID: UInt32) throws -> Data {
+    public static func beginDrop(fileURL: URL, sessionID: UInt32) throws -> Data {
         guard sessionID != 0, fileURL.isFileURL else {
             throw AppleFileTransferError.invalidMessage
         }
@@ -54,7 +75,7 @@ enum AppleFileTransferMessage {
         return message
     }
 
-    static func cancelDrop(sessionID: UInt32) throws -> Data {
+    public static func cancelDrop(sessionID: UInt32) throws -> Data {
         guard sessionID != 0 else { throw AppleFileTransferError.invalidMessage }
         var message = Data([0x20, 0, 0, 0])
         message.appendUInt32BE(sessionID)
@@ -63,7 +84,7 @@ enum AppleFileTransferMessage {
         return message
     }
 
-    static func fileRequest(from message: Data) throws -> AppleFileTransferRequest {
+    public static func fileRequest(from message: Data) throws -> AppleFileTransferRequest {
         guard message.count >= 12, message[0] == 0x1e else {
             throw AppleFileTransferError.invalidMessage
         }
@@ -83,7 +104,7 @@ enum AppleFileTransferMessage {
         return AppleFileTransferRequest(sessionID: sessionID, destinationPath: path)
     }
 
-    static func startFileReceive(sessionID: UInt32, destinationPath: String) throws -> Data {
+    public static func startFileReceive(sessionID: UInt32, destinationPath: String) throws -> Data {
         let path = Data(destinationPath.utf8)
         guard sessionID != 0, !path.isEmpty, !path.contains(0),
               path.count <= maximumDestinationPathLength,
@@ -102,7 +123,10 @@ enum AppleFileTransferMessage {
         return fileCopyMessage(body: body)
     }
 
-    static func senderFrame(from message: Data, expectedSessionID: UInt32) throws -> AppleFileCopyFrame {
+    public static func senderFrame(
+        from message: Data,
+        expectedSessionID: UInt32
+    ) throws -> AppleFileCopyFrame {
         let envelope = try fileCopyEnvelope(from: message)
         guard envelope.sessionID == expectedSessionID else {
             throw AppleFileTransferError.sessionMismatch
@@ -191,7 +215,7 @@ enum AppleFileTransferMessage {
         }
     }
 
-    static func senderItemInfo(
+    public static func senderItemInfo(
         from message: Data,
         expectedSessionID: UInt32
     ) throws -> AppleFileCopyFrame {
@@ -215,7 +239,7 @@ enum AppleFileTransferMessage {
         )
     }
 
-    static func response(from message: Data) throws -> AppleFileTransferResponse {
+    public static func response(from message: Data) throws -> AppleFileTransferResponse {
         let envelope = try fileCopyEnvelope(from: message)
         switch envelope.command {
         case 200:
@@ -241,7 +265,7 @@ enum AppleFileTransferMessage {
         }
     }
 
-    static func fragments(of message: Data) -> [Data] {
+    public static func fragments(of message: Data) -> [Data] {
         stride(from: 0, to: message.count, by: maximumRecordPlaintextLength).map { offset in
             message.subdata(in: offset..<min(message.count, offset + maximumRecordPlaintextLength))
         }
@@ -277,16 +301,18 @@ enum AppleFileTransferMessage {
     }
 }
 
-enum AppleFileCopyToolOutput: Equatable, Sendable {
+public enum AppleFileCopyToolOutput: Equatable, Sendable {
     case frame(Data)
     case itemInfo(Data)
     case finished(status: UInt16)
 }
 
-struct AppleFileCopyToolMessageParser {
+public struct AppleFileCopyToolMessageParser {
     private var buffer = Data()
 
-    mutating func process(_ bytes: Data) throws -> [AppleFileCopyToolOutput] {
+    public init() {}
+
+    public mutating func process(_ bytes: Data) throws -> [AppleFileCopyToolOutput] {
         buffer.append(bytes)
         var output = [AppleFileCopyToolOutput]()
         while buffer.count >= 4 {
@@ -315,12 +341,12 @@ struct AppleFileCopyToolMessageParser {
         return output
     }
 
-    mutating func finish() throws {
+    public mutating func finish() throws {
         guard buffer.isEmpty else { throw AppleFileTransferError.invalidToolOutput }
     }
 }
 
-enum AppleFileTransferError: LocalizedError, Equatable {
+public enum AppleFileTransferError: LocalizedError, Equatable {
     case unavailable
     case invalidMessage
     case payloadTooLarge
@@ -334,7 +360,7 @@ enum AppleFileTransferError: LocalizedError, Equatable {
     case remoteRejected
     case closed
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .unavailable:
             "File transfer is unavailable on this version of macOS."
@@ -363,6 +389,28 @@ enum AppleFileTransferError: LocalizedError, Equatable {
 }
 
 private extension Data {
+    mutating func appendUInt16BE(_ value: UInt16) {
+        BigEndianWire.append(value, to: &self)
+    }
+
+    mutating func appendUInt32BE(_ value: UInt32) {
+        BigEndianWire.append(value, to: &self)
+    }
+
+    func uint16BE(at offset: Int) throws -> UInt16 {
+        guard let value = BigEndianWire.uint16(from: self, at: offset) else {
+            throw FileTransferWireError.outOfBounds
+        }
+        return value
+    }
+
+    func uint32BE(at offset: Int) throws -> UInt32 {
+        guard let value = BigEndianWire.uint32(from: self, at: offset) else {
+            throw FileTransferWireError.outOfBounds
+        }
+        return value
+    }
+
     mutating func appendFileTransferField(_ value: Data) throws {
         guard value.count <= Int(UInt32.max) else { throw AppleFileTransferError.payloadTooLarge }
         appendUInt32BE(UInt32(value.count))
@@ -370,12 +418,12 @@ private extension Data {
     }
 
     func uint16LE(at offset: Int) throws -> UInt16 {
-        guard offset >= 0, count >= offset + 2 else { throw WireDataError.outOfBounds }
+        guard offset >= 0, count >= offset + 2 else { throw FileTransferWireError.outOfBounds }
         return UInt16(self[offset]) | UInt16(self[offset + 1]) << 8
     }
 
     func uint32LE(at offset: Int) throws -> UInt32 {
-        guard offset >= 0, count >= offset + 4 else { throw WireDataError.outOfBounds }
+        guard offset >= 0, count >= offset + 4 else { throw FileTransferWireError.outOfBounds }
         return UInt32(self[offset])
             | UInt32(self[offset + 1]) << 8
             | UInt32(self[offset + 2]) << 16
@@ -393,4 +441,8 @@ private extension Data {
     func uint64BE(at offset: Int) throws -> UInt64 {
         UInt64(try uint32BE(at: offset)) << 32 | UInt64(try uint32BE(at: offset + 4))
     }
+}
+
+private enum FileTransferWireError: Error {
+    case outOfBounds
 }

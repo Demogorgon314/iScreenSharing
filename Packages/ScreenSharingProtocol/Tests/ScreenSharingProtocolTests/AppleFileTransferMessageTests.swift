@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class AppleFileTransferMessageTests: XCTestCase {
     func testBuildsNativeType32GoldenVector() throws {
@@ -252,5 +252,12 @@ private extension Data {
         append(UInt8(truncatingIfNeeded: value >> 8))
         append(UInt8(truncatingIfNeeded: value >> 16))
         append(UInt8(truncatingIfNeeded: value >> 24))
+    }
+
+    mutating func writeUInt32BE(_ value: UInt32, at offset: Int) {
+        self[offset] = UInt8(truncatingIfNeeded: value >> 24)
+        self[offset + 1] = UInt8(truncatingIfNeeded: value >> 16)
+        self[offset + 2] = UInt8(truncatingIfNeeded: value >> 8)
+        self[offset + 3] = UInt8(truncatingIfNeeded: value)
     }
 }

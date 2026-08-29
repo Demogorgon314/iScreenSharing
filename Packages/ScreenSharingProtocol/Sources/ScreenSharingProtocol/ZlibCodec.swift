@@ -2,10 +2,10 @@ import Compression
 import Foundation
 import zlib
 
-enum ZlibCodec {
-    static let defaultMaximumOutputLength = 16 * 1_024 * 1_024
+public enum ZlibCodec {
+    public static let defaultMaximumOutputLength = 16 * 1_024 * 1_024
 
-    static func compress(
+    public static func compress(
         _ input: Data,
         maximumOutputLength: Int = defaultMaximumOutputLength
     ) throws -> Data {
@@ -18,7 +18,7 @@ enum ZlibCodec {
         )
         var output = Data([0x78, 0x9c])
         output.append(deflate)
-        output.appendUInt32BE(adler32(input))
+        BigEndianWire.append(adler32(input), to: &output)
         return output
     }
 
@@ -26,7 +26,7 @@ enum ZlibCodec {
     /// messages: one level-9 deflate call with `Z_SYNC_FLUSH` and no Adler-32
     /// trailer. This is intentionally distinct from the completed stream used
     /// by ordinary clipboard messages.
-    static func compressSyncFlush(
+    public static func compressSyncFlush(
         _ input: Data,
         maximumOutputLength: Int = defaultMaximumOutputLength
     ) throws -> Data {
@@ -77,7 +77,7 @@ enum ZlibCodec {
         return output
     }
 
-    static func decompress(_ input: Data) throws -> Data {
+    public static func decompress(_ input: Data) throws -> Data {
         guard input.count >= 6, hasValidHeader(input), input[1] & 0x20 == 0 else {
             throw ZlibCodecError.invalidStream
         }
@@ -88,13 +88,14 @@ enum ZlibCodec {
             maximumOutputLength: defaultMaximumOutputLength,
             function: compression_decode_buffer
         )
-        guard adler32(output) == (try input.uint32BE(at: input.count - 4)) else {
+        guard let checksum = BigEndianWire.uint32(from: input, at: input.count - 4),
+              adler32(output) == checksum else {
             throw ZlibCodecError.invalidStream
         }
         return output
     }
 
-    static func decompressSyncFlush(
+    public static func decompressSyncFlush(
         _ input: Data,
         expectedSize: Int,
         maximumOutputLength: Int = defaultMaximumOutputLength
@@ -184,7 +185,7 @@ enum ZlibCodec {
     }
 }
 
-enum ZlibCodecError: Error, Equatable {
+public enum ZlibCodecError: Error, Equatable {
     case invalidStream
     case outputTooLarge
 }

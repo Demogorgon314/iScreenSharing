@@ -1,5 +1,6 @@
+import Foundation
 import XCTest
-@testable import iScreenSharing
+import ScreenSharingProtocol
 
 final class ZlibCodecTests: XCTestCase {
     func testDecodesIndependentSyncFlushStream() throws {
