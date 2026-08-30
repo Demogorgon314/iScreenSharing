@@ -730,6 +730,57 @@ final class AppleFileTransferServiceTests: XCTestCase {
         sender.finish()
     }
 
+    func testPausedOutgoingTransferBackpressuresLocalSender() async throws {
+        let fileURL = try makeTemporaryFile(contents: Data([0x58]))
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let outputs = nativeSenderOutputs()
+        guard case .frame(let summary) = outputs[0],
+              case .frame(let item) = outputs[2],
+              case .frame(let done) = outputs[3] else {
+            return XCTFail("Expected native sender frames")
+        }
+        let sender = ManualFileCopySender()
+        let recorder = FileTransferSendRecorder()
+        let history = AppleFileTransferHistory()
+        let service = AppleFileTransferService(
+            remoteName: "Remote Mac",
+            history: history,
+            sender: sender,
+            makeSessionID: { 0x1234 },
+            makeFileCopySessionID: { 0x1234 },
+            send: { messages in await recorder.record(messages) }
+        )
+        _ = try await service.beginDrop(fileURL: fileURL)
+        _ = await service.receive(type30Request())
+        await sender.waitUntilReady()
+        try await sender.emit(.frame(summary))
+        let historyID = try XCTUnwrap(history.entries.first?.id)
+
+        await service.setTransferPaused(historyID: historyID, paused: true)
+        let itemEmission = Task { try await sender.emit(.frame(item)) }
+        for _ in 0..<10 { await Task.yield() }
+
+        let itemSessionIDsWhilePaused = await fileCopySessionIDs(command: 102, in: recorder)
+        XCTAssertTrue(itemSessionIDsWhilePaused.isEmpty)
+
+        await service.setTransferPaused(historyID: historyID, paused: false)
+        try await itemEmission.value
+        let itemSessionIDsAfterResume = await fileCopySessionIDs(command: 102, in: recorder)
+        XCTAssertEqual(itemSessionIDsAfterResume, [0x1234])
+
+        await service.setTransferPaused(historyID: historyID, paused: true)
+        let doneEmission = Task { try await sender.emit(.frame(done)) }
+        for _ in 0..<10 { await Task.yield() }
+        let doneSessionIDsWhilePaused = await fileCopySessionIDs(command: 104, in: recorder)
+        XCTAssertTrue(doneSessionIDsWhilePaused.isEmpty)
+
+        await service.cancelTransfer(historyID: historyID)
+        await XCTAssertThrowsErrorAsync(try await doneEmission.value) {
+            XCTAssertTrue($0 is CancellationError)
+        }
+        await sender.finish()
+    }
+
     func testRemoteFailureBecomesTerminalOnlyAfterSenderFinishes() async throws {
         let fileURL = try makeTemporaryFile(contents: Data([0x58]))
         defer { try? FileManager.default.removeItem(at: fileURL) }
@@ -1554,6 +1605,47 @@ private struct PausingFileCopySender: AppleFileCopySenderRunning {
 
     func finish() {
         continuation.finish()
+    }
+}
+
+private actor ManualFileCopySender: AppleFileCopySenderRunning {
+    nonisolated let isAvailable = true
+    private var receiveHandler: (@Sendable (AppleFileCopyToolOutput) async throws -> Void)?
+    private var readyWaiters = [CheckedContinuation<Void, Never>]()
+    private var finishContinuation: CheckedContinuation<Void, Never>?
+
+    func run(
+        for fileURL: URL,
+        sessionID: UInt32,
+        receive: @escaping @Sendable (AppleFileCopyToolOutput) async throws -> Void
+    ) async throws {
+        receiveHandler = receive
+        let waiters = readyWaiters
+        readyWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            finishContinuation = continuation
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitUntilReady() async {
+        guard receiveHandler == nil else { return }
+        await withCheckedContinuation { continuation in
+            readyWaiters.append(continuation)
+        }
+    }
+
+    func emit(_ output: AppleFileCopyToolOutput) async throws {
+        guard let receiveHandler else {
+            throw AppleFileTransferServiceError.senderFailed
+        }
+        try await receiveHandler(output)
+    }
+
+    func finish() {
+        finishContinuation?.resume()
+        finishContinuation = nil
     }
 }
 

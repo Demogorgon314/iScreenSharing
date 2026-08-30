@@ -205,6 +205,11 @@ actor AppleFileTransferService {
         case incoming(UInt32)
     }
 
+    private struct SenderPauseWaiter {
+        let transferID: UUID
+        let continuation: CheckedContinuation<Void, Never>
+    }
+
     static let dropRequestLifetimeNanoseconds: UInt64 = 120 * 1_000_000_000
     static let remoteDragLifetime: Duration = .seconds(120)
     static let maximumConcurrentTransfers = 4
@@ -221,6 +226,7 @@ actor AppleFileTransferService {
     private var pendingDrop: PendingDrop?
     private var activeTransfers = [UInt32: ActiveTransfer]()
     private var transferTasks = [UInt32: Task<Void, Never>]()
+    private var senderPauseWaiters = [UInt32: [SenderPauseWaiter]]()
     private var incomingTransfers = [UInt32: IncomingTransfer]()
     private var queuedTransfers = [QueuedTransfer]()
     private var incomingMessageBuffer = Data()
@@ -507,6 +513,10 @@ actor AppleFileTransferService {
         let outgoing = activeTransfers.values
         activeTransfers.removeAll()
         for transfer in outgoing {
+            resumeSenderPauseWaiters(
+                sessionID: transfer.sessionID,
+                expectedID: transfer.id
+            )
             await history.update(
                 transfer.historyID,
                 state: .failed(AppleFileTransferServiceError.closed.localizedDescription)
@@ -719,9 +729,27 @@ actor AppleFileTransferService {
                   sessionID: transfer.sessionID,
                   action: paused ? .pause : .resume
               ) else { return }
+
+        if paused {
+            guard var current = activeTransfers[transfer.sessionID],
+                  current.id == transfer.id,
+                  !current.sentDone else { return }
+            // Native pauses the local helper listener before writing cmd3.
+            // Holding this callback creates the same bounded producer
+            // backpressure through AppleFileCopyOutputPipe.
+            current.isPaused = true
+            activeTransfers[transfer.sessionID] = current
+        }
         do {
             try await send([message])
         } catch {
+            if paused {
+                await failActive(
+                    sessionID: transfer.sessionID,
+                    error: error,
+                    expectedID: transfer.id
+                )
+            }
             return
         }
         guard var current = activeTransfers[transfer.sessionID],
@@ -729,6 +757,12 @@ actor AppleFileTransferService {
               !current.sentDone else { return }
         current.isPaused = paused
         activeTransfers[transfer.sessionID] = current
+        if !paused {
+            resumeSenderPauseWaiters(
+                sessionID: transfer.sessionID,
+                expectedID: transfer.id
+            )
+        }
         await history.update(
             current.historyID,
             state: paused ? .paused : .sending
@@ -740,6 +774,7 @@ actor AppleFileTransferService {
         activeTransfers.removeValue(forKey: sessionID)
         queuedTransfers.removeAll { $0 == .outgoing(sessionID) }
         transferTasks.removeValue(forKey: sessionID)?.cancel()
+        resumeSenderPauseWaiters(sessionID: sessionID, expectedID: expectedID)
         if transfer.hasStarted,
            let stop = try? AppleFileTransferMessage.control(
                sessionID: sessionID,
@@ -959,6 +994,10 @@ actor AppleFileTransferService {
         sessionID: UInt32,
         expectedID: UUID
     ) async throws {
+        try await waitForOutgoingTransferToResume(
+            sessionID: sessionID,
+            expectedID: expectedID
+        )
         guard !isClosed, activeTransfers[sessionID]?.id == expectedID else {
             throw CancellationError()
         }
@@ -1026,6 +1065,10 @@ actor AppleFileTransferService {
               let completion = activeTransfer.remoteCompletion else { return }
         activeTransfers.removeValue(forKey: sessionID)
         transferTasks.removeValue(forKey: sessionID)
+        resumeSenderPauseWaiters(
+            sessionID: sessionID,
+            expectedID: activeTransfer.id
+        )
         if completion.errorCode == 0 {
             await history.update(activeTransfer.historyID, progress: 1, state: .sent)
         } else {
@@ -1058,6 +1101,10 @@ actor AppleFileTransferService {
               expectedID == nil || activeTransfer.id == expectedID else { return }
         activeTransfers.removeValue(forKey: sessionID)
         transferTasks.removeValue(forKey: sessionID)?.cancel()
+        resumeSenderPauseWaiters(
+            sessionID: sessionID,
+            expectedID: activeTransfer.id
+        )
         queuedTransfers.removeAll { $0 == .outgoing(sessionID) }
         await history.update(
             activeTransfer.historyID,
@@ -1065,6 +1112,57 @@ actor AppleFileTransferService {
         )
         stopAccessing(activeTransfer)
         if startsNextTransfer { await startQueuedTransfers() }
+    }
+
+    private func waitForOutgoingTransferToResume(
+        sessionID: UInt32,
+        expectedID: UUID
+    ) async throws {
+        try Task.checkCancellation()
+        while true {
+            guard !isClosed,
+                  let transfer = activeTransfers[sessionID],
+                  transfer.id == expectedID else {
+                throw CancellationError()
+            }
+            guard transfer.isPaused else { return }
+            await withCheckedContinuation { continuation in
+                guard !isClosed,
+                      let current = activeTransfers[sessionID],
+                      current.id == expectedID,
+                      current.isPaused else {
+                    continuation.resume()
+                    return
+                }
+                senderPauseWaiters[sessionID, default: []].append(
+                    SenderPauseWaiter(
+                        transferID: expectedID,
+                        continuation: continuation
+                    )
+                )
+            }
+            try Task.checkCancellation()
+        }
+    }
+
+    private func resumeSenderPauseWaiters(
+        sessionID: UInt32,
+        expectedID: UUID
+    ) {
+        guard let waiters = senderPauseWaiters[sessionID] else { return }
+        var retained = [SenderPauseWaiter]()
+        for waiter in waiters {
+            if waiter.transferID == expectedID {
+                waiter.continuation.resume()
+            } else {
+                retained.append(waiter)
+            }
+        }
+        if retained.isEmpty {
+            senderPauseWaiters.removeValue(forKey: sessionID)
+        } else {
+            senderPauseWaiters[sessionID] = retained
+        }
     }
 
     private func stopAccessing(_ pending: PendingDrop) {
