@@ -157,7 +157,7 @@ private struct AppleFileTransferRow: View {
     }
 
     private var statusText: String {
-        switch entry.state {
+        let text = switch entry.state {
         case .waitingForRemote: "Waiting for the remote Mac…"
         case .sending: "Sending…"
         case .receiving: "Receiving…"
@@ -168,6 +168,15 @@ private struct AppleFileTransferRow: View {
         case .failed(let message): "Failed: \(message)"
         case .cancelled: "Cancelled"
         }
+        guard entry.state == .sending,
+              let rate = entry.transferRateBytesPerSecond,
+              rate > 0 else { return text }
+        let byteCount = Int64(min(rate.rounded(), Double(Int64.max)))
+        let formattedRate = ByteCountFormatter.string(
+            fromByteCount: byteCount,
+            countStyle: .file
+        )
+        return "\(text) · \(formattedRate)/s"
     }
 
     private var statusColor: Color {

@@ -67,6 +67,7 @@ struct AppleFileTransferEntry: Identifiable, Equatable, Sendable {
     let direction: AppleFileTransferDirection
     let startedAt: Date
     var progress: Double
+    var transferRateBytesPerSecond: Double?
     var state: AppleFileTransferState
 }
 
@@ -91,17 +92,33 @@ final class AppleFileTransferHistory: ObservableObject {
             direction: direction,
             startedAt: Date(),
             progress: 0,
+            transferRateBytesPerSecond: nil,
             state: .waitingForRemote
         ), at: 0)
         return identifier
     }
 
-    func update(_ identifier: UUID, progress: Double? = nil, state: AppleFileTransferState? = nil) {
+    func update(
+        _ identifier: UUID,
+        progress: Double? = nil,
+        transferRateBytesPerSecond: Double? = nil,
+        state: AppleFileTransferState? = nil
+    ) {
         guard let index = entries.firstIndex(where: { $0.id == identifier }) else { return }
         if let progress, progress.isFinite {
             entries[index].progress = min(1, max(entries[index].progress, progress))
         }
-        if let state { entries[index].state = state }
+        if let transferRateBytesPerSecond,
+           transferRateBytesPerSecond.isFinite,
+           transferRateBytesPerSecond >= 0 {
+            entries[index].transferRateBytesPerSecond = transferRateBytesPerSecond
+        }
+        if let state {
+            entries[index].state = state
+            if state != .sending && state != .receiving {
+                entries[index].transferRateBytesPerSecond = nil
+            }
+        }
     }
 
     func update(_ identifier: UUID, fileURL: URL) {
@@ -169,6 +186,39 @@ actor AppleFileTransferService {
         let startedAtNanoseconds: UInt64
     }
 
+    private struct TransferRateTracker {
+        private static let minimumSampleDurationNanoseconds: UInt64 = 250_000_000
+
+        private var sampleStartNanoseconds: UInt64?
+        private var sampleBytes: UInt64 = 0
+
+        mutating func start(at nanoseconds: UInt64) {
+            sampleStartNanoseconds = nanoseconds
+            sampleBytes = 0
+        }
+
+        mutating func reset() {
+            sampleStartNanoseconds = nil
+            sampleBytes = 0
+        }
+
+        mutating func record(bytes: UInt64, at nanoseconds: UInt64) -> Double? {
+            guard bytes > 0 else { return nil }
+            if sampleStartNanoseconds == nil {
+                start(at: nanoseconds)
+            }
+            let (newSampleBytes, overflow) = sampleBytes.addingReportingOverflow(bytes)
+            sampleBytes = overflow ? .max : newSampleBytes
+            guard let sampleStartNanoseconds,
+                  nanoseconds >= sampleStartNanoseconds else { return nil }
+            let elapsed = nanoseconds - sampleStartNanoseconds
+            guard elapsed >= Self.minimumSampleDurationNanoseconds else { return nil }
+            let bytesPerSecond = Double(sampleBytes) * 1_000_000_000 / Double(elapsed)
+            start(at: nanoseconds)
+            return bytesPerSecond
+        }
+    }
+
     private struct ActiveTransfer {
         let id: UUID
         let sessionID: UInt32
@@ -184,6 +234,7 @@ actor AppleFileTransferService {
         var senderFinished = false
         var isPaused = false
         var remoteCompletion: (errorCode: UInt16, name: String)?
+        var rateTracker = TransferRateTracker()
     }
 
     private struct IncomingTransfer {
@@ -738,6 +789,7 @@ actor AppleFileTransferService {
             // Holding this callback creates the same bounded producer
             // backpressure through AppleFileCopyOutputPipe.
             current.isPaused = true
+            current.rateTracker.reset()
             activeTransfers[transfer.sessionID] = current
         }
         do {
@@ -756,6 +808,9 @@ actor AppleFileTransferService {
               current.id == transfer.id,
               !current.sentDone else { return }
         current.isPaused = paused
+        if !paused {
+            current.rateTracker.start(at: uptimeNanoseconds())
+        }
         activeTransfers[transfer.sessionID] = current
         if !paused {
             resumeSenderPauseWaiters(
@@ -954,8 +1009,10 @@ actor AppleFileTransferService {
         transferID: UUID
     ) async {
         do {
-            guard let activeTransfer = activeTransfers[sessionID],
+            guard var activeTransfer = activeTransfers[sessionID],
                   activeTransfer.id == transferID else { return }
+            activeTransfer.rateTracker.start(at: uptimeNanoseconds())
+            activeTransfers[sessionID] = activeTransfer
             try await sender.run(
                 for: activeTransfer.fileURL,
                 sessionID: sessionID
@@ -1042,8 +1099,18 @@ actor AppleFileTransferService {
             frame.transferredBytes
         )
         activeTransfer.transferredBytes = overflow ? .max : transferredBytes
+        let transferRateBytesPerSecond = activeTransfer.rateTracker.record(
+            bytes: frame.transferredBytes,
+            at: uptimeNanoseconds()
+        )
         if frame.isDone { activeTransfer.sentDone = true }
         activeTransfers[frame.sessionID] = activeTransfer
+        if let transferRateBytesPerSecond {
+            await history.update(
+                activeTransfer.historyID,
+                transferRateBytesPerSecond: transferRateBytesPerSecond
+            )
+        }
         if frame.isDone {
             await history.update(activeTransfer.historyID, progress: 1, state: .completing)
         } else if let totalBytes = activeTransfer.totalBytes, totalBytes > 0 {

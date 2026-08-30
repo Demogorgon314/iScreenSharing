@@ -325,6 +325,61 @@ final class AppleFileTransferServiceTests: XCTestCase {
         XCTAssertTrue(messages.contains { $0.count >= 10 && $0.first == 0x22 })
     }
 
+    func testPublishesDeliveredUploadRateAndClearsItWhenPaused() async throws {
+        let fileURL = try makeTemporaryFile(contents: Data([0x58]))
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let uptime = LockedUptime()
+        let sender = ManualFileCopySender()
+        let history = AppleFileTransferHistory()
+        let service = AppleFileTransferService(
+            remoteName: "Remote Mac",
+            history: history,
+            sender: sender,
+            uptimeNanoseconds: { uptime.value },
+            makeSessionID: { 0x1234 },
+            makeFileCopySessionID: { 0x1234 },
+            send: { _ in }
+        )
+        _ = try await service.beginDrop(fileURL: fileURL)
+        _ = await service.receive(type30Request())
+        await sender.waitUntilReady()
+
+        let chunkSize = 65_536
+        let summary = fileCopyFrame(command: 100, bodyLength: 60) { body in
+            body.writeUInt32BE(1, at: 8)
+            body.writeUInt64BE(UInt64(chunkSize * 3), at: 16)
+            body.writeUInt64BE(1, at: 32)
+        }
+        try await sender.emit(.frame(summary))
+        let dataFrame = fileCopyFrame(command: 102, bodyLength: 12 + chunkSize) { body in
+            body.writeUInt32BE(UInt32(chunkSize), at: 8)
+        }
+
+        uptime.value = 100_000_000
+        try await sender.emit(.frame(dataFrame))
+        uptime.value = 200_000_000
+        try await sender.emit(.frame(dataFrame))
+        XCTAssertNil(history.entries.first?.transferRateBytesPerSecond)
+
+        uptime.value = 300_000_000
+        try await sender.emit(.frame(dataFrame))
+        XCTAssertEqual(
+            history.entries.first?.transferRateBytesPerSecond ?? 0,
+            655_360,
+            accuracy: 0.001
+        )
+
+        guard let historyID = history.entries.first?.id else {
+            return XCTFail("Expected an active file transfer")
+        }
+        await service.setTransferPaused(historyID: historyID, paused: true)
+        XCTAssertEqual(history.entries.first?.state, .paused)
+        XCTAssertNil(history.entries.first?.transferRateBytesPerSecond)
+
+        await service.close()
+        await sender.finish()
+    }
+
     func testPendingDropDoesNotAppearInHistoryUntilRemoteAcceptsIt() async throws {
         let fileURL = try makeTemporaryFile(contents: Data([0x58]))
         defer { try? FileManager.default.removeItem(at: fileURL) }
