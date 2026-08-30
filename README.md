@@ -41,11 +41,14 @@ vendor extension.
 - Focus-aware, multi-item clipboard synchronization for inline pasteboard
   flavors, plus keyboard input-source sharing. Clipboard file URLs and file
   promises remain filtered because file transfer uses a separate protocol
-- Viewer-to-host transfer of one regular file at a time by dragging it onto the
-  remote canvas, with transfer progress and per-session history. The feature is
-  offered only when the host advertises both required server commands; folders,
-  symbolic links, multiple-item drops, and host-to-viewer transfer are not yet
-  exposed
+- Bidirectional high-performance file transfer with progress, pause/resume,
+  cancellation, and per-session history. Local files, directories, symbolic
+  links, and multiple top-level items can be dragged onto the remote canvas;
+  remote Finder drags use file promises to copy items back to the viewer.
+  Transfers preserve the native protocol's Finder information, dates,
+  permissions, resource forks, and supported extended attributes, with a shared
+  four-transfer FIFO.
+  The feature is offered only when the host advertises both required commands
 - AAC-ELD remote audio with persistent mute state
 - Bonjour discovery, Apple device metadata, native device icons, saved
   connections, groups, recent items, and Keychain credentials
@@ -142,19 +145,20 @@ VCP selection still degrades safely when the private symbols are unavailable.
 Frame grouping, late-callback rejection, and zero-copy buffer handoff have
 deterministic coverage.
 
-Viewer-to-host file transfer also launches ScreenSharing.framework's
-`SSFileCopySenderFW` helper when it is available. The helper is the native owner
-of Finder metadata, resource-fork, extended-attribute, and compressed file-copy
-frames; iScreenSharing validates and forwards those frames through its ordered
-encrypted writer. If the helper or the required host commands are unavailable,
-file drops fail closed instead of using an inferred wire format.
-The file-transfer wire contract and helper adapter are verified against macOS
-15.7.7 (24G720); capability checks and strict frame validation remain in place
-on other releases because these interfaces are private.
+File transfer is implemented in Swift and does not launch
+`SSFileCopySenderFW` in production. The sender and receiver own the native type
+32/30/34 lifecycle, directory traversal, continuous zlib stream, data/resource
+fork ordering, Finder metadata, extended attributes, failure retention, and
+four-transfer FIFO. Tests may invoke `SSFileCopySenderFW` as a deterministic
+macOS 15.7.7 (24G720) oracle; its byte vectors and the statically closed native
+receiver call chain guard the public implementation. Capability checks and
+strict frame validation remain enabled on other releases because the Apple
+wire protocol is undocumented.
 
-Private APIs are undocumented and may change between macOS releases. This path
-is not suitable for an App Store distribution without replacing it with a
-public implementation.
+Private APIs are undocumented and may change between macOS releases. The VCP
+decoder path is not suitable for an App Store distribution without replacing
+it with a public implementation; the VideoToolbox decoder and Swift
+file-transfer paths do not require the private file-copy helper.
 
 ## Requirements
 

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FileTransferToolbarButton: View {
     @ObservedObject var history: AppleFileTransferHistory
+    let fileTransfer: AppleFileTransferService
     @State private var isPresented = false
 
     var body: some View {
@@ -10,13 +11,17 @@ struct FileTransferToolbarButton: View {
         }
         .help("File Transfers")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            AppleFileTransferHistoryView(history: history)
+            AppleFileTransferHistoryView(
+                history: history,
+                fileTransfer: fileTransfer
+            )
         }
     }
 }
 
 private struct AppleFileTransferHistoryView: View {
     @ObservedObject var history: AppleFileTransferHistory
+    let fileTransfer: AppleFileTransferService
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +51,24 @@ private struct AppleFileTransferHistoryView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(history.entries) { entry in
-                            AppleFileTransferRow(entry: entry)
+                            AppleFileTransferRow(
+                                entry: entry,
+                                setPaused: { paused in
+                                    Task {
+                                        await fileTransfer.setTransferPaused(
+                                            historyID: entry.id,
+                                            paused: paused
+                                        )
+                                    }
+                                },
+                                cancel: {
+                                    Task {
+                                        await fileTransfer.cancelTransfer(
+                                            historyID: entry.id
+                                        )
+                                    }
+                                }
+                            )
                             if entry.id != history.entries.last?.id {
                                 Divider().padding(.leading, 72)
                             }
@@ -64,6 +86,8 @@ private struct AppleFileTransferHistoryView: View {
 
 private struct AppleFileTransferRow: View {
     let entry: AppleFileTransferEntry
+    let setPaused: (Bool) -> Void
+    let cancel: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -76,7 +100,9 @@ private struct AppleFileTransferRow: View {
                 Text(entry.fileURL.lastPathComponent)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("To \(entry.remoteName)")
+                Text(entry.direction == .toRemote
+                    ? "To \(entry.remoteName)"
+                    : "From \(entry.remoteName)")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Text(statusText)
@@ -90,15 +116,41 @@ private struct AppleFileTransferRow: View {
 
             Spacer(minLength: 4)
 
-            Button {
-                NSWorkspace.shared.activateFileViewerSelecting([entry.fileURL])
-            } label: {
-                Image(systemName: "magnifyingglass.circle.fill")
-                    .font(.title3)
+            if entry.state.isTerminal {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([entry.fileURL])
+                } label: {
+                    Image(systemName: "magnifyingglass.circle.fill")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Show in Finder")
+            } else {
+                HStack(spacing: 8) {
+                    if canPauseOrResume {
+                        Button { setPaused(entry.state != .paused) } label: {
+                            Image(systemName: entry.state == .paused
+                                ? "play.circle.fill"
+                                : "pause.circle.fill")
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help(entry.state == .paused
+                            ? "Resume Transfer"
+                            : "Pause Transfer")
+                    }
+
+                    Button(action: cancel) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Cancel Transfer")
+                }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Show in Finder")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -108,8 +160,11 @@ private struct AppleFileTransferRow: View {
         switch entry.state {
         case .waitingForRemote: "Waiting for the remote Mac…"
         case .sending: "Sending…"
+        case .receiving: "Receiving…"
+        case .paused: "Paused"
         case .completing: "Finishing…"
         case .sent: "Sent"
+        case .received: "Received"
         case .failed(let message): "Failed: \(message)"
         case .cancelled: "Cancelled"
         }
@@ -118,5 +173,12 @@ private struct AppleFileTransferRow: View {
     private var statusColor: Color {
         if case .failed = entry.state { return .red }
         return .secondary
+    }
+
+    private var canPauseOrResume: Bool {
+        switch entry.state {
+        case .sending, .receiving, .paused: true
+        case .waitingForRemote, .completing, .sent, .received, .failed, .cancelled: false
+        }
     }
 }

@@ -67,6 +67,21 @@ final class AppleClipboardMessageTests: XCTestCase {
         XCTAssertEqual(envelope.archive.preferredText, "Hello")
     }
 
+    func testZeroFlavorItemTerminatesNativeArchive() throws {
+        let archive = Data([0, 0, 0, 0, 0xff])
+        let compressed = try ZlibCodec.compressSyncFlush(archive)
+        var message = Data([0x1f, 0, 0, 0])
+        message.appendUInt32BE(1)
+        message.appendUInt32BE(UInt32(archive.count))
+        message.appendUInt32BE(UInt32(compressed.count))
+        message.append(compressed)
+
+        XCTAssertEqual(
+            try AppleClipboardMessage.archive(from: message),
+            AppleClipboardArchive(items: [])
+        )
+    }
+
     func testPreservesNonzeroFlavorReservedFieldInWireArchive() throws {
         let archive = AppleClipboardArchive(items: [
             AppleClipboardItem(flavors: [

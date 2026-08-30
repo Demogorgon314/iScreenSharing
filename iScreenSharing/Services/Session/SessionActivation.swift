@@ -158,7 +158,7 @@ final class SessionActivation: SessionActivating {
             }
         )
         let fileTransferService: AppleFileTransferService?
-        let fileCopySender = AppleSystemFileCopySender()
+        let fileCopySender = AppleSwiftFileCopySender()
         if session.serverInfo.supportsViewerToHostFileTransfer,
            fileCopySender.isAvailable {
             let history = AppleFileTransferHistory()

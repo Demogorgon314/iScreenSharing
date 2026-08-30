@@ -236,7 +236,7 @@ public enum AppleClipboardMessage {
         return data
     }
 
-    private static func unpackedArchive(from data: Data) throws -> AppleClipboardArchive {
+    static func unpackedArchive(from data: Data) throws -> AppleClipboardArchive {
         var reader = ClipboardArchiveReader(data: data)
         var items = [AppleClipboardItem]()
         var totalFlavorCount = 0
@@ -245,6 +245,7 @@ public enum AppleClipboardMessage {
         while !reader.isAtEnd {
             guard items.count < maximumItemCount else { throw AppleClipboardError.invalidMessage }
             let flavorCount = try Int(reader.readUInt32())
+            if flavorCount == 0 { break }
             totalFlavorCount += flavorCount
             guard totalFlavorCount <= maximumFlavorCount else {
                 throw AppleClipboardError.invalidMessage

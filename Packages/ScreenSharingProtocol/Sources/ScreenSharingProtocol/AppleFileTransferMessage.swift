@@ -40,25 +40,41 @@ public enum AppleFileTransferResponse: Equatable, Sendable {
     case progress(sessionID: UInt32, fraction: Double)
 }
 
+public enum AppleFileTransferControl: UInt16, Equatable, Sendable {
+    case pause = 3
+    case resume = 4
+    case stop = 5
+}
+
 public enum AppleFileTransferMessage {
     public static let maximumDropPayloadLength = 0x70_0000
     public static let maximumDestinationPathLength = 0x3ff
-    public static let maximumFileCopyBodyLength = 1 * 1_024 * 1_024
+    public static let maximumRemoteSourcePathLength = 20_000
+    public static let maximumCompletionNameLength = 0x3ff
+    public static let maximumFileCopyBodyLength = 4 * 1_024 * 1_024
     public static let maximumRecordPlaintextLength = 60_000
 
     public static func beginDrop(fileURL: URL, sessionID: UInt32) throws -> Data {
-        guard sessionID != 0, fileURL.isFileURL else {
+        try beginDrop(fileURLs: [fileURL], sessionID: sessionID)
+    }
+
+    public static func beginDrop(fileURLs: [URL], sessionID: UInt32) throws -> Data {
+        guard sessionID != 0, !fileURLs.isEmpty,
+              fileURLs.count <= AppleClipboardMessage.maximumItemCount,
+              fileURLs.allSatisfy(\.isFileURL) else {
             throw AppleFileTransferError.invalidMessage
         }
-        let value = Data(fileURL.standardizedFileURL.absoluteString.utf8)
         var archive = Data()
-        archive.appendUInt32BE(1)
-        try archive.appendFileTransferField(Data("public.file-url".utf8))
-        archive.appendUInt32BE(0)
-        archive.appendUInt32BE(1)
-        try archive.appendFileTransferField(Data("com.apple.ostype".utf8))
-        try archive.appendFileTransferField(Data("furl".utf8))
-        try archive.appendFileTransferField(value)
+        for fileURL in fileURLs {
+            let value = Data(fileURL.standardizedFileURL.absoluteString.utf8)
+            archive.appendUInt32BE(1)
+            try archive.appendFileTransferField(Data("public.file-url".utf8))
+            archive.appendUInt32BE(0)
+            archive.appendUInt32BE(1)
+            try archive.appendFileTransferField(Data("com.apple.ostype".utf8))
+            try archive.appendFileTransferField(Data("furl".utf8))
+            try archive.appendFileTransferField(value)
+        }
 
         let compressed = try ZlibCodec.compressSyncFlush(
             archive,
@@ -105,21 +121,70 @@ public enum AppleFileTransferMessage {
     }
 
     public static func startFileReceive(sessionID: UInt32, destinationPath: String) throws -> Data {
-        let path = Data(destinationPath.utf8)
-        guard sessionID != 0, !path.isEmpty, !path.contains(0),
-              path.count <= maximumDestinationPathLength,
-              path.count <= Int(UInt16.max) else {
+        try startFileCopy(
+            command: 2,
+            directionFlag: 0,
+            sessionID: sessionID,
+            path: destinationPath,
+            maximumPathLength: maximumDestinationPathLength
+        )
+    }
+
+    public static func startFileSend(sessionID: UInt32, sourcePath: String) throws -> Data {
+        try startFileCopy(
+            command: 1,
+            directionFlag: 1,
+            sessionID: sessionID,
+            path: sourcePath,
+            maximumPathLength: maximumRemoteSourcePathLength
+        )
+    }
+
+    public static func control(
+        sessionID: UInt32,
+        action: AppleFileTransferControl
+    ) throws -> Data {
+        guard sessionID != 0 else { throw AppleFileTransferError.invalidMessage }
+        var body = Data()
+        body.appendUInt16BE(1)
+        body.appendUInt16BE(action.rawValue)
+        body.appendUInt32BE(sessionID)
+        return fileCopyMessage(body: body)
+    }
+
+    public static func completion(
+        sessionID: UInt32,
+        errorCode: UInt16,
+        name: String
+    ) throws -> Data {
+        let nameData = Data(name.utf8)
+        guard sessionID != 0,
+              errorCode == 0 || errorCode == 3 || errorCode == 5,
+              !nameData.contains(0),
+              nameData.count <= maximumCompletionNameLength,
+              nameData.count <= Int(UInt16.max) else {
             throw AppleFileTransferError.invalidMessage
         }
         var body = Data()
         body.appendUInt16BE(1)
-        body.appendUInt16BE(2)
+        body.appendUInt16BE(200)
         body.appendUInt32BE(sessionID)
-        body.appendUInt32BE(0)
-        body.appendUInt32BE(0)
-        body.appendUInt16BE(UInt16(path.count))
-        body.append(path)
+        body.appendUInt16BE(errorCode)
+        body.appendUInt16BE(UInt16(nameData.count))
+        body.append(nameData)
         body.append(0)
+        return fileCopyMessage(body: body)
+    }
+
+    public static func progress(sessionID: UInt32, fraction: Double) throws -> Data {
+        guard sessionID != 0, fraction.isFinite, (0...1).contains(fraction) else {
+            throw AppleFileTransferError.invalidMessage
+        }
+        var body = Data()
+        body.appendUInt16BE(1)
+        body.appendUInt16BE(300)
+        body.appendUInt32BE(sessionID)
+        body.appendUInt64BE(fraction.bitPattern)
         return fileCopyMessage(body: body)
     }
 
@@ -134,10 +199,15 @@ public enum AppleFileTransferMessage {
         let body = envelope.body
         switch envelope.command {
         case 100:
-            guard body.count == 60,
-                  try body.uint32BE(at: 8) == 1,
-                  try body.uint64BE(at: 32) == 1,
-                  try body.uint64BE(at: 48) == 0 else {
+            guard body.count == 60 else { throw AppleFileTransferError.invalidMessage }
+            let rootIsFile = try body.uint32BE(at: 8)
+            let fileCount = try body.uint64BE(at: 32)
+            let folderCount = try body.uint64BE(at: 48)
+            guard rootIsFile <= 1,
+                  try body.uint32BE(at: 12) == 0,
+                  try body.uint64BE(at: 40) == 0,
+                  try body.uint32BE(at: 56) == 0,
+                  rootIsFile == 0 ? folderCount > 0 : (fileCount == 1 && folderCount == 0) else {
                 throw AppleFileTransferError.invalidMessage
             }
             return AppleFileCopyFrame(
@@ -149,15 +219,31 @@ public enum AppleFileTransferMessage {
                 status: nil
             )
         case 101:
-            guard body.count >= 113, body[8] == 1,
-                  try body.uint16BE(at: 100) == 0 else {
+            guard body.count >= 113,
+                  let itemType = AppleFileCopyItemType(rawValue: body[8]) else {
                 throw AppleFileTransferError.invalidMessage
             }
             let nameLength = try Int(body.uint16BE(at: 108))
+            let linkLengthMinusOne = try body.uint16BE(at: 110)
             guard nameLength > 0, nameLength <= body.count - 113,
                   body[112 + nameLength] == 0,
+                  !body[112..<(112 + nameLength)].contains(0),
                   String(data: body.subdata(in: 112..<(112 + nameLength)), encoding: .utf8) != nil else {
                 throw AppleFileTransferError.invalidMessage
+            }
+            let itemPayloadOffset = 113 + nameLength
+            if itemType == .symbolicLink {
+                let dataForkSize = try body.uint64BE(at: 50)
+                guard dataForkSize > 0,
+                      dataForkSize <= UInt64(UInt16.max) + 1,
+                      linkLengthMinusOne == UInt16(dataForkSize - 1),
+                      itemPayloadOffset + Int(dataForkSize) == body.count else {
+                    throw AppleFileTransferError.invalidMessage
+                }
+            } else {
+                guard linkLengthMinusOne == 0 else {
+                    throw AppleFileTransferError.invalidMessage
+                }
             }
             return AppleFileCopyFrame(
                 command: 101,
@@ -187,7 +273,8 @@ public enum AppleFileTransferMessage {
             }
             let uncompressedLength = try Int(body.uint32BE(at: 10))
             let compressedLength = try Int(body.uint32BE(at: 14))
-            guard uncompressedLength <= 65_536,
+            guard (1...65_536).contains(uncompressedLength),
+                  compressedLength > 0,
                   compressedLength <= maximumFileCopyBodyLength,
                   body.count == 18 + compressedLength else {
                 throw AppleFileTransferError.invalidMessage
@@ -299,6 +386,33 @@ public enum AppleFileTransferMessage {
         message.append(body)
         return message
     }
+
+    private static func startFileCopy(
+        command: UInt16,
+        directionFlag: UInt32,
+        sessionID: UInt32,
+        path: String,
+        maximumPathLength: Int
+    ) throws -> Data {
+        let pathData = Data(path.utf8)
+        guard sessionID != 0,
+              !pathData.isEmpty,
+              !pathData.contains(0),
+              pathData.count <= maximumPathLength,
+              pathData.count <= Int(UInt16.max) else {
+            throw AppleFileTransferError.invalidMessage
+        }
+        var body = Data()
+        body.appendUInt16BE(1)
+        body.appendUInt16BE(command)
+        body.appendUInt32BE(sessionID)
+        body.appendUInt32BE(directionFlag)
+        body.appendUInt32BE(0)
+        body.appendUInt16BE(UInt16(pathData.count))
+        body.append(pathData)
+        body.append(0)
+        return fileCopyMessage(body: body)
+    }
 }
 
 public enum AppleFileCopyToolOutput: Equatable, Sendable {
@@ -374,6 +488,11 @@ private extension Data {
 
     mutating func appendUInt32BE(_ value: UInt32) {
         BigEndianWire.append(value, to: &self)
+    }
+
+    mutating func appendUInt64BE(_ value: UInt64) {
+        appendUInt32BE(UInt32(truncatingIfNeeded: value >> 32))
+        appendUInt32BE(UInt32(truncatingIfNeeded: value))
     }
 
     func uint16BE(at offset: Int) throws -> UInt16 {

@@ -30,51 +30,10 @@ public enum ZlibCodec {
         _ input: Data,
         maximumOutputLength: Int = defaultMaximumOutputLength
     ) throws -> Data {
-        guard !input.isEmpty, maximumOutputLength > 0 else {
-            throw ZlibCodecError.invalidStream
-        }
-        let (growth, growthOverflow) = input.count.addingReportingOverflow(input.count / 512)
-        let (requiredCapacity, capacityOverflow) = growth.addingReportingOverflow(10_006)
-        guard !growthOverflow, !capacityOverflow else { throw ZlibCodecError.outputTooLarge }
-        let capacity = min(requiredCapacity, maximumOutputLength)
-
-        var stream = z_stream()
-        guard deflateInit2_(
-            &stream,
-            9,
-            Z_DEFLATED,
-            15,
-            9,
-            Z_DEFAULT_STRATEGY,
-            ZLIB_VERSION,
-            Int32(MemoryLayout<z_stream>.size)
-        ) == Z_OK else {
-            throw ZlibCodecError.invalidStream
-        }
-        defer { deflateEnd(&stream) }
-
-        var output = Data(count: capacity)
-        let status = input.withUnsafeBytes { inputBuffer in
-            output.withUnsafeMutableBytes { outputBuffer in
-                guard let inputAddress = inputBuffer.bindMemory(to: Bytef.self).baseAddress,
-                      let outputAddress = outputBuffer.bindMemory(to: Bytef.self).baseAddress else {
-                    return Int32(Z_STREAM_ERROR)
-                }
-                stream.next_in = UnsafeMutablePointer(mutating: inputAddress)
-                stream.avail_in = uInt(inputBuffer.count)
-                stream.next_out = outputAddress
-                stream.avail_out = uInt(outputBuffer.count)
-                return deflate(&stream, Z_SYNC_FLUSH)
-            }
-        }
-        guard status == Z_OK, stream.avail_in == 0,
-              stream.total_out <= UInt(maximumOutputLength) else {
-            throw status == Z_BUF_ERROR || stream.avail_out == 0
-                ? ZlibCodecError.outputTooLarge
-                : ZlibCodecError.invalidStream
-        }
-        output.count = Int(stream.total_out)
-        return output
+        try ZlibSyncFlushCompressor().compress(
+            input,
+            maximumOutputLength: maximumOutputLength
+        )
     }
 
     public static func decompress(_ input: Data) throws -> Data {
@@ -182,6 +141,125 @@ public enum ZlibCodec {
             second = (second + first) % modulus
         }
         return second << 16 | first
+    }
+}
+
+/// Stateful encoder for Apple's unterminated zlib streams. Each call emits one
+/// `Z_SYNC_FLUSH` segment while retaining the dictionary for the next call.
+/// Instances are intentionally single-owner and are not thread-safe.
+public final class ZlibSyncFlushCompressor {
+    private var stream = z_stream()
+
+    public init() throws {
+        guard deflateInit2_(
+            &stream,
+            9,
+            Z_DEFLATED,
+            15,
+            9,
+            Z_DEFAULT_STRATEGY,
+            ZLIB_VERSION,
+            Int32(MemoryLayout<z_stream>.size)
+        ) == Z_OK else {
+            throw ZlibCodecError.invalidStream
+        }
+    }
+
+    deinit {
+        deflateEnd(&stream)
+    }
+
+    public func compress(
+        _ input: Data,
+        maximumOutputLength: Int = ZlibCodec.defaultMaximumOutputLength
+    ) throws -> Data {
+        guard !input.isEmpty, maximumOutputLength > 0,
+              input.count <= Int(uInt.max) else {
+            throw ZlibCodecError.invalidStream
+        }
+        let bound = deflateBound(&stream, uLong(input.count))
+        guard bound <= uLong(maximumOutputLength), bound <= uLong(Int.max) else {
+            throw ZlibCodecError.outputTooLarge
+        }
+        let startingTotal = stream.total_out
+        var output = Data(count: Int(bound))
+        let status = input.withUnsafeBytes { inputBuffer in
+            output.withUnsafeMutableBytes { outputBuffer in
+                guard let inputAddress = inputBuffer.bindMemory(to: Bytef.self).baseAddress,
+                      let outputAddress = outputBuffer.bindMemory(to: Bytef.self).baseAddress else {
+                    return Int32(Z_STREAM_ERROR)
+                }
+                stream.next_in = UnsafeMutablePointer(mutating: inputAddress)
+                stream.avail_in = uInt(inputBuffer.count)
+                stream.next_out = outputAddress
+                stream.avail_out = uInt(outputBuffer.count)
+                return deflate(&stream, Z_SYNC_FLUSH)
+            }
+        }
+        guard status == Z_OK, stream.avail_in == 0 else {
+            throw status == Z_BUF_ERROR || stream.avail_out == 0
+                ? ZlibCodecError.outputTooLarge
+                : ZlibCodecError.invalidStream
+        }
+        let produced = stream.total_out - startingTotal
+        guard produced <= UInt(maximumOutputLength), produced <= UInt(Int.max) else {
+            throw ZlibCodecError.outputTooLarge
+        }
+        output.count = Int(produced)
+        return output
+    }
+}
+
+/// Stateful decoder paired with `ZlibSyncFlushCompressor`. A single instance
+/// must consume every compressed segment in wire order.
+public final class ZlibSyncFlushDecompressor {
+    private var stream = z_stream()
+
+    public init() throws {
+        guard inflateInit_(
+            &stream,
+            ZLIB_VERSION,
+            Int32(MemoryLayout<z_stream>.size)
+        ) == Z_OK else {
+            throw ZlibCodecError.invalidStream
+        }
+    }
+
+    deinit {
+        inflateEnd(&stream)
+    }
+
+    public func decompress(
+        _ input: Data,
+        expectedSize: Int,
+        maximumOutputLength: Int = ZlibCodec.defaultMaximumOutputLength
+    ) throws -> Data {
+        guard !input.isEmpty,
+              input.count <= Int(uInt.max),
+              (1...maximumOutputLength).contains(expectedSize),
+              expectedSize < Int.max else {
+            throw ZlibCodecError.invalidStream
+        }
+        var output = Data(count: expectedSize + 1)
+        let status = input.withUnsafeBytes { inputBuffer in
+            output.withUnsafeMutableBytes { outputBuffer in
+                guard let inputAddress = inputBuffer.bindMemory(to: Bytef.self).baseAddress,
+                      let outputAddress = outputBuffer.bindMemory(to: Bytef.self).baseAddress else {
+                    return Int32(Z_STREAM_ERROR)
+                }
+                stream.next_in = UnsafeMutablePointer(mutating: inputAddress)
+                stream.avail_in = uInt(inputBuffer.count)
+                stream.next_out = outputAddress
+                stream.avail_out = uInt(outputBuffer.count)
+                return inflate(&stream, Z_SYNC_FLUSH)
+            }
+        }
+        let produced = output.count - Int(stream.avail_out)
+        guard status == Z_OK, stream.avail_in == 0, produced == expectedSize else {
+            throw produced > expectedSize ? ZlibCodecError.outputTooLarge : ZlibCodecError.invalidStream
+        }
+        output.count = produced
+        return output
     }
 }
 

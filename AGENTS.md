@@ -133,10 +133,12 @@ defined investigation instead of baking a hypothesis into production code.
   implementation deliberately filters file URLs and file-promise types; do not
   describe it as file transfer or add file semantics to the inline archive
   without tracing the native file-transfer protocol.
-- Viewer-to-host file transfer is a separate type 32/30/34 exchange. Preserve
-  ordered encrypted writes, require both advertised server commands, and let
-  the native `SSFileCopySenderFW` helper own file metadata and payload framing;
-  validate its output before forwarding it.
+- Bidirectional file transfer is a separate type 32/30/34 exchange. Preserve
+  ordered encrypted writes, independent drag and file-copy session IDs, the
+  shared four-transfer FIFO, per-root type 34 sessions, and partial-output
+  retention on failure. Production framing belongs to the Swift sender and
+  receiver. `SSFileCopySenderFW` is a test-only macOS 15.7.7 oracle and must not
+  become a production dependency.
 - DeviceInfo framebuffer encoding is 1110 (`0x456`); UserInfo is 1102. Bonjour
   hardware metadata comes from the sibling `_device-info._tcp` TXT record, not
   the `_rfb._tcp` service TXT record.

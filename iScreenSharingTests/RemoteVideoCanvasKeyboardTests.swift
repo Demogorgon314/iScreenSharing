@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
-import struct ScreenSharingProtocol.AppleCanvas
-import struct ScreenSharingProtocol.RFBServerInfo
+import ScreenSharingProtocol
 import XCTest
 @testable import iScreenSharing
 
@@ -128,6 +127,47 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
         view.updateInput(nil)
 
         XCTAssertFalse(view.performKeyEquivalent(with: event))
+    }
+
+    func testRemoteFileDragArrivalRepostsCurrentEvent() async throws {
+        let service = AppleFileTransferService(
+            remoteName: "Remote Mac",
+            history: AppleFileTransferHistory(),
+            send: { _ in }
+        )
+        var repostCount = 0
+        let view = RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 1_920, height: 1_080, tileCount: 4),
+            frames: AppleVideoFrameStore(),
+            input: nil,
+            fileTransfer: service,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil,
+            repostCurrentEvent: { repostCount += 1 }
+        )
+        let archive = AppleClipboardArchive(items: [
+            AppleClipboardItem(flavors: [
+                AppleClipboardFlavor(
+                    type: "public.file-url",
+                    aliases: [],
+                    value: Data("file:///remote/file.txt".utf8)
+                )
+            ])
+        ])
+        var message = try AppleClipboardMessage.send(archive: archive, sessionID: 7)
+        message[0] = 0x20
+
+        let accepted = await service.receive(message)
+
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(repostCount, 1)
+        _ = view
+        await service.close()
     }
 
     private func makeSession() throws -> RFBAuthenticatedSession {

@@ -108,8 +108,11 @@ struct SessionView: View {
                 ScreenshotButtonAnchor(anchorView: $screenshotButtonAnchor)
             }
             .help("Take Screenshot")
-            if let history = sessions.session(for: endpoint)?.fileTransferService?.history {
-                FileTransferToolbarButton(history: history)
+            if let fileTransfer = sessions.session(for: endpoint)?.fileTransferService {
+                FileTransferToolbarButton(
+                    history: fileTransfer.history,
+                    fileTransfer: fileTransfer
+                )
             }
             Button { commandState.setScalesToFit(!commandState.displayScale.scalesToFit) } label: {
                 Label(
