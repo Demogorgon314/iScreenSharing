@@ -1,4 +1,6 @@
 import AppKit
+import enum ScreenSharingProtocol.AppleClipboardMessage
+import struct ScreenSharingProtocol.AppleClipboardArchive
 import XCTest
 @testable import iScreenSharing
 

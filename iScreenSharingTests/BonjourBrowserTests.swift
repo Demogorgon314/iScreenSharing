@@ -1,4 +1,5 @@
 import Network
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 import XCTest
 @testable import iScreenSharing
 

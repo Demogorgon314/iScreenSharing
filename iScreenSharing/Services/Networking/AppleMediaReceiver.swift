@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import QuartzCore
+import struct ScreenSharingProtocol.AppleMediaPorts
 
 enum AppleVideoNetworkPath: String, Equatable, Sendable {
     case direct = "Direct"

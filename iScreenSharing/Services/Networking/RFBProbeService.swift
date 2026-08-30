@@ -1,4 +1,5 @@
 import Foundation
+import ScreenSharingProtocol
 
 struct RFBProbeResult: Equatable, Sendable {
     let serverVersion: RFBVersion

@@ -1,3 +1,5 @@
+import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 import XCTest
 @testable import iScreenSharing
 

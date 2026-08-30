@@ -1,5 +1,9 @@
 import AVFAudio
 import CoreVideo
+import enum ScreenSharingProtocol.AppleRFBMessages
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
+import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 import XCTest
 @testable import iScreenSharing
 
@@ -33,8 +37,7 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
                 count: virtualDisplayCount.rawValue
             )
         )
-        XCTAssertEqual(recordLayer.contentKey.count, 16)
-        XCTAssertEqual(session.recordLayer?.contentKey, recordLayer.contentKey)
+        XCTAssertTrue(session.recordLayer === recordLayer)
         let media = try await AppleMediaNegotiator().negotiate(
             session,
             displayCount: virtualDisplayCount.rawValue

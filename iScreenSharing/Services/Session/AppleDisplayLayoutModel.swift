@@ -1,6 +1,9 @@
 import Combine
 import CoreGraphics
 import Foundation
+import enum ScreenSharingProtocol.AppleFramebufferUpdate
+import struct ScreenSharingProtocol.AppleDisplayLayout
+import struct ScreenSharingProtocol.AppleDisplayRect
 
 struct AppleDisplayInputMapping: Equatable {
     let backingFrame: CGRect

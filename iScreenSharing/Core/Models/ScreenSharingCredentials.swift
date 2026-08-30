@@ -1,4 +1,5 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleRSA1
 
 struct ScreenSharingCredentials: Equatable, Sendable {
     let username: String

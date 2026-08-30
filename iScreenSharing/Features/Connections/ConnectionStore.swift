@@ -1,6 +1,7 @@
 import Combine
 import Darwin
 import Foundation
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 
 @MainActor
 final class ConnectionStore: ObservableObject {

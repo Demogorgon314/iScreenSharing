@@ -1,4 +1,8 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleClipboardMessage
+import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleClipboardReassembler
+import struct ScreenSharingProtocol.AppleClipboardRequest
 
 actor AppleClipboardExchange {
     typealias SendRequest = @Sendable (_ promises: Bool, _ sessionID: UInt32) async throws -> Void

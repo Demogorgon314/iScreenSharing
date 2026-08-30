@@ -1,4 +1,8 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleDisplayConfiguration
+import enum ScreenSharingProtocol.AppleRFBMessages
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
 protocol AppleControlChannelNegotiating: Sendable {
     func enableEncryption(

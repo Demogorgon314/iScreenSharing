@@ -1,5 +1,12 @@
 import Carbon
 import Foundation
+import enum ScreenSharingProtocol.AppleClipboardMessage
+import enum ScreenSharingProtocol.AppleRFBMessages
+import enum ScreenSharingProtocol.StandardRFBMessages
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
+import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.AppleScrollWheelEvent
 
 struct AppleInputDisplaySelection {
     private var selectedDisplayID: UInt32?
@@ -115,13 +122,12 @@ actor AppleInputController {
             if let selectionMessage = displaySelection.message(for: displayID) {
                 messages.append(selectionMessage)
             }
-            let message = try AppleRFBMessages.encryptedPointerEvent(
+            let message = try recordLayer.encryptPointerEvent(
                 buttons: buttons,
                 x: point.x,
                 y: point.y,
                 clickCount: clickCount,
-                timestampDelta: inputTimestamp.next(at: microseconds()),
-                contentKey: recordLayer.contentKey
+                timestampDelta: inputTimestamp.next(at: microseconds())
             )
             messages.append(message)
             try await session.sendEncrypted(messages)
@@ -247,14 +253,13 @@ actor AppleInputController {
                 return
             }
             guard let recordLayer = session.recordLayer else { return }
-            let message = try AppleRFBMessages.encryptedKeyEvent(
+            let message = try recordLayer.encryptKeyEvent(
                 isDown: isDown,
                 keySymbol: symbol,
                 timestampDelta: inputTimestamp.next(at: microseconds()),
                 keyboardType: keyboardType,
                 keyCode: keyCode,
-                subtype: keyboardEventSubtype,
-                contentKey: recordLayer.contentKey
+                subtype: keyboardEventSubtype
             )
             try await session.sendEncrypted(message)
             sentEventCount += 1

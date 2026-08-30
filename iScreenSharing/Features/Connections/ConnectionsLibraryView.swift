@@ -1,4 +1,5 @@
 import AppKit
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 import SwiftUI
 
 struct ConnectionsLibraryView: View {

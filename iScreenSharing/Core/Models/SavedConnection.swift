@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 
 struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
     let id: UUID

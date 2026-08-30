@@ -121,7 +121,11 @@ struct ResolvedRemoteAddress: @unchecked Sendable {
     }
 }
 
-struct RemoteAddressResolver: Sendable {
+protocol RemoteAddressResolving: Sendable {
+    func resolve(_ endpoint: ConnectionEndpoint) async throws -> [ResolvedRemoteAddress]
+}
+
+struct RemoteAddressResolver: RemoteAddressResolving {
     func resolve(_ endpoint: ConnectionEndpoint) async throws -> [ResolvedRemoteAddress] {
         try await Task.detached {
             try Self.resolveSynchronously(endpoint)

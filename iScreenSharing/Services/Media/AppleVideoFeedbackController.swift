@@ -1,4 +1,7 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleRTCP
+import class ScreenSharingProtocol.AppleSRTCPEncryptor
+import struct ScreenSharingProtocol.AppleRTPReceptionReport
 
 final class AppleVideoFeedbackController: @unchecked Sendable {
     private let lock = NSLock()

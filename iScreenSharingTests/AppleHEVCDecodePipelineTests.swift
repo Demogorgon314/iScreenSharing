@@ -1,4 +1,5 @@
 import CoreVideo
+import struct ScreenSharingProtocol.AppleHEVCSubframeBoundaryParser
 import VideoToolbox
 import XCTest
 @testable import iScreenSharing

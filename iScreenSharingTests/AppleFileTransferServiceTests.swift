@@ -1,4 +1,6 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleFileCopyToolOutput
+import enum ScreenSharingProtocol.AppleFileTransferMessage
 import XCTest
 @testable import iScreenSharing
 
@@ -197,11 +199,27 @@ final class AppleFileTransferServiceTests: XCTestCase {
         XCTAssertTrue(history.preventsNewDrop)
 
         await XCTAssertThrowsErrorAsync(try await service.beginDrop(fileURL: secondURL)) {
-            XCTAssertEqual($0 as? AppleFileTransferError, .transferAlreadyInProgress)
+            XCTAssertEqual($0 as? AppleFileTransferServiceError, .transferAlreadyInProgress)
         }
 
         await service.close()
         sender.finish()
+    }
+
+    func testRejectsDropWithServiceErrorWhileObserving() async throws {
+        let fileURL = try makeTemporaryFile(contents: Data())
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let service = AppleFileTransferService(
+            remoteName: "Remote Mac",
+            history: AppleFileTransferHistory(),
+            sender: FakeFileCopySender(outputs: []),
+            send: { _ in }
+        )
+        await service.setControlling(false)
+
+        await XCTAssertThrowsErrorAsync(try await service.beginDrop(fileURL: fileURL)) {
+            XCTAssertEqual($0 as? AppleFileTransferServiceError, .notControlling)
+        }
     }
 
     func testCancellingPendingDropSendsNativeCancelAndAllowsAnotherDrop() async throws {
@@ -283,9 +301,11 @@ final class AppleFileTransferServiceTests: XCTestCase {
     private func waitUntil(
         _ predicate: @escaping @MainActor () -> Bool
     ) async {
-        for _ in 0..<1_000 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(1))
+        while clock.now < deadline {
             if predicate() { return }
-            await Task.yield()
+            try? await clock.sleep(for: .milliseconds(1))
         }
         XCTFail("Timed out waiting for file transfer state")
     }

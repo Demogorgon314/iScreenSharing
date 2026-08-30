@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import QuartzCore
+import enum ScreenSharingProtocol.AppleHEVCNALUnit
 import VideoToolbox
 
 protocol AppleHEVCDecodeSubmitting: AnyObject {

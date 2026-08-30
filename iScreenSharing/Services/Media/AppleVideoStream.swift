@@ -3,6 +3,7 @@ import CoreVideo
 import Foundation
 import OSLog
 import QuartzCore
+import struct ScreenSharingProtocol.AppleCanvas
 
 final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     private var mediaCanvas: AppleCanvas

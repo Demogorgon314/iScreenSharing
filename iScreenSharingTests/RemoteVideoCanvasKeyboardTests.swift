@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 

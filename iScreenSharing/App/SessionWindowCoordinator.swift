@@ -1,5 +1,7 @@
 import AppKit
 import Combine
+import struct ScreenSharingProtocol.AppleDisplayLayout
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 import SwiftUI
 
 @MainActor

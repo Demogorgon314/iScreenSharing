@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleRTPReceptionReport
 import XCTest
 @testable import iScreenSharing
 

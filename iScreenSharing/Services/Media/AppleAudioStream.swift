@@ -1,6 +1,7 @@
 import AVFAudio
 import Combine
 import Foundation
+import class ScreenSharingProtocol.AppleSRTPDecryptor
 
 final class AppleAudioStream: ObservableObject, @unchecked Sendable {
     @Published private(set) var isMuted: Bool

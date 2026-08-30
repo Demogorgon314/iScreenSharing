@@ -1,6 +1,9 @@
 import AppKit
 import Combine
 import Foundation
+import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleClipboardFlavor
+import struct ScreenSharingProtocol.AppleClipboardItem
 import UniformTypeIdentifiers
 
 @MainActor

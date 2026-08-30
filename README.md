@@ -63,7 +63,11 @@ SessionCommandState / SessionManager
         │
         ▼
 RFBAuthenticatedSession
-        ├── encrypted RFB control and input
+        ├── ScreenSharingProtocol package
+        │       ├── RFB and Apple control wire formats
+        │       ├── encrypted records and encrypted input
+        │       └── SRTP/SRTCP, RTCP, and HEVC framing
+        ├── ordered encrypted control/input delivery
         ├── clipboard, file-transfer, and keyboard-source services
         └── negotiated UDP media streams
                 │
@@ -93,8 +97,12 @@ Source ownership is divided as follows:
 - `Features/Connections`: SwiftUI presentation, connection library, Metal
   canvas, and view-level coordination
 - `Core/Models`: UI- and transport-independent domain values
-- `Core/Protocol`: deterministic wire encoders, decoders, cryptography framing,
-  RTP/RTCP structures, and media negotiation values
+- `Packages/ScreenSharingProtocol`: reusable deterministic RFB and Apple
+  high-performance wire encoders, parsers, encrypted record state, SRTP/SRTCP,
+  RTCP, HEVC framing, clipboard, and file-transfer values
+- `Core/Protocol`: remaining Standard RFB client-message encoders and
+  framebuffer codecs, including app-owned pixel conversion and quality policy,
+  pending a separate ownership decision
 - `Services/Networking`: Network.framework transports, Bonjour, authentication,
   UDP socket delivery, and control/media channel coordination
 - `Services/Media`: ordered SRTP/RTP processing, feedback, decoding, playout,
@@ -182,6 +190,17 @@ The app target builds `Dependencies/libtailscale/swift/TailscaleKit.framework`
 on demand and embeds it in the application bundle. Tailscale's persistent node
 state is encrypted with a random 32-byte key stored in the user's Keychain; the
 key and state must be kept together across app updates.
+
+The wire-protocol package builds and tests independently without the app or the
+Tailscale submodule:
+
+```sh
+swift test --package-path Packages/ScreenSharingProtocol
+swift build --package-path Packages/ScreenSharingProtocol -c release
+```
+
+See [`Packages/ScreenSharingProtocol/README.md`](Packages/ScreenSharingProtocol/README.md)
+for its supported protocol surface and integration boundaries.
 
 Run one test class while iterating:
 

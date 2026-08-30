@@ -1,4 +1,5 @@
 import Foundation
+import ScreenSharingProtocol
 
 protocol RFBAuthenticating: Sendable {
     func connect(
@@ -8,18 +9,35 @@ protocol RFBAuthenticating: Sendable {
     ) async throws -> RFBAuthenticatedSession
 }
 
+enum RFBAuthenticationError: LocalizedError, Equatable {
+    case unsupportedAppleRSA
+    case serverNameTooLong
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedAppleRSA:
+            "This Mac doesn’t offer the supported Apple RSA authentication method."
+        case .serverNameTooLong:
+            "The Mac returned a display name that is too large."
+        }
+    }
+}
+
 struct RFBAuthenticationService: RFBAuthenticating {
     private static let maximumPublicKeyPacketLength = 64 * 1024
-    private static let maximumServerNameLength = 1024 * 1024
-    private let addressResolver: RemoteAddressResolver
-    private let tailscaleNodeProvider: any TailscaleNodeProviding
+    static let maximumServerNameLength = 1024 * 1024
+    private let routeOpener: any SessionRouteOpening
 
     init(
-        addressResolver: RemoteAddressResolver = RemoteAddressResolver(),
-        tailscaleNodeProvider: any TailscaleNodeProviding = EmbeddedTailscaleRuntime.shared
+        routeOpener: any SessionRouteOpening = SessionRouteOpener()
     ) {
-        self.addressResolver = addressResolver
-        self.tailscaleNodeProvider = tailscaleNodeProvider
+        self.routeOpener = routeOpener
+    }
+
+    static func validateServerNameLength(_ length: Int) throws {
+        guard length <= maximumServerNameLength else {
+            throw RFBAuthenticationError.serverNameTooLong
+        }
     }
 
     func connect(
@@ -27,11 +45,12 @@ struct RFBAuthenticationService: RFBAuthenticating {
         credentials: ScreenSharingCredentials,
         sharingType: ScreenSharingType = .highPerformance
     ) async throws -> RFBAuthenticatedSession {
-        let (transport, remoteAddress) = try await connectTransport(to: endpoint)
+        let route = try await routeOpener.open(endpoint, sharingType: sharingType)
+        let transport = route.control
         do {
             let probe = try await performVersionHandshake(on: transport)
             guard probe.securityTypes.contains(.appleRSA) else {
-                throw AppleRSA1Error.unsupportedServer
+                throw RFBAuthenticationError.unsupportedAppleRSA
             }
 
             let masterKey = try await authenticateRSA1(
@@ -44,49 +63,15 @@ struct RFBAuthenticationService: RFBAuthenticating {
             )
             return RFBAuthenticatedSession(
                 endpoint: endpoint,
-                remoteAddress: remoteAddress,
                 sharingType: sharingType,
                 masterKey: masterKey,
                 serverInfo: serverInfo,
-                transport: transport
+                route: route
             )
         } catch {
-            transport.cancel()
+            route.close()
             throw error
         }
-    }
-
-    private func connectTransport(
-        to endpoint: ConnectionEndpoint
-    ) async throws -> (any RFBTransport, ResolvedRemoteAddress) {
-        if endpoint.route == .tailscale {
-            let remoteAddress = try ResolvedRemoteAddress(
-                numericHost: endpoint.host,
-                port: endpoint.port
-            )
-            let transport = TailscaleTCPTransport(
-                endpoint: endpoint,
-                nodeProvider: tailscaleNodeProvider
-            )
-            try await transport.start()
-            return (transport, remoteAddress)
-        }
-        let addresses = try await addressResolver.resolve(endpoint)
-        var lastError: Error?
-        for address in addresses {
-            let transport = NWConnectionTransport(remoteAddress: address)
-            do {
-                try await transport.start()
-                return (transport, address)
-            } catch is CancellationError {
-                transport.cancel()
-                throw CancellationError()
-            } catch {
-                transport.cancel()
-                lastError = error
-            }
-        }
-        throw lastError ?? RemoteAddressResolverError.noUsableAddress
     }
 
     private func performVersionHandshake(
@@ -147,9 +132,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
         )
         let header = try await transport.receiveExactly(24)
         let nameLength = try Int(header.uint32BE(at: 20))
-        guard nameLength <= Self.maximumServerNameLength else {
-            throw RFBServerInitError.nameTooLong
-        }
+        try Self.validateServerNameLength(nameLength)
         let name = try await transport.receiveExactly(nameLength)
         return try RFBServerInfo.parse(header: header, nameData: name)
     }

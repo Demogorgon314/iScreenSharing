@@ -1,4 +1,11 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleCursorUpdate
+import enum ScreenSharingProtocol.AppleFramebufferUpdate
+import enum ScreenSharingProtocol.AppleMediaConfiguration
+import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.AppleDisplayLayout
+import struct ScreenSharingProtocol.AppleKeyboardInputSourceState
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 
 final class AppleControlMessageService: @unchecked Sendable {
     private weak var session: RFBAuthenticatedSession?

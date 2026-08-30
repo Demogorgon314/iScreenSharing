@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleCursorImage
 import XCTest
 @testable import iScreenSharing
 

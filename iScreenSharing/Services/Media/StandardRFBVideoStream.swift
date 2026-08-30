@@ -1,6 +1,10 @@
 import CoreVideo
 import Foundation
 import OSLog
+import enum ScreenSharingProtocol.AppleRFBMessages
+import enum ScreenSharingProtocol.StandardRFBMessages
+import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.StandardRFBPixelFormat
 
 final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     typealias PublicationScheduler = @Sendable (@escaping @Sendable () -> Void) -> Void

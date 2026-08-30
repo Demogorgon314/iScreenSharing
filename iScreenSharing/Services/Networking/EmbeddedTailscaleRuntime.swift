@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 import TailscaleKit
 
 private struct EmbeddedTailscaleLogSink: LogSink {

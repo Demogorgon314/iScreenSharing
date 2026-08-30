@@ -1,4 +1,8 @@
 import AppKit
+import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleClipboardFlavor
+import struct ScreenSharingProtocol.AppleClipboardItem
+import struct ScreenSharingProtocol.AppleClipboardTypeAlias
 import XCTest
 @testable import iScreenSharing
 

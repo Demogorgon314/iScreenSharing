@@ -1,6 +1,8 @@
 import Carbon
 import Combine
 import Foundation
+import enum ScreenSharingProtocol.AppleKeyboardInputSourceMessage
+import struct ScreenSharingProtocol.AppleKeyboardInputSourceState
 
 @MainActor
 final class AppleKeyboardInputSourceService: ObservableObject {

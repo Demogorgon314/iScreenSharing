@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 

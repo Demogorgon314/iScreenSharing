@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import struct ScreenSharingProtocol.AppleCanvas
 
 class SessionVideoStream: ObservableObject, @unchecked Sendable {
     enum State: Equatable {

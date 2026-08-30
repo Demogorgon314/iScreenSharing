@@ -1,3 +1,6 @@
+import enum ScreenSharingProtocol.AppleHEVCNALUnit
+import struct ScreenSharingProtocol.AppleRTPFramePacketInfo
+import struct ScreenSharingProtocol.AppleRTPPacket
 import XCTest
 @testable import iScreenSharing
 
