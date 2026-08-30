@@ -92,8 +92,35 @@ Open the package in Xcode and use **Product > Build Documentation**, or build
 the `ScreenSharingProtocol` DocC catalog from the command line with Xcode's
 documentation build action.
 
+## Versioning and compatibility
+
+The current development version is `0.1.0`. It is an unreleased local-package
+baseline; no Git tag or remote Swift Package release has been published.
+
+The package follows Semantic Versioning for its public Swift interface:
+
+- Before `1.0.0`, minor releases may add API or make documented breaking
+  changes. Patch releases remain source-compatible and contain fixes or
+  documentation updates.
+- Breaking changes must be recorded in `CHANGELOG.md`. Existing API should be
+  deprecated first when a practical migration path exists, but the pre-1.0
+  line does not promise a fixed deprecation period.
+- `1.0.0` will mark the first stable public interface. Its release requires a
+  separately reviewable compatibility baseline and remote package layout.
+
+Swift API compatibility and private-protocol compatibility are separate. A
+source-compatible release may still narrow its verified host-OS range when
+runtime evidence shows that Apple's private wire behavior changed.
+
 ## Status
 
-No public semantic-versioned release or compatibility guarantee has been
-declared yet. Consumers should pin a known commit until the project's license,
-initial version, and API change policy are published.
+The package remains consumed by local path. Consumers should pin a known commit
+until it is extracted to a repository layout that supports a remote Swift
+Package release. See `CHANGELOG.md` for the `0.1.0` baseline and subsequent
+public-interface changes.
+
+## License
+
+Source contained in this package directory is available under the MIT License;
+see `LICENSE`. The license applies to `Packages/ScreenSharingProtocol` and does
+not change the licensing terms of other source in the enclosing repository.
