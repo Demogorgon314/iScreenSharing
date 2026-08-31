@@ -19,7 +19,6 @@ enum VideoPerformanceLevel: String, CaseIterable, Identifiable {
 struct SessionFeaturePreferences {
     static let sharesKeyboardInputSourceKey = "sharesKeyboardInputSource"
     static let usesDynamicResolutionKey = "usesDynamicResolution"
-    static let mutesAudioKey = "mutesSessionAudio"
     static let fixedDisplayScaleKey = "sessionFixedDisplayScale"
     static let synchronizesVideoPresentationKey = "synchronizesVideoPresentation"
     static let showsVideoPerformanceOverlayKey = "showsVideoPerformanceOverlay"
@@ -41,10 +40,6 @@ struct SessionFeaturePreferences {
 
     var usesDynamicResolution: Bool {
         storedBool(forKey: Self.usesDynamicResolutionKey, defaultValue: true)
-    }
-
-    var mutesAudio: Bool {
-        storedBool(forKey: Self.mutesAudioKey, defaultValue: false)
     }
 
     var fixedDisplayScale: Double? {
@@ -95,10 +90,6 @@ struct SessionFeaturePreferences {
 
     func setUsesDynamicResolution(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.usesDynamicResolutionKey)
-    }
-
-    func setMutesAudio(_ muted: Bool) {
-        defaults.set(muted, forKey: Self.mutesAudioKey)
     }
 
     func setFixedDisplayScale(_ scale: Double?) {

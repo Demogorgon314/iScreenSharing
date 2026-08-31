@@ -293,9 +293,7 @@ final class SessionActivation: SessionActivating {
         if let receiver = session.mediaReceiver,
            let audio = try? AppleAudioStream(
                receiver: receiver,
-               negotiation: negotiation,
-               isMuted: sessionFeaturePreferences.mutesAudio,
-               didChangeMuted: sessionFeaturePreferences.setMutesAudio
+               negotiation: negotiation
            ) {
             session.install(audioStream: audio)
             audio.start()
