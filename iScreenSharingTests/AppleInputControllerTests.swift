@@ -1,6 +1,9 @@
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
 import enum ScreenSharingProtocol.AppleRFBMessages
 import enum ScreenSharingProtocol.StandardRFBMessages
 import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.AppleRecordKeys
+import struct ScreenSharingProtocol.AppleScrollWheelEvent
 import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
@@ -102,12 +105,118 @@ final class AppleInputControllerTests: XCTestCase {
         )
     }
 
+    func testUsesHighPrecisionScrollWhenServerAdvertisesCommand23() async throws {
+        let harness = try makeHighPerformanceHarness(supportsHighPrecisionScroll: true)
+        let event = makeScrollEvent()
+
+        await harness.input.scroll(event: event, x: 10, y: 20)
+
+        XCTAssertEqual(harness.transport.sentMessages, [
+            try harness.expectedRecordLayer.encrypt(
+                AppleRFBMessages.scrollWheelEvent(event, x: 10, y: 20)
+            ),
+        ])
+        harness.session.close()
+    }
+
+    func testFallsBackToScrollButtonsWithoutServerCommand23() async throws {
+        let harness = try makeHighPerformanceHarness(supportsHighPrecisionScroll: false)
+
+        await harness.input.scroll(event: makeScrollEvent(), x: 10, y: 20)
+
+        var expectedMessages = [Data]()
+        for button in [
+            AppleInputController.scrollUp, 0,
+            AppleInputController.scrollRight, 0,
+        ] {
+            let inputMessage = try harness.expectedRecordLayer.encryptPointerEvent(
+                buttons: button,
+                x: 10,
+                y: 20,
+                timestampDelta: 0
+            )
+            expectedMessages.append(try harness.expectedRecordLayer.encrypt(inputMessage))
+        }
+        XCTAssertEqual(harness.transport.sentMessages, expectedMessages)
+        harness.session.close()
+    }
+
     func testInputTimestampUsesWrappingMicrosecondDelta() {
         var timestamp = AppleInputTimestamp()
 
         XCTAssertEqual(timestamp.next(at: 0xffff_fff0), 0xffff_fff0)
         XCTAssertEqual(timestamp.next(at: 0x1_0000_0010), 0x20)
     }
+
+    private func makeHighPerformanceHarness(
+        supportsHighPrecisionScroll: Bool
+    ) throws -> HighPerformanceInputHarness {
+        let keys = try AppleRecordKeys(
+            key: Data(repeating: 0x11, count: 16),
+            initializationVector: Data(repeating: 0x22, count: 16)
+        )
+        var commandBitmap = Data(repeating: 0, count: 16)
+        if supportsHighPrecisionScroll {
+            commandBitmap[2] = 1
+        }
+        let transport = InputTestTransport()
+        let endpoint = try ConnectionEndpoint("example.local")
+        let address = try ResolvedRemoteAddress(
+            numericHost: "127.0.0.1",
+            port: 5900
+        )
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: address,
+            masterKey: Data(),
+            serverInfo: RFBServerInfo(
+                width: 100,
+                height: 100,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test Mac",
+                commandBitmap: commandBitmap
+            ),
+            transport: transport
+        )
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let input = AppleInputController(
+            session: session,
+            canvas: AppleCanvas(width: 100, height: 100, tileCount: 1),
+            microseconds: { 0 }
+        )
+        session.install(inputController: input)
+        return HighPerformanceInputHarness(
+            session: session,
+            transport: transport,
+            input: input,
+            expectedRecordLayer: AppleEncryptedRecordLayer(keys: keys)
+        )
+    }
+
+    private func makeScrollEvent() -> AppleScrollWheelEvent {
+        AppleScrollWheelEvent(
+            deltaX: -1,
+            deltaY: 2,
+            deltaZ: 0,
+            fixedDeltaX: 0,
+            fixedDeltaY: 0,
+            fixedDeltaZ: 0,
+            pointDeltaX: -1,
+            pointDeltaY: 2,
+            pointDeltaZ: 0,
+            scrollPhase: 1,
+            momentumPhase: 0,
+            scrollCount: 1,
+            flags: 0
+        )
+    }
+}
+
+private struct HighPerformanceInputHarness {
+    let session: RFBAuthenticatedSession
+    let transport: InputTestTransport
+    let input: AppleInputController
+    let expectedRecordLayer: AppleEncryptedRecordLayer
 }
 
 private final class InputTestTransport: RFBTransport, @unchecked Sendable {

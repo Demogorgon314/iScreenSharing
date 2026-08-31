@@ -172,7 +172,8 @@ actor AppleInputController {
         displayID: UInt32? = nil
     ) async {
         guard isControlling, let session, !isClosed else { return }
-        if session.sharingType == .standard {
+        if session.sharingType == .standard
+            || !session.serverInfo.supportsServerCommand(23) {
             await scroll(
                 verticalTicks: Int(event.deltaY),
                 horizontalTicks: Int(event.deltaX),
