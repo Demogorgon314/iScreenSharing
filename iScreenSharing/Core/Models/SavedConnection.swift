@@ -10,6 +10,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
     var sharingType: ScreenSharingType
     var standardQuality: StandardRFBQuality
     var virtualDisplayCount: VirtualDisplayCount
+    var usesSharedClipboard: Bool?
     var deviceInfo: AppleRemoteDeviceInfo?
 
     init(
@@ -21,6 +22,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         sharingType: ScreenSharingType = .highPerformance,
         standardQuality: StandardRFBQuality = .high,
         virtualDisplayCount: VirtualDisplayCount = .one,
+        usesSharedClipboard: Bool? = nil,
         deviceInfo: AppleRemoteDeviceInfo? = nil
     ) {
         self.id = id
@@ -31,6 +33,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         self.sharingType = sharingType
         self.standardQuality = standardQuality
         self.virtualDisplayCount = virtualDisplayCount
+        self.usesSharedClipboard = usesSharedClipboard
         self.deviceInfo = deviceInfo
     }
 
@@ -47,6 +50,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
             ?? .high
         virtualDisplayCount = try container.decodeIfPresent(VirtualDisplayCount.self, forKey: .virtualDisplayCount)
             ?? .one
+        usesSharedClipboard = try container.decodeIfPresent(Bool.self, forKey: .usesSharedClipboard)
         deviceInfo = try container.decodeIfPresent(AppleRemoteDeviceInfo.self, forKey: .deviceInfo)
     }
 }

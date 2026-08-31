@@ -27,6 +27,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
     private let typeResolver: AppleClipboardTypeResolver
     private let advertise: @Sendable (AppleClipboardArchive) async throws -> Void
     private let updateRemoteSharingEnabled: @Sendable (Bool) async -> Void
+    private let didChangeSharingEnabled: @MainActor (Bool) -> Void
     private let isApplicationActive: () -> Bool
     private let supportsSharedClipboard: Bool
     private var pasteboardChangeCount: Int
@@ -50,6 +51,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         supportsSharedClipboard: Bool = true,
         advertise: @escaping @Sendable (AppleClipboardArchive) async throws -> Void = { _ in },
         updateRemoteSharingEnabled: @escaping @Sendable (Bool) async -> Void = { _ in },
+        didChangeSharingEnabled: @escaping @MainActor (Bool) -> Void = { _ in },
         isApplicationActive: (() -> Bool)? = nil,
         typeResolver: AppleClipboardTypeResolver = .system
     ) {
@@ -59,6 +61,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         self.isSharingEnabled = supportsSharedClipboard && isSharingEnabled
         self.advertise = advertise
         self.updateRemoteSharingEnabled = updateRemoteSharingEnabled
+        self.didChangeSharingEnabled = didChangeSharingEnabled
         self.isApplicationActive = isApplicationActive ?? { NSApplication.shared.isActive }
         pasteboardChangeCount = pasteboard.changeCount
     }
@@ -96,6 +99,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         pasteboardChangeCount = pasteboard.changeCount
         isSharingEnabled = enabled
         if !enabled { hasUnfulfilledPromises = false }
+        didChangeSharingEnabled(enabled)
         eligibilityDidChange(from: wasEligible)
         scheduleRemoteSharingStateUpdate()
     }

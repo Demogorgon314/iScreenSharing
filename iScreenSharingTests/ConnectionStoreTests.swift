@@ -152,6 +152,31 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(restored.recentConnections.first?.standardQuality, .balanced)
     }
 
+    func testPersistsSharedClipboardOverrideForSavedAndRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = ConnectionStore(defaults: defaults)
+        store.record(endpoint)
+
+        store.updateUsesSharedClipboard(false, for: endpoint)
+
+        XCTAssertEqual(store.connection(for: endpoint)?.usesSharedClipboard, false)
+        XCTAssertEqual(store.recentConnections.first?.usesSharedClipboard, false)
+        let restored = ConnectionStore(defaults: defaults)
+        XCTAssertEqual(restored.connection(for: endpoint)?.usesSharedClipboard, false)
+        XCTAssertEqual(restored.recentConnections.first?.usesSharedClipboard, false)
+    }
+
+    func testRecordCopiesSharedClipboardOverrideIntoNewRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = ConnectionStore(defaults: defaults)
+        _ = store.networkConfiguration(for: endpoint, deviceInfo: nil)
+        store.updateUsesSharedClipboard(false, for: endpoint)
+
+        store.record(endpoint)
+
+        XCTAssertEqual(store.recentConnections.first?.usesSharedClipboard, false)
+    }
+
     func testRecordAppliesInitialStandardQualityToNewRecentConnection() throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let store = ConnectionStore(defaults: defaults)
@@ -277,6 +302,7 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(connection.sharingType, .highPerformance)
         XCTAssertEqual(connection.standardQuality, .high)
         XCTAssertEqual(connection.virtualDisplayCount, .one)
+        XCTAssertNil(connection.usesSharedClipboard)
         XCTAssertNil(connection.deviceInfo)
     }
 }

@@ -62,6 +62,10 @@ final class ConnectionStore: ObservableObject {
             at: date,
             in: &recentConnections
         )
+        if let connection = connections.first(where: { $0.endpoint == endpoint }),
+           let recentIndex = recentConnections.firstIndex(where: { $0.endpoint == endpoint }) {
+            recentConnections[recentIndex].usesSharedClipboard = connection.usesSharedClipboard
+        }
         if let preferredUsername,
            let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
             connections[index].preferredUsername = preferredUsername
@@ -81,6 +85,21 @@ final class ConnectionStore: ObservableObject {
         let connectionUpdated = Self.updateStandardQuality(quality, for: endpoint, in: &connections)
         let recentUpdated = Self.updateStandardQuality(
             quality,
+            for: endpoint,
+            in: &recentConnections
+        )
+        guard connectionUpdated || recentUpdated else { return }
+        persist()
+    }
+
+    func updateUsesSharedClipboard(_ enabled: Bool, for endpoint: ConnectionEndpoint) {
+        let connectionUpdated = Self.updateUsesSharedClipboard(
+            enabled,
+            for: endpoint,
+            in: &connections
+        )
+        let recentUpdated = Self.updateUsesSharedClipboard(
+            enabled,
             for: endpoint,
             in: &recentConnections
         )
@@ -289,6 +308,17 @@ final class ConnectionStore: ObservableObject {
         guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
               connections[index].standardQuality != quality else { return false }
         connections[index].standardQuality = quality
+        return true
+    }
+
+    private static func updateUsesSharedClipboard(
+        _ enabled: Bool,
+        for endpoint: ConnectionEndpoint,
+        in connections: inout [SavedConnection]
+    ) -> Bool {
+        guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
+              connections[index].usesSharedClipboard != enabled else { return false }
+        connections[index].usesSharedClipboard = enabled
         return true
     }
 

@@ -77,6 +77,44 @@ final class SessionActivationTests: XCTestCase {
         session.close()
     }
 
+    func testHighPerformanceActivationRestoresAndPersistsSharedClipboardOverride() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = ConnectionStore(defaults: defaults)
+        store.record(endpoint)
+        store.updateUsesSharedClipboard(false, for: endpoint)
+        let transport = ActivationRecordingTransport()
+        let session = try makeSession(
+            endpoint: endpoint,
+            transport: transport,
+            supportsSharedClipboard: true
+        )
+        let activation = SessionActivation(
+            authenticator: ActivationFixedAuthenticator(session: session),
+            controlChannelNegotiator: ActivationControlChannelNegotiator(
+                displaySizes: ActivationDisplaySizeRecorder()
+            ),
+            mediaNegotiator: ActivationMediaNegotiator(),
+            videoStreamStarter: ActivationVideoStreamStarter(),
+            connectionStore: store,
+            sessionFeaturePreferences: SessionFeaturePreferences(defaults: defaults)
+        )
+
+        _ = try await activation.activate(
+            endpoint: endpoint,
+            credentials: try ScreenSharingCredentials(
+                username: "user",
+                password: "password"
+            ),
+            configuration: highPerformanceConfiguration
+        )
+
+        let clipboard = try XCTUnwrap(session.clipboardService)
+        XCTAssertFalse(clipboard.isSharingEnabled)
+        clipboard.setSharingEnabled(true)
+        XCTAssertEqual(store.connection(for: endpoint)?.usesSharedClipboard, true)
+        session.close()
+    }
+
     func testStandardActivationReturnsOnlyAfterFirstCompleteFramebuffer() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let transport = ActivationRecordingTransport()
@@ -347,7 +385,8 @@ final class SessionActivationTests: XCTestCase {
         sharingType: ScreenSharingType = .highPerformance,
         transport: any RFBTransport,
         width: UInt16 = 1_920,
-        height: UInt16 = 1_080
+        height: UInt16 = 1_080,
+        supportsSharedClipboard: Bool = false
     ) throws -> RFBAuthenticatedSession {
         let remoteAddress = try ResolvedRemoteAddress(
             numericHost: "127.0.0.1",
@@ -362,10 +401,21 @@ final class SessionActivationTests: XCTestCase {
                 width: width,
                 height: height,
                 pixelFormat: Data(repeating: 0, count: 16),
-                name: "Test Mac"
+                name: "Test Mac",
+                commandBitmap: supportsSharedClipboard
+                    ? sharedClipboardCommandBitmap
+                    : nil
             ),
             transport: transport
         )
+    }
+
+    private var sharedClipboardCommandBitmap: Data {
+        var commands = Data(repeating: 0, count: 16)
+        commands[1] = 0x10
+        commands[2] = 0x04
+        commands[3] = 0x01
+        return commands
     }
 
     private func waitUntil(

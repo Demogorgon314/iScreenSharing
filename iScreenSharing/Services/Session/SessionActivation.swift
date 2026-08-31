@@ -142,9 +142,12 @@ final class SessionActivation: SessionActivating {
         )
         let input = AppleInputController(session: session, canvas: negotiation.canvas)
         session.install(inputController: input)
+        let supportsSharedClipboard = session.serverInfo.supportsSharedPasteboard
+        let usesSharedClipboard = connectionStore.connection(for: endpoint)?
+            .usesSharedClipboard ?? true
         let clipboard = AppleClipboardService(
-            isSharingEnabled: session.serverInfo.supportsSharedPasteboard,
-            supportsSharedClipboard: session.serverInfo.supportsSharedPasteboard,
+            isSharingEnabled: supportsSharedClipboard && usesSharedClipboard,
+            supportsSharedClipboard: supportsSharedClipboard,
             advertise: { [weak input] archive in
                 guard let input else { throw CancellationError() }
                 try await input.sendClipboard(archive, promises: true)
@@ -155,6 +158,9 @@ final class SessionActivation: SessionActivating {
                 } else {
                     await input?.disableClipboard()
                 }
+            },
+            didChangeSharingEnabled: { [connectionStore, endpoint] enabled in
+                connectionStore.updateUsesSharedClipboard(enabled, for: endpoint)
             }
         )
         let fileTransferService: AppleFileTransferService?

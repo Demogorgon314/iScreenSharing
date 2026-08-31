@@ -430,6 +430,7 @@ final class AppleClipboardServiceTests: XCTestCase {
     func testSharedClipboardToggleUpdatesSessionStateAndRemoteMode() async {
         let enabled = expectation(description: "Shared clipboard enabled remotely")
         let disabled = expectation(description: "Shared clipboard disabled remotely")
+        var persistedValues = [Bool]()
         let service = AppleClipboardService(
             pasteboard: makePasteboard(),
             updateRemoteSharingEnabled: { isEnabled in
@@ -439,6 +440,7 @@ final class AppleClipboardServiceTests: XCTestCase {
                     disabled.fulfill()
                 }
             },
+            didChangeSharingEnabled: { persistedValues.append($0) },
             isApplicationActive: { true }
         )
 
@@ -449,6 +451,7 @@ final class AppleClipboardServiceTests: XCTestCase {
         service.setSharingEnabled(false)
         await fulfillment(of: [disabled], timeout: 1)
         XCTAssertFalse(service.isSharingEnabled)
+        XCTAssertEqual(persistedValues, [false])
         service.close()
     }
 
