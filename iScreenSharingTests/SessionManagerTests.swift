@@ -26,6 +26,32 @@ final class SessionManagerTests: XCTestCase {
         XCTAssertEqual(manager.tailscaleSessionCount, 0)
     }
 
+    func testClosingReplacedSessionDoesNotRemoveReplacement() async throws {
+        let endpoint = try ConnectionEndpoint(host: "example.local")
+        let first = try makeSession(endpoint: endpoint)
+        let replacement = try makeSession(endpoint: endpoint)
+        let manager = SessionManager()
+        manager.install(first)
+
+        manager.install(replacement)
+        for _ in 0..<10 { await Task.yield() }
+
+        XCTAssertTrue(manager.session(for: endpoint) === replacement)
+        manager.disconnect(endpoint)
+    }
+
+    func testDoesNotRetainSessionThatTerminatedBeforeInstallation() async throws {
+        let endpoint = try ConnectionEndpoint(host: "example.local")
+        let session = try makeSession(endpoint: endpoint)
+        session.close()
+        let manager = SessionManager()
+
+        manager.install(session)
+        for _ in 0..<10 { await Task.yield() }
+
+        XCTAssertNil(manager.session(for: endpoint))
+    }
+
     private func makeSession(endpoint: ConnectionEndpoint) throws -> RFBAuthenticatedSession {
         let remoteAddress = try ResolvedRemoteAddress(
             numericHost: "127.0.0.1",

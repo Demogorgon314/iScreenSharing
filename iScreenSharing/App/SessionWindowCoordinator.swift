@@ -22,6 +22,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
     private var windowControllers: [WindowKey: NSWindowController] = [:]
     private var commandStates: [ConnectionEndpoint: SessionCommandState] = [:]
     private var layoutSubscriptions: [ConnectionEndpoint: AnyCancellable] = [:]
+    private var sessionSubscriptions: [ConnectionEndpoint: AnyCancellable] = [:]
     private var toolbarDisplayModeSubscriptions: [ObjectIdentifier: AnyCancellable] = [:]
     private var windowAspectRatioSubscriptions: [ObjectIdentifier: AnyCancellable] = [:]
     private var windowVideoAspectRatios: [ObjectIdentifier: CGFloat] = [:]
@@ -64,6 +65,11 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             endpoint: endpoint,
             sessions: sessions
         )
+        observeSessionLifecycle(
+            session,
+            endpoint: endpoint,
+            sessions: sessions
+        )
         NSApp.activate(ignoringOtherApps: true)
         windowControllers[primaryKey]?.window?.makeKeyAndOrderFront(nil)
     }
@@ -82,6 +88,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
 
         if !windowControllers.keys.contains(where: { $0.endpoint == key.endpoint }) {
             commandStates.removeValue(forKey: key.endpoint)
+            sessionSubscriptions.removeValue(forKey: key.endpoint)?.cancel()
         }
 
         guard key.displayIndex == 0 else { return }
@@ -90,6 +97,23 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             .filter { $0.key.endpoint == key.endpoint }
             .compactMap(\.value.window)
         auxiliaryWindows.forEach { $0.close() }
+    }
+
+    private func observeSessionLifecycle(
+        _ session: RFBAuthenticatedSession,
+        endpoint: ConnectionEndpoint,
+        sessions: SessionManager
+    ) {
+        sessionSubscriptions[endpoint]?.cancel()
+        sessionSubscriptions[endpoint] = sessions.$sessions
+            .dropFirst()
+            .sink { [weak self, weak session] currentSessions in
+                guard currentSessions[endpoint] !== session else { return }
+                let windows = self?.windowControllers
+                    .filter { $0.key.endpoint == endpoint }
+                    .compactMap(\.value.window) ?? []
+                windows.forEach { $0.close() }
+            }
     }
 
     func windowDidBecomeKey(_ notification: Notification) {

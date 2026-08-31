@@ -1,4 +1,7 @@
 import AppKit
+import Foundation
+import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 
@@ -180,6 +183,29 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         )
     }
 
+    func testClosesSessionWindowWhenInstalledSessionTerminates() async throws {
+        let endpoint = try ConnectionEndpoint(host: "example.local")
+        let session = try makeSession(endpoint: endpoint)
+        let sessions = SessionManager()
+        sessions.install(session)
+        let coordinator = SessionWindowCoordinator()
+        coordinator.show(endpoint: endpoint, sessions: sessions)
+        let identifier = NSUserInterfaceItemIdentifier(
+            "session-example.local-5900-display-1"
+        )
+        let window = try XCTUnwrap(NSApp.windows.first {
+            $0.identifier == identifier && $0.isVisible
+        })
+
+        session.close()
+        await waitForMainQueue()
+        await waitForMainQueue()
+
+        XCTAssertNil(sessions.session(for: endpoint))
+        XCTAssertFalse(window.isVisible)
+        window.close()
+    }
+
     private func makeWindow(toolbarIsVisible: Bool) -> NSWindow {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
@@ -193,11 +219,55 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         return window
     }
 
+    private func makeSession(
+        endpoint: ConnectionEndpoint
+    ) throws -> RFBAuthenticatedSession {
+        let remoteAddress = try ResolvedRemoteAddress(
+            numericHost: "127.0.0.1",
+            port: endpoint.port
+        )
+        let session = RFBAuthenticatedSession(
+            endpoint: endpoint,
+            remoteAddress: remoteAddress,
+            masterKey: Data(repeating: 0, count: 16),
+            serverInfo: RFBServerInfo(
+                width: 1920,
+                height: 1080,
+                pixelFormat: Data(repeating: 0, count: 16),
+                name: "Test Mac"
+            ),
+            transport: NWConnectionTransport(remoteAddress: remoteAddress)
+        )
+        let stream = WindowLifecycleVideoStream(
+            canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4)
+        )
+        stream.start()
+        session.install(videoStream: stream)
+        session.install(displayLayoutModel: AppleDisplayLayoutModel())
+        session.install(dynamicResolutionModel: AppleDynamicResolutionModel(isEnabled: false))
+        session.install(controlState: AppleSessionControlState(session: session))
+        return session
+    }
+
     private func waitForMainQueue() async {
         await withCheckedContinuation { continuation in
             DispatchQueue.main.async {
                 continuation.resume()
             }
         }
+    }
+}
+
+private final class WindowLifecycleVideoStream: SessionVideoStream, @unchecked Sendable {
+    init(canvas: AppleCanvas) {
+        super.init(canvas: canvas, displayIndex: 0, tileCount: canvas.tileCount)
+    }
+
+    override func start() {
+        state = .streaming
+    }
+
+    override func close() {
+        state = .stopped
     }
 }

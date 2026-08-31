@@ -6,8 +6,17 @@ final class SessionManager: ObservableObject {
     @Published private(set) var sessions: [ConnectionEndpoint: RFBAuthenticatedSession] = [:]
 
     func install(_ session: RFBAuthenticatedSession) {
-        sessions[session.endpoint]?.close()
+        guard sessions[session.endpoint] !== session else { return }
+        let replacedSession = sessions[session.endpoint]
         sessions[session.endpoint] = session
+        session.setTerminationHandler { [weak self, weak session] in
+            Task { @MainActor [weak self, weak session] in
+                guard let self, let session,
+                      self.sessions[session.endpoint] === session else { return }
+                self.sessions.removeValue(forKey: session.endpoint)
+            }
+        }
+        replacedSession?.close()
     }
 
     func session(for endpoint: ConnectionEndpoint) -> RFBAuthenticatedSession? {

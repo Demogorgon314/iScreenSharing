@@ -35,6 +35,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     private let standardWriter: RFBStandardWriter
     private let closeLock = NSLock()
     private var hasClosed = false
+    private var terminationHandler: (@Sendable () -> Void)?
 
     init(
         endpoint: ConnectionEndpoint,
@@ -91,6 +92,8 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
             return
         }
         hasClosed = true
+        let terminationHandler = terminationHandler
+        self.terminationHandler = nil
         closeLock.unlock()
 
         controlMessageService?.close()
@@ -104,6 +107,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         let recordLayer = recordLayer
         let encryptedWriter = encryptedWriter
         let route = route
+        terminationHandler?()
         Task { @MainActor in
             clipboardService?.close()
             keyboardInputSourceService?.close()
@@ -117,6 +121,17 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
             await inputController?.close()
             route.close()
         }
+    }
+
+    func setTerminationHandler(_ handler: @escaping @Sendable () -> Void) {
+        closeLock.lock()
+        if hasClosed {
+            closeLock.unlock()
+            handler()
+            return
+        }
+        terminationHandler = handler
+        closeLock.unlock()
     }
 
     func openHighPerformanceMedia(

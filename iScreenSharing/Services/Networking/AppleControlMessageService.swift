@@ -91,6 +91,8 @@ final class AppleControlMessageService: @unchecked Sendable {
                 let message = try await session.receiveEncrypted()
                 await process(message)
             } catch {
+                guard !Task.isCancelled else { return }
+                session.close()
                 return
             }
         }
