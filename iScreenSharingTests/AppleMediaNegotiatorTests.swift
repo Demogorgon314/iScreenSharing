@@ -4,22 +4,10 @@ import XCTest
 @testable import iScreenSharing
 
 final class AppleMediaNegotiatorTests: XCTestCase {
-    func testFramebufferStartupArmsAllScreensBeforeMediaOffer() throws {
+    func testFramebufferStartupRequestsInitialAndAutomaticUpdates() {
         XCTAssertEqual(
-            try AppleMediaNegotiator.framebufferStartupMessages(),
+            AppleMediaNegotiator.framebufferStartupMessages(),
             [
-                try AppleRFBMessages.setEncodings(),
-                AppleRFBMessages.framebufferUpdateRequest(),
-                AppleRFBMessages.autoFramebufferUpdate(),
-            ]
-        )
-    }
-
-    func testMultipleDisplayStartupUsesSameFramebufferArming() throws {
-        XCTAssertEqual(
-            try AppleMediaNegotiator.framebufferStartupMessages(displayCount: 2),
-            [
-                try AppleRFBMessages.setEncodings(),
                 AppleRFBMessages.framebufferUpdateRequest(),
                 AppleRFBMessages.autoFramebufferUpdate(),
             ]

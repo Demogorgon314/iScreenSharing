@@ -125,7 +125,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
             callID: environment.uuid()
         )
 
-        for message in try Self.framebufferStartupMessages(displayCount: displayCount) {
+        for message in Self.framebufferStartupMessages() {
             try await session.sendEncrypted(message)
         }
 
@@ -241,13 +241,8 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         )
     }
 
-    static func framebufferStartupMessages() throws -> [Data] {
-        try framebufferStartupMessages(displayCount: 1)
-    }
-
-    static func framebufferStartupMessages(displayCount: Int) throws -> [Data] {
+    static func framebufferStartupMessages() -> [Data] {
         [
-            try AppleRFBMessages.setEncodings(),
             AppleRFBMessages.framebufferUpdateRequest(),
             AppleRFBMessages.autoFramebufferUpdate(),
         ]
