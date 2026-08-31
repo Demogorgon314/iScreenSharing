@@ -3,6 +3,9 @@ import Foundation
 /// Apple RSA1 authentication messages used by high-performance Screen Sharing.
 public enum AppleRSA1 {
     public static let credentialFieldLength = 64
+    /// Fixed request slot; the preceding little-endian field carries the used bytes.
+    public static let encryptedKeySlotLength = 256
+
     /// Largest private response body accepted by the native RSA-plain path.
     public static let maximumPrivateResponseLength = 0x7fff
     public static let publicKeyRequest = Data([
@@ -40,7 +43,8 @@ public enum AppleRSA1 {
         encryptedAESKey: Data
     ) throws -> Data {
         guard encryptedCredentials.count == credentialFieldLength * 2,
-              encryptedAESKey.count == 256 else {
+              !encryptedAESKey.isEmpty,
+              encryptedAESKey.count <= encryptedKeySlotLength else {
             throw AppleRSA1Error.invalidEncryptedPayload
         }
 
@@ -48,8 +52,13 @@ public enum AppleRSA1 {
         body.append(contentsOf: [0x52, 0x53, 0x41, 0x31])
         body.append(contentsOf: [0x00, 0x01])
         body.append(encryptedCredentials)
-        body.append(contentsOf: [0x00, 0x01])
+        body.append(UInt8(encryptedAESKey.count & 0xff))
+        body.append(UInt8(encryptedAESKey.count >> 8))
         body.append(encryptedAESKey)
+        body.append(Data(
+            repeating: 0,
+            count: encryptedKeySlotLength - encryptedAESKey.count
+        ))
 
         var framed = Data()
         BigEndianWire.append(UInt32(body.count), to: &framed)

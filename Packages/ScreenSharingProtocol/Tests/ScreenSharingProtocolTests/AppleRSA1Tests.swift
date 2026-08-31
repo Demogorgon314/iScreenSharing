@@ -78,6 +78,22 @@ final class AppleRSA1Tests: XCTestCase {
         XCTAssertEqual(request.prefix(4), Data([0, 0, 1, 0x8a]))
         XCTAssertEqual(request[4..<12], Data([1, 0, 0x52, 0x53, 0x41, 0x31, 0, 1]))
         XCTAssertEqual(request[140..<142], Data([0, 1]))
+        XCTAssertEqual(request[142..<398], Data(repeating: 0x22, count: 256))
+        XCTAssertEqual(request.count, 398)
+    }
+
+    func testAuthenticationRequestPadsShorterRSACiphertextToNativeSlot() throws {
+        let ciphertext = Data(repeating: 0x33, count: 128)
+
+        let request = try AppleRSA1.authenticationRequest(
+            encryptedCredentials: Data(repeating: 0x11, count: 128),
+            encryptedAESKey: ciphertext
+        )
+
+        XCTAssertEqual(request.prefix(4), Data([0, 0, 1, 0x8a]))
+        XCTAssertEqual(request[140..<142], Data([0x80, 0]))
+        XCTAssertEqual(request[142..<270], ciphertext)
+        XCTAssertEqual(request[270..<398], Data(repeating: 0, count: 128))
         XCTAssertEqual(request.count, 398)
     }
 
@@ -89,6 +105,16 @@ final class AppleRSA1Tests: XCTestCase {
             )
         ) { error in
             XCTAssertEqual(error as? AppleRSA1Error, .invalidEncryptedPayload)
+        }
+        for length in [0, AppleRSA1.encryptedKeySlotLength + 1] {
+            XCTAssertThrowsError(
+                try AppleRSA1.authenticationRequest(
+                    encryptedCredentials: Data(repeating: 0, count: 128),
+                    encryptedAESKey: Data(repeating: 0, count: length)
+                )
+            ) { error in
+                XCTAssertEqual(error as? AppleRSA1Error, .invalidEncryptedPayload)
+            }
         }
     }
 

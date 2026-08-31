@@ -13,9 +13,20 @@ final class CryptographyTests: XCTestCase {
     }
 
     func testCreatesSPKIPublicKeyAndEncryptsRSA2048Block() throws {
+        try assertRSAEncryption(keySizeInBits: 2048, expectedBlockSize: 256)
+    }
+
+    func testCreatesSPKIPublicKeyAndEncryptsRSA1024Block() throws {
+        try assertRSAEncryption(keySizeInBits: 1024, expectedBlockSize: 128)
+    }
+
+    private func assertRSAEncryption(
+        keySizeInBits: Int,
+        expectedBlockSize: Int
+    ) throws {
         let attributes: [CFString: Any] = [
             kSecAttrKeyType: kSecAttrKeyTypeRSA,
-            kSecAttrKeySizeInBits: 2048,
+            kSecAttrKeySizeInBits: keySizeInBits,
         ]
         var generationError: Unmanaged<CFError>?
         let privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, &generationError))
@@ -27,8 +38,8 @@ final class CryptographyTests: XCTestCase {
         let parsedPublicKey = try Cryptography.makeRSAPublicKey(subjectPublicKeyInfo: spki)
         let encrypted = try Cryptography.encryptRSA(Data(repeating: 0x42, count: 16), publicKey: parsedPublicKey)
 
-        XCTAssertEqual(SecKeyGetBlockSize(parsedPublicKey), 256)
-        XCTAssertEqual(encrypted.count, 256)
+        XCTAssertEqual(SecKeyGetBlockSize(parsedPublicKey), expectedBlockSize)
+        XCTAssertEqual(encrypted.count, expectedBlockSize)
     }
 
     func testAESCBCMatchesNISTKnownAnswerAndDecrypts() throws {
