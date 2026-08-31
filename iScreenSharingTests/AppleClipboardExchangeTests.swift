@@ -100,14 +100,11 @@ final class AppleClipboardExchangeTests: XCTestCase {
         let handledRequest = await exchange.receive(request)
         XCTAssertTrue(handledRequest)
         let sentArchives = await recorder.archives
-        XCTAssertEqual(
-            sentArchives,
-            [ClipboardArchiveRecord(
-                archive: .text("current"),
-                promises: false,
-                sessionID: 0
-            )]
-        )
+        XCTAssertEqual(sentArchives.count, 1)
+        let sentArchive = try XCTUnwrap(sentArchives.first)
+        XCTAssertEqual(sentArchive.archive.preferredText, "current")
+        XCTAssertFalse(sentArchive.promises)
+        XCTAssertEqual(sentArchive.sessionID, 0)
 
         let handledDuplicate = await exchange.receive(request)
         XCTAssertTrue(handledDuplicate)

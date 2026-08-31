@@ -4,7 +4,6 @@ import Foundation
 import struct ScreenSharingProtocol.AppleClipboardArchive
 import struct ScreenSharingProtocol.AppleClipboardFlavor
 import struct ScreenSharingProtocol.AppleClipboardItem
-import UniformTypeIdentifiers
 
 @MainActor
 protocol AppleClipboardReceiving: AnyObject {
@@ -25,6 +24,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
     @Published private(set) var isSharingEnabled: Bool
 
     private let pasteboard: NSPasteboard
+    private let typeResolver: AppleClipboardTypeResolver
     private let advertise: @Sendable (AppleClipboardArchive) async throws -> Void
     private let updateRemoteSharingEnabled: @Sendable (Bool) async -> Void
     private let isApplicationActive: () -> Bool
@@ -50,9 +50,11 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         supportsSharedClipboard: Bool = true,
         advertise: @escaping @Sendable (AppleClipboardArchive) async throws -> Void = { _ in },
         updateRemoteSharingEnabled: @escaping @Sendable (Bool) async -> Void = { _ in },
-        isApplicationActive: (() -> Bool)? = nil
+        isApplicationActive: (() -> Bool)? = nil,
+        typeResolver: AppleClipboardTypeResolver = .system
     ) {
         self.pasteboard = pasteboard
+        self.typeResolver = typeResolver
         self.supportsSharedClipboard = supportsSharedClipboard
         self.isSharingEnabled = supportsSharedClipboard && isSharingEnabled
         self.advertise = advertise
@@ -103,7 +105,11 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
             let flavors = pasteboardItem.types.compactMap { type -> AppleClipboardFlavor? in
                 guard Self.shouldSynchronize(type),
                       let value = pasteboardItem.data(forType: type) else { return nil }
-                return AppleClipboardFlavor(type: type.rawValue, aliases: [], value: value)
+                return AppleClipboardFlavor(
+                    type: type.rawValue,
+                    aliases: typeResolver.aliases(for: type.rawValue),
+                    value: value
+                )
             }
             return flavors.isEmpty ? nil : AppleClipboardItem(flavors: flavors)
         }
@@ -132,10 +138,11 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
             let item = NSPasteboardItem()
             var wroteFlavor = false
             for flavor in archiveItem.flavors {
-                guard let identifier = Self.resolvedTypeIdentifier(for: flavor) else { continue }
-                let type = NSPasteboard.PasteboardType(identifier)
-                guard Self.shouldSynchronize(type) else { continue }
-                wroteFlavor = item.setData(flavor.value, forType: type) || wroteFlavor
+                for identifier in typeResolver.identifiers(for: flavor) {
+                    let type = NSPasteboard.PasteboardType(identifier)
+                    guard Self.shouldSynchronize(type) else { continue }
+                    wroteFlavor = item.setData(flavor.value, forType: type) || wroteFlavor
+                }
             }
             return wroteFlavor ? item : nil
         }
@@ -244,26 +251,6 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         return !identifier.hasPrefix("dyn.")
             && !pasteboardPeekerTypes.contains(identifier)
             && !excludedTypes.contains(identifier)
-    }
-
-    private static func resolvedTypeIdentifier(for flavor: AppleClipboardFlavor) -> String? {
-        if !flavor.type.isEmpty { return flavor.type }
-        for alias in flavor.aliases {
-            switch alias.tagClass {
-            case "com.apple.nspboard-type":
-                return alias.preferredTag
-            case "public.mime-type":
-                if let type = UTType(mimeType: alias.preferredTag) { return type.identifier }
-            case "public.filename-extension":
-                if let type = UTType(filenameExtension: alias.preferredTag) { return type.identifier }
-            default:
-                let tagClass = UTTagClass(rawValue: alias.tagClass)
-                if let type = UTType(tag: alias.preferredTag, tagClass: tagClass, conformingTo: nil) {
-                    return type.identifier
-                }
-            }
-        }
-        return nil
     }
 
     private static let pasteboardPeekerTypes: Set<String> = [

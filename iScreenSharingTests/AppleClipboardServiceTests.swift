@@ -30,6 +30,49 @@ final class AppleClipboardServiceTests: XCTestCase {
         XCTAssertFalse(types.contains(NSPasteboard.PasteboardType.fileURL.rawValue))
     }
 
+    func testCapturesPreferredTagsForEveryClipboardFlavor() throws {
+        let pasteboard = makePasteboard()
+        let item = NSPasteboardItem()
+        item.setString("Hello", forType: .string)
+        item.setData(Data([1, 2]), forType: .init("com.example.custom"))
+        pasteboard.writeObjects([item])
+        let resolver = AppleClipboardTypeResolver(
+            isDeclared: { _ in false },
+            preferredTag: { type, tagClass in
+                switch (type, tagClass) {
+                case (NSPasteboard.PasteboardType.string.rawValue, "com.apple.ostype"):
+                    "utf8"
+                case (NSPasteboard.PasteboardType.string.rawValue, "public.mime-type"):
+                    "text/plain;charset=utf-8"
+                case ("com.example.custom", "public.filename-extension"):
+                    "example"
+                default:
+                    nil
+                }
+            },
+            preferredIdentifier: { _, _ in nil }
+        )
+        let service = AppleClipboardService(
+            pasteboard: pasteboard,
+            typeResolver: resolver
+        )
+
+        let archive = try XCTUnwrap(service.localArchive())
+        let flavors = Dictionary(
+            uniqueKeysWithValues: try XCTUnwrap(archive.items.first?.flavors).map {
+                ($0.type, Set($0.aliases.map { "\($0.tagClass)\u{0}\($0.preferredTag)" }))
+            }
+        )
+
+        XCTAssertEqual(flavors[NSPasteboard.PasteboardType.string.rawValue], [
+            "com.apple.ostype\u{0}utf8",
+            "public.mime-type\u{0}text/plain;charset=utf-8",
+        ])
+        XCTAssertEqual(flavors["com.example.custom"], [
+            "public.filename-extension\u{0}example",
+        ])
+    }
+
     func testInstallsMultipleItemsWithoutFlatteningFlavors() throws {
         let pasteboard = makePasteboard()
         let archive = AppleClipboardArchive(items: [
@@ -87,6 +130,146 @@ final class AppleClipboardServiceTests: XCTestCase {
             pasteboard.pasteboardItems?.first?.data(forType: .png),
             Data([0x89, 0x50, 0x4e, 0x47])
         )
+    }
+
+    func testDeclaredClipboardTypeWinsOverAliases() throws {
+        let pasteboard = makePasteboard()
+        let resolver = AppleClipboardTypeResolver(
+            isDeclared: { $0 == "com.example.declared" },
+            preferredTag: { _, _ in nil },
+            preferredIdentifier: { _, _ in "com.example.alias" }
+        )
+        let service = AppleClipboardService(
+            pasteboard: pasteboard,
+            typeResolver: resolver
+        )
+        let value = Data([1, 2, 3])
+        let archive = AppleClipboardArchive(items: [
+            AppleClipboardItem(flavors: [
+                AppleClipboardFlavor(
+                    type: "com.example.declared",
+                    aliases: [AppleClipboardTypeAlias(
+                        tagClass: "public.mime-type",
+                        preferredTag: "application/example"
+                    )],
+                    value: value
+                )
+            ])
+        ])
+
+        service.receive(archive)
+
+        let item = try XCTUnwrap(pasteboard.pasteboardItems?.first)
+        XCTAssertEqual(item.data(forType: .init("com.example.declared")), value)
+        XCTAssertNil(item.data(forType: .init("com.example.alias")))
+    }
+
+    func testUndeclaredClipboardTypeResolvesAllAliasesInNativePriorityOrder() {
+        let resolver = AppleClipboardTypeResolver(
+            isDeclared: { _ in false },
+            preferredTag: { _, _ in nil },
+            preferredIdentifier: { tagClass, tag in
+                "resolved:\(tagClass):\(tag)"
+            }
+        )
+        let flavor = AppleClipboardFlavor(
+            type: "com.example.undeclared",
+            aliases: [
+                AppleClipboardTypeAlias(
+                    tagClass: "public.mime-type",
+                    preferredTag: "old"
+                ),
+                AppleClipboardTypeAlias(
+                    tagClass: "public.filename-extension",
+                    preferredTag: "example"
+                ),
+                AppleClipboardTypeAlias(
+                    tagClass: "com.apple.ostype",
+                    preferredTag: "EXMP"
+                ),
+                AppleClipboardTypeAlias(
+                    tagClass: "public.mime-type",
+                    preferredTag: "application/example"
+                ),
+                AppleClipboardTypeAlias(
+                    tagClass: "com.apple.nspboard-type",
+                    preferredTag: "Example pasteboard type"
+                ),
+            ],
+            value: Data()
+        )
+
+        XCTAssertEqual(resolver.identifiers(for: flavor), [
+            "resolved:com.apple.ostype:EXMP",
+            "resolved:com.apple.nspboard-type:Example pasteboard type",
+            "resolved:public.filename-extension:example",
+            "resolved:public.mime-type:application/example",
+        ])
+    }
+
+    func testUndeclaredClipboardTypeFallsBackOnlyWhenNoAliasResolves() throws {
+        let pasteboard = makePasteboard()
+        let resolver = AppleClipboardTypeResolver(
+            isDeclared: { _ in false },
+            preferredTag: { _, _ in nil },
+            preferredIdentifier: { _, _ in nil }
+        )
+        let service = AppleClipboardService(
+            pasteboard: pasteboard,
+            typeResolver: resolver
+        )
+        let value = Data([4, 5, 6])
+        let archive = AppleClipboardArchive(items: [
+            AppleClipboardItem(flavors: [
+                AppleClipboardFlavor(
+                    type: "com.example.undeclared",
+                    aliases: [AppleClipboardTypeAlias(
+                        tagClass: "com.example.unknown-tag-class",
+                        preferredTag: "unknown"
+                    )],
+                    value: value
+                )
+            ])
+        ])
+
+        service.receive(archive)
+
+        XCTAssertEqual(
+            try XCTUnwrap(pasteboard.pasteboardItems?.first).data(
+                forType: .init("com.example.undeclared")
+            ),
+            value
+        )
+    }
+
+    func testClipboardFlavorWithoutTypeOrResolvableAliasIsIgnored() {
+        let pasteboard = makePasteboard()
+        pasteboard.setString("existing", forType: .string)
+        let resolver = AppleClipboardTypeResolver(
+            isDeclared: { _ in false },
+            preferredTag: { _, _ in nil },
+            preferredIdentifier: { _, _ in nil }
+        )
+        let service = AppleClipboardService(
+            pasteboard: pasteboard,
+            typeResolver: resolver
+        )
+        let archive = AppleClipboardArchive(items: [
+            AppleClipboardItem(flavors: [
+                AppleClipboardFlavor(
+                    type: "",
+                    aliases: [AppleClipboardTypeAlias(
+                        tagClass: "com.example.unknown-tag-class",
+                        preferredTag: "unknown"
+                    )],
+                    value: Data([1])
+                )
+            ])
+        ])
+
+        service.receive(archive)
+
+        XCTAssertEqual(pasteboard.string(forType: .string), "existing")
     }
 
     func testRemoteWriteUpdatesChangeCountBaselineAndDoesNotAdvertiseBack() async {
