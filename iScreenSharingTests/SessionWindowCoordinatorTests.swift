@@ -1,12 +1,104 @@
 import AppKit
 import Foundation
+import class ScreenSharingProtocol.AppleEncryptedRecordLayer
+import enum ScreenSharingProtocol.AppleRFBMessages
 import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.AppleRecordKeys
 import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 
 @MainActor
 final class SessionWindowCoordinatorTests: XCTestCase {
+    func testMiniaturizedSingleWindowPausesAndResumesFrameUpdatesInOrder() async {
+        let recorder = WindowFrameUpdateRecorder()
+        let controller = SessionWindowFrameUpdateController { message in
+            await recorder.record(message)
+        }
+
+        controller.setMiniaturized(true, endpointWindowCount: 1)
+        controller.setMiniaturized(true, endpointWindowCount: 1)
+        controller.setMiniaturized(false, endpointWindowCount: 1)
+        controller.setMiniaturized(false, endpointWindowCount: 1)
+        await controller.waitForPendingSend()
+
+        let messages = await recorder.messages
+        XCTAssertEqual(messages, [
+            AppleRFBMessages.autoFramebufferUpdate(intervalMilliseconds: .max),
+            AppleRFBMessages.autoFramebufferUpdate(intervalMilliseconds: 0),
+        ])
+    }
+
+    func testMiniaturizedMultiWindowSessionKeepsFrameUpdatesRunning() async {
+        let recorder = WindowFrameUpdateRecorder()
+        let controller = SessionWindowFrameUpdateController { message in
+            await recorder.record(message)
+        }
+
+        controller.setMiniaturized(true, endpointWindowCount: 2)
+        controller.setMiniaturized(false, endpointWindowCount: 2)
+        await controller.waitForPendingSend()
+
+        let messages = await recorder.messages
+        XCTAssertTrue(messages.isEmpty)
+    }
+
+    func testWindowDelegateSendsEncryptedPauseWithoutStoppingVideo() async throws {
+        let endpoint = try ConnectionEndpoint(host: "example.local")
+        let pauseSent = expectation(description: "Pause sent")
+        let resumeSent = expectation(description: "Resume sent")
+        let transport = WindowFrameUpdateTransport(expectations: [pauseSent, resumeSent])
+        let session = try makeSession(endpoint: endpoint, transport: transport)
+        let keys = try AppleRecordKeys(
+            key: Data((0..<16).map(UInt8.init)),
+            initializationVector: Data((16..<32).map(UInt8.init))
+        )
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let sessions = SessionManager()
+        sessions.install(session)
+        let coordinator = SessionWindowCoordinator()
+        coordinator.show(endpoint: endpoint, sessions: sessions)
+        let identifier = NSUserInterfaceItemIdentifier(
+            "session-example.local-5900-display-1"
+        )
+        let window = try XCTUnwrap(NSApp.windows.first {
+            $0.identifier == identifier && $0.isVisible
+        })
+        defer {
+            window.close()
+            session.close()
+        }
+
+        coordinator.windowDidMiniaturize(Notification(
+            name: NSWindow.didMiniaturizeNotification,
+            object: window
+        ))
+        coordinator.windowDidMiniaturize(Notification(
+            name: NSWindow.didMiniaturizeNotification,
+            object: window
+        ))
+        coordinator.windowDidDeminiaturize(Notification(
+            name: NSWindow.didDeminiaturizeNotification,
+            object: window
+        ))
+        coordinator.windowDidDeminiaturize(Notification(
+            name: NSWindow.didDeminiaturizeNotification,
+            object: window
+        ))
+        await fulfillment(of: [pauseSent, resumeSent], timeout: 1)
+
+        let expectedLayer = AppleEncryptedRecordLayer(keys: keys)
+        XCTAssertEqual(transport.sentMessages, [
+            try expectedLayer.encrypt(
+                AppleRFBMessages.autoFramebufferUpdate(intervalMilliseconds: .max)
+            ),
+            try expectedLayer.encrypt(
+                AppleRFBMessages.autoFramebufferUpdate(intervalMilliseconds: 0)
+            ),
+        ])
+        XCTAssertEqual(session.videoStream?.state, .streaming)
+    }
+
     func testHidesToolbarWhileEnteringFullScreenAndRestoresItOnExit() {
         let coordinator = SessionWindowCoordinator()
         let window = makeWindow(toolbarIsVisible: true)
@@ -220,7 +312,8 @@ final class SessionWindowCoordinatorTests: XCTestCase {
     }
 
     private func makeSession(
-        endpoint: ConnectionEndpoint
+        endpoint: ConnectionEndpoint,
+        transport: (any RFBTransport)? = nil
     ) throws -> RFBAuthenticatedSession {
         let remoteAddress = try ResolvedRemoteAddress(
             numericHost: "127.0.0.1",
@@ -236,7 +329,7 @@ final class SessionWindowCoordinatorTests: XCTestCase {
                 pixelFormat: Data(repeating: 0, count: 16),
                 name: "Test Mac"
             ),
-            transport: NWConnectionTransport(remoteAddress: remoteAddress)
+            transport: transport ?? NWConnectionTransport(remoteAddress: remoteAddress)
         )
         let stream = WindowLifecycleVideoStream(
             canvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4)
@@ -255,6 +348,53 @@ final class SessionWindowCoordinatorTests: XCTestCase {
                 continuation.resume()
             }
         }
+    }
+}
+
+private final class WindowFrameUpdateTransport: RFBTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var messages = [Data]()
+    private var expectations: [XCTestExpectation]
+
+    init(expectations: [XCTestExpectation]) {
+        self.expectations = expectations
+    }
+
+    var sentMessages: [Data] {
+        lock.withWindowFrameUpdateLock { messages }
+    }
+
+    func start(timeout: Duration) async throws { }
+
+    func send(_ data: Data) async throws {
+        let expectation = lock.withWindowFrameUpdateLock { () -> XCTestExpectation? in
+            messages.append(data)
+            guard !expectations.isEmpty else { return nil }
+            return expectations.removeFirst()
+        }
+        expectation?.fulfill()
+    }
+
+    func receiveExactly(_ length: Int) async throws -> Data {
+        throw RFBNetworkError.connectionClosed
+    }
+
+    func cancel() { }
+}
+
+private extension NSLock {
+    func withWindowFrameUpdateLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
+    }
+}
+
+private actor WindowFrameUpdateRecorder {
+    private(set) var messages = [Data]()
+
+    func record(_ message: Data) {
+        messages.append(message)
     }
 }
 

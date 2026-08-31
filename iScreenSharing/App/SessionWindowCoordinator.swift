@@ -27,6 +27,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
     private var windowAspectRatioSubscriptions: [ObjectIdentifier: AnyCancellable] = [:]
     private var windowVideoAspectRatios: [ObjectIdentifier: CGFloat] = [:]
     private var videoRenderers: [WindowKey: AppleVideoRenderer] = [:]
+    private var frameUpdateControllers: [ConnectionEndpoint: SessionWindowFrameUpdateController] = [:]
     private var fullScreenChromeStates: [ObjectIdentifier: FullScreenChromeState] = [:]
     private let toolbarPreferencesDefaults: UserDefaults
 
@@ -49,6 +50,14 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
               let displayLayout = session.displayLayoutModel,
               let dynamicResolution = session.dynamicResolutionModel,
               let controlState = session.controlState else { return }
+
+        if session.sharingType == .highPerformance {
+            frameUpdateControllers[endpoint] = SessionWindowFrameUpdateController {
+                [weak session] message in
+                guard let session else { return }
+                try await session.sendEncrypted(message)
+            }
+        }
 
         showWindow(
             key: primaryKey,
@@ -89,6 +98,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         if !windowControllers.keys.contains(where: { $0.endpoint == key.endpoint }) {
             commandStates.removeValue(forKey: key.endpoint)
             sessionSubscriptions.removeValue(forKey: key.endpoint)?.cancel()
+            frameUpdateControllers.removeValue(forKey: key.endpoint)
         }
 
         guard key.displayIndex == 0 else { return }
@@ -127,6 +137,14 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         guard let window = notification.object as? NSWindow,
               key(for: window) != nil else { return }
         commandRouter.deactivate(window: window)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        updateFrameDelivery(from: notification, miniaturized: true)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        updateFrameDelivery(from: notification, miniaturized: false)
     }
 
     func windowDidMove(_ notification: Notification) {
@@ -517,6 +535,22 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         guard let window = notification.object as? NSWindow,
               let key = key(for: window) else { return }
         window.saveFrame(usingName: frameAutosaveName(for: key))
+    }
+
+    private func updateFrameDelivery(
+        from notification: Notification,
+        miniaturized: Bool
+    ) {
+        guard let window = notification.object as? NSWindow,
+              let key = key(for: window),
+              let controller = frameUpdateControllers[key.endpoint] else { return }
+        let endpointWindowCount = windowControllers.keys.reduce(into: 0) { count, candidate in
+            if candidate.endpoint == key.endpoint { count += 1 }
+        }
+        controller.setMiniaturized(
+            miniaturized,
+            endpointWindowCount: endpointWindowCount
+        )
     }
 
     private func key(for window: NSWindow) -> WindowKey? {
