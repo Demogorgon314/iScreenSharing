@@ -21,9 +21,13 @@ final class AppleSessionControlState: ObservableObject {
         Task { [weak self, weak session] in
             guard let self, let session else { return }
             do {
-                if session.sharingType == .highPerformance {
+                let message = AppleRFBMessages.controlMode(observing: newValue)
+                switch session.sharingType {
+                case .standard:
+                    try await session.sendStandard(message)
+                case .highPerformance:
                     try await session.sendEncrypted(
-                        AppleRFBMessages.controlMode(observing: newValue)
+                        message
                     )
                 }
                 await session.inputController?.setControlling(!newValue)
