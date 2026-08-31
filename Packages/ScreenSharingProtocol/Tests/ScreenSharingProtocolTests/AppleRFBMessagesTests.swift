@@ -65,14 +65,27 @@ final class AppleRFBMessagesTests: XCTestCase {
         )
     }
 
-    func testSetEncodingsPreservesSignedPseudoEncoding() throws {
-        let message = try AppleRFBMessages.setEncodings()
-
-        XCTAssertEqual(message.count, 4 + 11 * 4)
-        XCTAssertEqual(message.prefix(4), Data([0x02, 0x00, 0x00, 0x0b]))
-        XCTAssertEqual(try message.int32BE(at: 4), 1010)
-        XCTAssertEqual(try message.int32BE(at: 4 + 5 * 4), -223)
-        XCTAssertEqual(try message.int32BE(at: message.count - 4), 1110)
+    func testSetEncodingsMatchesNativeHighPerformanceOrder() throws {
+        XCTAssertEqual(
+            try AppleRFBMessages.setEncodings(),
+            Data([
+                0x02, 0x00, 0x00, 0x0e,
+                0x00, 0x00, 0x03, 0xf2,
+                0x00, 0x00, 0x03, 0xf3,
+                0x00, 0x00, 0x03, 0xea,
+                0x00, 0x00, 0x00, 0x06,
+                0x00, 0x00, 0x00, 0x10,
+                0xff, 0xff, 0xff, 0x11,
+                0x00, 0x00, 0x04, 0x50,
+                0x00, 0x00, 0x04, 0x4c,
+                0xff, 0xff, 0xff, 0x21,
+                0x00, 0x00, 0x04, 0x4d,
+                0x00, 0x00, 0x04, 0x51,
+                0x00, 0x00, 0x04, 0x53,
+                0x00, 0x00, 0x04, 0x55,
+                0x00, 0x00, 0x04, 0x56,
+            ])
+        )
     }
 
     func testRejectsEncodingListBeyondWireLimit() {

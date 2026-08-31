@@ -59,8 +59,8 @@ struct AppleRFBInputEncryptionRequest: Equatable, Sendable {
 
 public enum AppleRFBMessages {
     private static let highPerformanceEncodings: [Int32] = [
-        1010, 1011, 1002, 1104, 1100,
-        -223, 1101, 1105, 1107, 1109, 1110,
+        1010, 1011, 1002, 6, 16, -239, 1104,
+        1100, -223, 1101, 1105, 1107, 1109, 1110,
     ]
 
     private static let viewerCommandMask = Data([
