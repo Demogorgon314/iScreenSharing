@@ -166,6 +166,23 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(restored.recentConnections.first?.usesSharedClipboard, false)
     }
 
+    func testPersistsScaleToFitOverrideForSavedAndRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let unknownEndpoint = try ConnectionEndpoint("unknown.local")
+        let store = ConnectionStore(defaults: defaults)
+        store.record(endpoint)
+
+        store.updateScalesToFit(false, for: endpoint)
+        store.updateScalesToFit(true, for: unknownEndpoint)
+
+        XCTAssertEqual(store.connection(for: endpoint)?.scalesToFit, false)
+        XCTAssertNil(store.connection(for: unknownEndpoint))
+        XCTAssertEqual(store.recentConnections.first?.scalesToFit, false)
+        let restored = ConnectionStore(defaults: defaults)
+        XCTAssertEqual(restored.connection(for: endpoint)?.scalesToFit, false)
+        XCTAssertEqual(restored.recentConnections.first?.scalesToFit, false)
+    }
+
     func testRecordCopiesSharedClipboardOverrideIntoNewRecentConnection() throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let store = ConnectionStore(defaults: defaults)
@@ -175,6 +192,17 @@ final class ConnectionStoreTests: XCTestCase {
         store.record(endpoint)
 
         XCTAssertEqual(store.recentConnections.first?.usesSharedClipboard, false)
+    }
+
+    func testRecordCopiesScaleToFitOverrideIntoNewRecentConnection() throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let store = ConnectionStore(defaults: defaults)
+        _ = store.networkConfiguration(for: endpoint, deviceInfo: nil)
+        store.updateScalesToFit(false, for: endpoint)
+
+        store.record(endpoint)
+
+        XCTAssertEqual(store.recentConnections.first?.scalesToFit, false)
     }
 
     func testRecordAppliesInitialStandardQualityToNewRecentConnection() throws {
@@ -303,6 +331,7 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(connection.standardQuality, .high)
         XCTAssertEqual(connection.virtualDisplayCount, .one)
         XCTAssertNil(connection.usesSharedClipboard)
+        XCTAssertNil(connection.scalesToFit)
         XCTAssertNil(connection.deviceInfo)
     }
 }

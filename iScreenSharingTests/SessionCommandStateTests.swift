@@ -24,7 +24,7 @@ final class SessionCommandStateTests: XCTestCase {
         super.tearDown()
     }
 
-    func testLoadsAndPersistsPresentationChoices() throws {
+    func testLoadsGlobalPresentationDefaultsWithoutRewritingThemFromSession() throws {
         let preferences = SessionFeaturePreferences(defaults: defaults)
         preferences.setFixedDisplayScale(1.25)
         preferences.setSynchronizesVideoPresentation(false)
@@ -32,9 +32,11 @@ final class SessionCommandStateTests: XCTestCase {
         preferences.setVideoPerformanceLevel(.detailed)
         preferences.setVideoDecoderMode(.videoProcessing)
         preferences.setShowsMetalPerformanceHUD(true)
+        var savedScalesToFit: Bool?
         let state = SessionCommandState(
             endpoint: try ConnectionEndpoint(host: "command-state.test"),
-            preferences: preferences
+            preferences: preferences,
+            displayScaleDidChange: { savedScalesToFit = $0 }
         )
 
         XCTAssertEqual(state.displayScale.fixedScale, 1.25)
@@ -52,12 +54,47 @@ final class SessionCommandStateTests: XCTestCase {
         state.setShowsMetalPerformanceHUD(false)
 
         let restored = SessionFeaturePreferences(defaults: defaults)
-        XCTAssertNil(restored.fixedDisplayScale)
+        XCTAssertEqual(savedScalesToFit, true)
+        XCTAssertEqual(restored.fixedDisplayScale, 1.25)
         XCTAssertTrue(restored.synchronizesVideoPresentation)
         XCTAssertFalse(restored.showsVideoPerformanceOverlay)
         XCTAssertEqual(restored.videoPerformanceLevel, .compact)
         XCTAssertEqual(restored.videoDecoderMode, .videoToolboxSynchronized)
         XCTAssertFalse(restored.showsMetalPerformanceHUD)
+    }
+
+    func testSavedScaleModeOverridesGlobalDefault() throws {
+        let preferences = SessionFeaturePreferences(defaults: defaults)
+        preferences.setFixedDisplayScale(1.25)
+
+        let fitState = SessionCommandState(
+            endpoint: try ConnectionEndpoint(host: "fit.test"),
+            preferences: preferences,
+            scalesToFitOverride: true
+        )
+        let actualSizeState = SessionCommandState(
+            endpoint: try ConnectionEndpoint(host: "actual.test"),
+            preferences: preferences,
+            scalesToFitOverride: false
+        )
+
+        XCTAssertTrue(fitState.displayScale.scalesToFit)
+        XCTAssertEqual(actualSizeState.displayScale.fixedScale, 1)
+    }
+
+    func testSessionScaleActionsPersistOnlyNativeFitOrActualMode() throws {
+        var savedModes = [Bool]()
+        let state = SessionCommandState(
+            endpoint: try ConnectionEndpoint(host: "scale-actions.test"),
+            preferences: SessionFeaturePreferences(defaults: defaults),
+            displayScaleDidChange: { savedModes.append($0) }
+        )
+
+        state.actualSize()
+        state.zoomIn()
+        state.setScalesToFit(true)
+
+        XCTAssertEqual(savedModes, [false, false, true])
     }
 
     func testRouterTracksTheMostRecentlyActivatedSession() throws {

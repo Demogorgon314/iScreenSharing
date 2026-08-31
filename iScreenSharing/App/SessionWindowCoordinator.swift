@@ -346,12 +346,17 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         disconnectsSessionOnDisappear: Bool
     ) {
         guard let session = sessions.session(for: key.endpoint) else { return }
+        let scalesToFitOverride = connectionStore?.connection(for: key.endpoint)?.scalesToFit
         let commandState = commandStates[key.endpoint] ?? SessionCommandState(
             endpoint: key.endpoint,
             session: session,
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution,
             controlState: controlState,
+            scalesToFitOverride: scalesToFitOverride,
+            displayScaleDidChange: { [weak connectionStore] scalesToFit in
+                connectionStore?.updateScalesToFit(scalesToFit, for: key.endpoint)
+            },
             standardQualityDidChange: { [weak connectionStore] quality in
                 connectionStore?.updateStandardQuality(quality, for: key.endpoint)
             }

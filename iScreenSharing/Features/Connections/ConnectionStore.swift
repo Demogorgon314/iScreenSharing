@@ -65,6 +65,7 @@ final class ConnectionStore: ObservableObject {
         if let connection = connections.first(where: { $0.endpoint == endpoint }),
            let recentIndex = recentConnections.firstIndex(where: { $0.endpoint == endpoint }) {
             recentConnections[recentIndex].usesSharedClipboard = connection.usesSharedClipboard
+            recentConnections[recentIndex].scalesToFit = connection.scalesToFit
         }
         if let preferredUsername,
            let index = connections.firstIndex(where: { $0.endpoint == endpoint }) {
@@ -100,6 +101,21 @@ final class ConnectionStore: ObservableObject {
         )
         let recentUpdated = Self.updateUsesSharedClipboard(
             enabled,
+            for: endpoint,
+            in: &recentConnections
+        )
+        guard connectionUpdated || recentUpdated else { return }
+        persist()
+    }
+
+    func updateScalesToFit(_ scalesToFit: Bool, for endpoint: ConnectionEndpoint) {
+        let connectionUpdated = Self.updateScalesToFit(
+            scalesToFit,
+            for: endpoint,
+            in: &connections
+        )
+        let recentUpdated = Self.updateScalesToFit(
+            scalesToFit,
             for: endpoint,
             in: &recentConnections
         )
@@ -319,6 +335,17 @@ final class ConnectionStore: ObservableObject {
         guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
               connections[index].usesSharedClipboard != enabled else { return false }
         connections[index].usesSharedClipboard = enabled
+        return true
+    }
+
+    private static func updateScalesToFit(
+        _ scalesToFit: Bool,
+        for endpoint: ConnectionEndpoint,
+        in connections: inout [SavedConnection]
+    ) -> Bool {
+        guard let index = connections.firstIndex(where: { $0.endpoint == endpoint }),
+              connections[index].scalesToFit != scalesToFit else { return false }
+        connections[index].scalesToFit = scalesToFit
         return true
     }
 

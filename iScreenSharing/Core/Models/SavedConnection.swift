@@ -11,6 +11,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
     var standardQuality: StandardRFBQuality
     var virtualDisplayCount: VirtualDisplayCount
     var usesSharedClipboard: Bool?
+    var scalesToFit: Bool?
     var deviceInfo: AppleRemoteDeviceInfo?
 
     init(
@@ -23,6 +24,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         standardQuality: StandardRFBQuality = .high,
         virtualDisplayCount: VirtualDisplayCount = .one,
         usesSharedClipboard: Bool? = nil,
+        scalesToFit: Bool? = nil,
         deviceInfo: AppleRemoteDeviceInfo? = nil
     ) {
         self.id = id
@@ -34,6 +36,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         self.standardQuality = standardQuality
         self.virtualDisplayCount = virtualDisplayCount
         self.usesSharedClipboard = usesSharedClipboard
+        self.scalesToFit = scalesToFit
         self.deviceInfo = deviceInfo
     }
 
@@ -51,6 +54,7 @@ struct SavedConnection: Codable, Identifiable, Hashable, Sendable {
         virtualDisplayCount = try container.decodeIfPresent(VirtualDisplayCount.self, forKey: .virtualDisplayCount)
             ?? .one
         usesSharedClipboard = try container.decodeIfPresent(Bool.self, forKey: .usesSharedClipboard)
+        scalesToFit = try container.decodeIfPresent(Bool.self, forKey: .scalesToFit)
         deviceInfo = try container.decodeIfPresent(AppleRemoteDeviceInfo.self, forKey: .deviceInfo)
     }
 }

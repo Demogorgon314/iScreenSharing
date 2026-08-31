@@ -35,6 +35,7 @@ final class SessionCommandState: ObservableObject {
     private let supportsCopyPaste: Bool
     private let supportsSharedClipboard: Bool
     private weak var standardVideoStream: StandardRFBVideoStream?
+    private let displayScaleDidChange: @MainActor (Bool) -> Void
     private let standardQualityDidChange: @MainActor (StandardRFBQuality) -> Void
     private var standardQualityTask: Task<Void, Never>?
     private var subscriptions = Set<AnyCancellable>()
@@ -46,6 +47,8 @@ final class SessionCommandState: ObservableObject {
         dynamicResolution: AppleDynamicResolutionModel? = nil,
         controlState: AppleSessionControlState? = nil,
         preferences: SessionFeaturePreferences = SessionFeaturePreferences(),
+        scalesToFitOverride: Bool? = nil,
+        displayScaleDidChange: @escaping @MainActor (Bool) -> Void = { _ in },
         standardQualityDidChange: @escaping @MainActor (StandardRFBQuality) -> Void = { _ in }
     ) {
         self.endpoint = endpoint
@@ -54,6 +57,7 @@ final class SessionCommandState: ObservableObject {
         self.displayLayout = displayLayout
         self.dynamicResolution = dynamicResolution
         self.controlState = controlState
+        self.displayScaleDidChange = displayScaleDidChange
         self.standardQualityDidChange = standardQualityDidChange
         keyboardInputSource = session?.keyboardInputSourceService
         clipboardService = session?.clipboardService
@@ -61,9 +65,15 @@ final class SessionCommandState: ObservableObject {
         supportsCopyPaste = session?.serverInfo.supportsCopyPaste ?? false
         supportsSharedClipboard = session?.serverInfo.supportsSharedPasteboard ?? false
 
-        displayScale = AppleVideoDisplayScale(
-            fixedScale: preferences.fixedDisplayScale.map { CGFloat($0) }
-        )
+        if let scalesToFitOverride {
+            displayScale = AppleVideoDisplayScale(
+                fixedScale: scalesToFitOverride ? nil : 1
+            )
+        } else {
+            displayScale = AppleVideoDisplayScale(
+                fixedScale: preferences.fixedDisplayScale.map { CGFloat($0) }
+            )
+        }
         synchronizesVideoPresentation = preferences.synchronizesVideoPresentation
         showsVideoPerformanceOverlay = preferences.showsVideoPerformanceOverlay
         videoPerformanceLevel = preferences.videoPerformanceLevel
@@ -115,7 +125,7 @@ final class SessionCommandState: ObservableObject {
     func setDisplayScale(_ scale: AppleVideoDisplayScale) {
         guard scale != displayScale else { return }
         displayScale = scale
-        preferences.setFixedDisplayScale(scale.fixedScale.map(Double.init))
+        displayScaleDidChange(scale.scalesToFit)
     }
 
     func setScalesToFit(_ scalesToFit: Bool) {
