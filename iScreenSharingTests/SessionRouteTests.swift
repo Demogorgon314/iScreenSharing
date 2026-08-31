@@ -63,6 +63,39 @@ final class SessionRouteTests: XCTestCase {
         }
     }
 
+    func testServerInitReaderAcceptsNativeNameLengthBoundaries() async throws {
+        for nameLength in [0, RFBAuthenticationService.maximumServerNameLength] {
+            let name = Data(repeating: 0x61, count: nameLength)
+            let transport = RecordingRouteTransport(receivePackets: [
+                serverInitHeader(nameLength: nameLength),
+                name,
+            ])
+
+            let serverInfo = try await RFBAuthenticationService.receiveServerInfo(on: transport)
+
+            XCTAssertEqual(serverInfo.name, String(repeating: "a", count: nameLength))
+            XCTAssertEqual(transport.remainingReceivePacketCount, 0)
+        }
+    }
+
+    func testServerInitReaderRejectsOversizedNameBeforeReadingBody() async {
+        let nameLength = RFBAuthenticationService.maximumServerNameLength + 1
+        let transport = RecordingRouteTransport(receivePackets: [
+            serverInitHeader(nameLength: nameLength),
+            Data(repeating: 0x61, count: nameLength),
+        ])
+
+        do {
+            _ = try await RFBAuthenticationService.receiveServerInfo(on: transport)
+            XCTFail("Expected oversized ServerInit name to fail")
+        } catch let error as RFBAuthenticationError {
+            XCTAssertEqual(error, .serverNameTooLong)
+            XCTAssertEqual(transport.remainingReceivePacketCount, 1)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testRSA1PrivateResponseReadsZeroLengthSuccessEnvelope() async throws {
         let transport = RecordingRouteTransport(receivePackets: [
             Data(repeating: 0, count: 4),
@@ -273,6 +306,19 @@ final class SessionRouteTests: XCTestCase {
             remoteAddress: try ResolvedRemoteAddress(numericHost: host, port: 5900),
             sharingType: .standard
         ) { _, _ in RecordingMediaReceiver() }
+    }
+
+    private func serverInitHeader(nameLength: Int) -> Data {
+        var header = Data([0, 1, 0, 1])
+        header.append(Data(repeating: 0, count: 16))
+        let length = UInt32(nameLength)
+        header.append(contentsOf: [
+            UInt8(truncatingIfNeeded: length >> 24),
+            UInt8(truncatingIfNeeded: length >> 16),
+            UInt8(truncatingIfNeeded: length >> 8),
+            UInt8(truncatingIfNeeded: length),
+        ])
+        return header
     }
 }
 

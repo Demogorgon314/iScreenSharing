@@ -25,7 +25,7 @@ enum RFBAuthenticationError: LocalizedError, Equatable {
 
 struct RFBAuthenticationService: RFBAuthenticating {
     private static let maximumPublicKeyPacketLength = 64 * 1024
-    static let maximumServerNameLength = 1024 * 1024
+    static let maximumServerNameLength = 1024
     private let routeOpener: any SessionRouteOpening
 
     init(
@@ -151,6 +151,10 @@ struct RFBAuthenticationService: RFBAuthenticating {
         try await transport.send(
             sharingType == .standard ? StandardRFBMessages.clientInit : Data([0xc1])
         )
+        return try await Self.receiveServerInfo(on: transport)
+    }
+
+    static func receiveServerInfo(on transport: any RFBTransport) async throws -> RFBServerInfo {
         let header = try await transport.receiveExactly(24)
         let nameLength = try Int(header.uint32BE(at: 20))
         try Self.validateServerNameLength(nameLength)
