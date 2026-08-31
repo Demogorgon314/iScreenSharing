@@ -2,6 +2,8 @@ import Foundation
 import enum ScreenSharingProtocol.AppleRSA1
 import enum ScreenSharingProtocol.AppleRSA1Error
 import struct ScreenSharingProtocol.AppleMediaPorts
+import enum ScreenSharingProtocol.RFBServerInitError
+import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
 @testable import iScreenSharing
 
@@ -93,6 +95,26 @@ final class SessionRouteTests: XCTestCase {
             XCTAssertEqual(transport.remainingReceivePacketCount, 1)
         } catch {
             XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testServerInitReaderRejectsOversizedDimensionsBeforeReadingName() async {
+        let oversized = RFBServerInfo.maximumFramebufferDimension + 1
+        for (width, height) in [(oversized, 1), (1, oversized)] {
+            let transport = RecordingRouteTransport(receivePackets: [
+                serverInitHeader(width: width, height: height, nameLength: 1),
+                Data([0x61]),
+            ])
+
+            do {
+                _ = try await RFBAuthenticationService.receiveServerInfo(on: transport)
+                XCTFail("Expected oversized ServerInit dimensions to fail")
+            } catch let error as RFBServerInitError {
+                XCTAssertEqual(error, .invalidDimensions)
+                XCTAssertEqual(transport.remainingReceivePacketCount, 1)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
         }
     }
 
@@ -365,8 +387,17 @@ final class SessionRouteTests: XCTestCase {
         ) { _, _ in RecordingMediaReceiver() }
     }
 
-    private func serverInitHeader(nameLength: Int) -> Data {
-        var header = Data([0, 1, 0, 1])
+    private func serverInitHeader(
+        width: UInt16 = 1,
+        height: UInt16 = 1,
+        nameLength: Int
+    ) -> Data {
+        var header = Data([
+            UInt8(truncatingIfNeeded: width >> 8),
+            UInt8(truncatingIfNeeded: width),
+            UInt8(truncatingIfNeeded: height >> 8),
+            UInt8(truncatingIfNeeded: height),
+        ])
         header.append(Data(repeating: 0, count: 16))
         let length = UInt32(nameLength)
         header.append(contentsOf: [

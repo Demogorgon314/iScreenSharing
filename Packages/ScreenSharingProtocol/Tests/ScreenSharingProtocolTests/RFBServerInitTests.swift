@@ -97,6 +97,33 @@ final class RFBServerInitTests: XCTestCase {
         }
     }
 
+    func testAcceptsNativeMaximumFramebufferDimensions() throws {
+        let maximum = RFBServerInfo.maximumFramebufferDimension
+        let header = makeHeader(width: maximum, height: maximum, nameLength: 0)
+
+        let info = try RFBServerInfo.parse(header: header, nameData: Data())
+
+        XCTAssertEqual(info.width, maximum)
+        XCTAssertEqual(info.height, maximum)
+    }
+
+    func testRejectsFramebufferDimensionsAboveNativeMaximum() {
+        let oversized = RFBServerInfo.maximumFramebufferDimension + 1
+        for (width, height) in [
+            (oversized, 1),
+            (1, oversized),
+            (UInt16.max, UInt16.max),
+        ] {
+            let header = makeHeader(width: width, height: height, nameLength: 0)
+
+            XCTAssertThrowsError(
+                try RFBServerInfo.parse(header: header, nameData: Data())
+            ) { error in
+                XCTAssertEqual(error as? RFBServerInitError, .invalidDimensions)
+            }
+        }
+    }
+
     func testCommandCapabilitiesRejectMalformedBitmap() {
         let info = makeServerInfo(commands: Data(repeating: 0xff, count: 15))
 

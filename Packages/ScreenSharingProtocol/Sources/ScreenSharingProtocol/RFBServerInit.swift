@@ -2,6 +2,9 @@ import Foundation
 
 /// The display metadata and advertised server-command capabilities from ServerInit.
 public struct RFBServerInfo: Equatable, Sendable {
+    /// Largest framebuffer width or height accepted by the native RFB client.
+    public static let maximumFramebufferDimension: UInt16 = 60_000
+
     public let width: UInt16
     public let height: UInt16
     public let pixelFormat: Data
@@ -45,6 +48,19 @@ public struct RFBServerInfo: Equatable, Sendable {
         supportsCopyPaste && supportsServerCommand(21)
     }
 
+    /// Rejects dimensions outside the framebuffer range accepted during ServerInit.
+    public static func validateFramebufferDimensions(
+        width: UInt16,
+        height: UInt16
+    ) throws {
+        guard width > 0,
+              height > 0,
+              width <= maximumFramebufferDimension,
+              height <= maximumFramebufferDimension else {
+            throw RFBServerInitError.invalidDimensions
+        }
+    }
+
     public static func parse(header: Data, nameData: Data) throws -> Self {
         guard header.count == 24,
               let rawNameLength = BigEndianWire.uint32(from: header, at: 20),
@@ -54,9 +70,7 @@ public struct RFBServerInfo: Equatable, Sendable {
               let height = BigEndianWire.uint16(from: header, at: 2) else {
             throw RFBServerInitError.invalidMessage
         }
-        guard width > 0, height > 0 else {
-            throw RFBServerInitError.invalidDimensions
-        }
+        try validateFramebufferDimensions(width: width, height: height)
 
         let enhanced: (flags: UInt32?, commands: Data?, name: Data)
         if nameData.count >= 2,

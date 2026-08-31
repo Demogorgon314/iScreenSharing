@@ -162,6 +162,9 @@ struct RFBAuthenticationService: RFBAuthenticating {
 
     static func receiveServerInfo(on transport: any RFBTransport) async throws -> RFBServerInfo {
         let header = try await transport.receiveExactly(24)
+        let width = try header.uint16BE(at: 0)
+        let height = try header.uint16BE(at: 2)
+        try RFBServerInfo.validateFramebufferDimensions(width: width, height: height)
         let nameLength = try Int(header.uint32BE(at: 20))
         try Self.validateServerNameLength(nameLength)
         let name = try await transport.receiveExactly(nameLength)
