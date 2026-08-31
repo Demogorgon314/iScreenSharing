@@ -24,7 +24,7 @@ enum RFBAuthenticationError: LocalizedError, Equatable {
 }
 
 struct RFBAuthenticationService: RFBAuthenticating {
-    private static let maximumPublicKeyPacketLength = 64 * 1024
+    static let maximumPublicKeyResponseLength = 0x7fff
     static let maximumServerNameLength = 1024
     private let routeOpener: any SessionRouteOpening
 
@@ -95,13 +95,7 @@ struct RFBAuthenticationService: RFBAuthenticating {
         transport: any RFBTransport
     ) async throws -> Data {
         try await transport.send(AppleRSA1.publicKeyRequest)
-        let packetLengthData = try await transport.receiveExactly(4)
-        let packetLength = try Int(packetLengthData.uint32BE(at: 0))
-        guard packetLength > 0, packetLength <= Self.maximumPublicKeyPacketLength else {
-            throw AppleRSA1Error.invalidPublicKeyResponse
-        }
-        let packet = try await transport.receiveExactly(packetLength)
-        let subjectPublicKeyInfo = try AppleRSA1.parsePublicKeyResponse(packet)
+        let subjectPublicKeyInfo = try await Self.receiveRSA1PublicKeyResponse(on: transport)
         let publicKey = try Cryptography.makeRSAPublicKey(subjectPublicKeyInfo: subjectPublicKeyInfo)
 
         let masterKey = try Cryptography.randomBytes(count: 16)
@@ -121,6 +115,18 @@ struct RFBAuthenticationService: RFBAuthenticating {
         try await Self.receiveRSA1PrivateResponse(on: transport)
         try AppleRSA1.parseSecurityResult(try await transport.receiveExactly(4))
         return masterKey
+    }
+
+    static func receiveRSA1PublicKeyResponse(
+        on transport: any RFBTransport
+    ) async throws -> Data {
+        let packetLengthData = try await transport.receiveExactly(4)
+        let packetLength = try Int(packetLengthData.uint32BE(at: 0))
+        guard packetLength <= Self.maximumPublicKeyResponseLength else {
+            throw AppleRSA1Error.invalidPublicKeyResponse
+        }
+        let packet = try await transport.receiveExactly(packetLength)
+        return try AppleRSA1.parsePublicKeyResponse(packet)
     }
 
     static func receiveRSA1PrivateResponse(

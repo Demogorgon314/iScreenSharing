@@ -96,6 +96,63 @@ final class SessionRouteTests: XCTestCase {
         }
     }
 
+    func testRSA1PublicKeyResponseAcceptsNativeMaximumLength() async throws {
+        var body = Data([1, 0, 0, 0, 0, 1, 0xaa])
+        body.append(Data(
+            repeating: 0,
+            count: RFBAuthenticationService.maximumPublicKeyResponseLength - body.count
+        ))
+        let transport = RecordingRouteTransport(receivePackets: [
+            uint32BE(RFBAuthenticationService.maximumPublicKeyResponseLength),
+            body,
+        ])
+
+        let publicKey = try await RFBAuthenticationService.receiveRSA1PublicKeyResponse(
+            on: transport
+        )
+
+        XCTAssertEqual(publicKey, Data([0xaa]))
+        XCTAssertEqual(transport.remainingReceivePacketCount, 0)
+    }
+
+    func testRSA1PublicKeyResponseRejectsOversizedLengthBeforeReadingBody() async {
+        for length in [0x8000, 0x10000] {
+            let transport = RecordingRouteTransport(receivePackets: [
+                uint32BE(length),
+                Data(repeating: 0, count: length),
+            ])
+
+            do {
+                _ = try await RFBAuthenticationService.receiveRSA1PublicKeyResponse(on: transport)
+                XCTFail("Expected public-key response length \(length) to fail")
+            } catch let error as AppleRSA1Error {
+                XCTAssertEqual(error, .invalidPublicKeyResponse)
+                XCTAssertEqual(transport.remainingReceivePacketCount, 1)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRSA1PublicKeyResponseRejectsShortBodyAfterReadingIt() async {
+        for length in 0...5 {
+            let transport = RecordingRouteTransport(receivePackets: [
+                uint32BE(length),
+                Data(repeating: 0, count: length),
+            ])
+
+            do {
+                _ = try await RFBAuthenticationService.receiveRSA1PublicKeyResponse(on: transport)
+                XCTFail("Expected public-key response length \(length) to fail")
+            } catch let error as AppleRSA1Error {
+                XCTAssertEqual(error, .invalidPublicKeyResponse)
+                XCTAssertEqual(transport.remainingReceivePacketCount, 0)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     func testRSA1PrivateResponseReadsZeroLengthSuccessEnvelope() async throws {
         let transport = RecordingRouteTransport(receivePackets: [
             Data(repeating: 0, count: 4),
@@ -319,6 +376,16 @@ final class SessionRouteTests: XCTestCase {
             UInt8(truncatingIfNeeded: length),
         ])
         return header
+    }
+
+    private func uint32BE(_ value: Int) -> Data {
+        let value = UInt32(value)
+        return Data([
+            UInt8(truncatingIfNeeded: value >> 24),
+            UInt8(truncatingIfNeeded: value >> 16),
+            UInt8(truncatingIfNeeded: value >> 8),
+            UInt8(truncatingIfNeeded: value),
+        ])
     }
 }
 
