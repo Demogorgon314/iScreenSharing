@@ -1,4 +1,6 @@
 import Foundation
+import enum ScreenSharingProtocol.AppleRSA1
+import enum ScreenSharingProtocol.AppleRSA1Error
 import struct ScreenSharingProtocol.AppleMediaPorts
 import XCTest
 @testable import iScreenSharing
@@ -58,6 +60,95 @@ final class SessionRouteTests: XCTestCase {
             RFBAuthenticationService.maximumServerNameLength + 1
         )) {
             XCTAssertEqual($0 as? RFBAuthenticationError, .serverNameTooLong)
+        }
+    }
+
+    func testRSA1PrivateResponseReadsZeroLengthSuccessEnvelope() async throws {
+        let transport = RecordingRouteTransport(receivePackets: [
+            Data(repeating: 0, count: 4),
+            Data(repeating: 0, count: 4),
+        ])
+
+        try await RFBAuthenticationService.receiveRSA1PrivateResponse(on: transport)
+        XCTAssertEqual(transport.remainingReceivePacketCount, 1)
+    }
+
+    func testRSA1PrivateResponseAllowsUnknownTypeLikeNativeRSAPlainPath() async throws {
+        let transport = RecordingRouteTransport(receivePackets: [
+            Data([0, 0, 0, 6]),
+            Data([1, 0, 0, 2, 0, 0]),
+        ])
+
+        try await RFBAuthenticationService.receiveRSA1PrivateResponse(on: transport)
+    }
+
+    func testRSA1PrivateResponseFailsClosedForSupportAndTrustNegotiation() async {
+        let responses: [(UInt16, AppleRSA1Error)] = [
+            (0, .serverTrustResponseUnsupported),
+            (3, .authenticationSupportResponseUnsupported),
+        ]
+
+        for (responseType, expectedError) in responses {
+            let transport = RecordingRouteTransport(receivePackets: [
+                Data([0, 0, 0, 6]),
+                Data([
+                    1, 0,
+                    UInt8(responseType >> 8), UInt8(responseType & 0xff),
+                    0, 0,
+                ]),
+                Data(repeating: 0, count: 4),
+            ])
+            do {
+                try await RFBAuthenticationService.receiveRSA1PrivateResponse(on: transport)
+                XCTFail("Expected private response type \(responseType) to fail closed")
+            } catch let error as AppleRSA1Error {
+                XCTAssertEqual(error, expectedError)
+                XCTAssertEqual(transport.remainingReceivePacketCount, 1)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRSA1PrivateResponseAcceptsMaximumLength() async throws {
+        var body = Data(repeating: 0xff, count: AppleRSA1.maximumPrivateResponseLength)
+        body[2] = 0
+        body[3] = 2
+        body[4] = 0
+        body[5] = 0
+        let transport = RecordingRouteTransport(receivePackets: [
+            Data([0, 0, 0x7f, 0xff]),
+            body,
+        ])
+
+        try await RFBAuthenticationService.receiveRSA1PrivateResponse(on: transport)
+    }
+
+    func testRSA1PrivateResponseRejectsOversizedLengthBeforeReadingBody() async {
+        let transport = RecordingRouteTransport(receivePackets: [Data([0, 0, 0x80, 0])])
+
+        do {
+            try await RFBAuthenticationService.receiveRSA1PrivateResponse(on: transport)
+            XCTFail("Expected oversized private response to fail")
+        } catch let error as AppleRSA1Error {
+            XCTAssertEqual(error, .privateAuthenticationResponseTooLarge)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testRSA1PrivateResponseRejectsTruncatedBody() async {
+        let transport = RecordingRouteTransport(receivePackets: [
+            Data([0, 0, 0, 6]),
+            Data([1, 0, 0, 2, 0]),
+        ])
+
+        do {
+            try await RFBAuthenticationService.receiveRSA1PrivateResponse(on: transport)
+            XCTFail("Expected truncated private response to fail")
+        } catch RouteTestError.invalidRead {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
         }
     }
 
@@ -251,6 +342,9 @@ private final class RecordingRouteTransport: RFBTransport, @unchecked Sendable {
 
     var startCount: Int { lock.withRouteTestLock { starts } }
     var cancelCount: Int { lock.withRouteTestLock { cancellations } }
+    var remainingReceivePacketCount: Int? {
+        lock.withRouteTestLock { receivePackets?.count }
+    }
 
     func start(timeout: Duration) async throws {
         lock.withRouteTestLock { starts += 1 }

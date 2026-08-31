@@ -102,4 +102,43 @@ final class AppleRSA1Tests: XCTestCase {
             XCTAssertEqual(error as? AppleRSA1Error, .authenticationRejected(1))
         }
     }
+
+    func testClassifiesPrivateAuthenticationResponseTypes() throws {
+        XCTAssertNil(try AppleRSA1.privateAuthenticationResponseType(Data()))
+        XCTAssertEqual(
+            try AppleRSA1.privateAuthenticationResponseType(Data([1, 0, 0, 3, 0, 0])),
+            3
+        )
+        XCTAssertEqual(
+            try AppleRSA1.privateAuthenticationResponseType(
+                Data([1, 0, 0x12, 0x34, 0, 1, 0xff])
+            ),
+            0x1234
+        )
+    }
+
+    func testRejectsTruncatedOrOversizedPrivateAuthenticationResponsePayload() {
+        for length in 1...5 {
+            XCTAssertThrowsError(
+                try AppleRSA1.privateAuthenticationResponseType(
+                    Data(repeating: 0, count: length)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? AppleRSA1Error,
+                    .invalidPrivateAuthenticationResponse
+                )
+            }
+        }
+        XCTAssertThrowsError(
+            try AppleRSA1.privateAuthenticationResponseType(
+                Data([1, 0, 0, 3, 0, 2, 0xff])
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? AppleRSA1Error,
+                .invalidPrivateAuthenticationResponse
+            )
+        }
+    }
 }

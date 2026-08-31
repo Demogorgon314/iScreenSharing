@@ -118,9 +118,30 @@ struct RFBAuthenticationService: RFBAuthenticating {
         )
         try await transport.send(request)
 
-        _ = try await transport.receiveExactly(4)
+        try await Self.receiveRSA1PrivateResponse(on: transport)
         try AppleRSA1.parseSecurityResult(try await transport.receiveExactly(4))
         return masterKey
+    }
+
+    static func receiveRSA1PrivateResponse(
+        on transport: any RFBTransport
+    ) async throws {
+        let lengthData = try await transport.receiveExactly(4)
+        let length = try Int(lengthData.uint32BE(at: 0))
+        guard length <= AppleRSA1.maximumPrivateResponseLength else {
+            throw AppleRSA1Error.privateAuthenticationResponseTooLarge
+        }
+        let body = length == 0 ? Data() : try await transport.receiveExactly(length)
+        // Native routes types 0 and 3 to host-key and support-list state outside
+        // the RSA-plain exchange, while unknown types fall through to SecurityResult.
+        switch try AppleRSA1.privateAuthenticationResponseType(body) {
+        case 0:
+            throw AppleRSA1Error.serverTrustResponseUnsupported
+        case 3:
+            throw AppleRSA1Error.authenticationSupportResponseUnsupported
+        default:
+            return
+        }
     }
 
     private func initializeSession(

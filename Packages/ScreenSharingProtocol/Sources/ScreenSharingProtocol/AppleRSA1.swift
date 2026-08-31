@@ -3,6 +3,8 @@ import Foundation
 /// Apple RSA1 authentication messages used by high-performance Screen Sharing.
 public enum AppleRSA1 {
     public static let credentialFieldLength = 64
+    /// Largest private response body accepted by the native RSA-plain path.
+    public static let maximumPrivateResponseLength = 0x7fff
     public static let publicKeyRequest = Data([
         0x21,
         0x00, 0x00, 0x00, 0x0a,
@@ -65,6 +67,19 @@ public enum AppleRSA1 {
         }
     }
 
+    /// Returns the response type stored in the private body header, or `nil` for
+    /// the empty success envelope that precedes the standard RFB SecurityResult.
+    public static func privateAuthenticationResponseType(_ body: Data) throws -> UInt16? {
+        guard !body.isEmpty else { return nil }
+        guard body.count >= 6,
+              let responseType = BigEndianWire.uint16(from: body, at: 2),
+              let payloadLength = BigEndianWire.uint16(from: body, at: 4),
+              Int(payloadLength) <= body.count - 6 else {
+            throw AppleRSA1Error.invalidPrivateAuthenticationResponse
+        }
+        return responseType
+    }
+
     private static func credentialField(
         _ value: String,
         randomBytes: (Int) throws -> Data
@@ -90,6 +105,10 @@ public enum AppleRSA1Error: LocalizedError, Equatable {
     case credentialTooLong
     case invalidRandomPadding
     case invalidEncryptedPayload
+    case privateAuthenticationResponseTooLarge
+    case invalidPrivateAuthenticationResponse
+    case authenticationSupportResponseUnsupported
+    case serverTrustResponseUnsupported
     case invalidSecurityResult
     case authenticationRejected(UInt32)
 
@@ -101,6 +120,12 @@ public enum AppleRSA1Error: LocalizedError, Equatable {
             "The account name or password is too long."
         case .invalidRandomPadding, .invalidEncryptedPayload:
             "Couldn’t prepare the encrypted credentials."
+        case .privateAuthenticationResponseTooLarge, .invalidPrivateAuthenticationResponse:
+            "The Mac returned an invalid private authentication response."
+        case .authenticationSupportResponseUnsupported:
+            "The Mac requested an unsupported authentication negotiation."
+        case .serverTrustResponseUnsupported:
+            "The Mac requested a server identity confirmation that isn’t supported yet."
         case .invalidSecurityResult:
             "The Mac returned an invalid authentication result."
         case .authenticationRejected:
