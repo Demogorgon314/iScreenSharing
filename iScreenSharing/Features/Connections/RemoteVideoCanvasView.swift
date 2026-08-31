@@ -164,12 +164,13 @@ final class RemoteVideoCanvasNSView: NSView {
         enum Outcome {
             case active
             case concluded
-            case cancelled
         }
 
         let identifier: UUID
+        let draggingSequenceNumber: Int
         let fileURLs: [URL]
         var sessionID: UInt32?
+        let initialPoint: (x: Int, y: Int)
         var latestPoint: (x: Int, y: Int)
         var outcome: Outcome
     }
@@ -247,6 +248,8 @@ final class RemoteVideoCanvasNSView: NSView {
     private var lastRemotePoint: (x: Int, y: Int)?
     private var activeModifiers = [UInt16: ActiveModifier]()
     private var inputTask: Task<Void, Never>?
+    private var fileDragMoveTask: Task<Void, Never>?
+    private var pendingFileDragMove: (x: Int, y: Int)?
     private var fileDragTask: Task<Void, Never>?
     private var localFileDrag: LocalFileDrag?
     private weak var remoteDraggingSession: NSDraggingSession?
@@ -548,16 +551,30 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
         guard input != nil, let fileTransfer,
-              localFileDrag == nil,
-              let fileURLs = draggedFileURLs(from: sender),
               let point = remotePoint(forDraggingLocation: sender.draggingLocation) else {
             return []
         }
+        if var drag = localFileDrag {
+            if drag.draggingSequenceNumber != sender.draggingSequenceNumber {
+                cancelLocalFileDrag()
+            } else {
+                let pointChanged = point.x != drag.latestPoint.x || point.y != drag.latestPoint.y
+                drag.latestPoint = point
+                localFileDrag = drag
+                if drag.sessionID != nil, pointChanged {
+                    sendDraggedPointer(buttons: AppleInputController.leftButton, point: point)
+                }
+                return .copy
+            }
+        }
+        guard let fileURLs = draggedFileURLs(from: sender) else { return [] }
         let identifier = UUID()
         localFileDrag = LocalFileDrag(
             identifier: identifier,
+            draggingSequenceNumber: sender.draggingSequenceNumber,
             fileURLs: fileURLs,
             sessionID: nil,
+            initialPoint: point,
             latestPoint: point,
             outcome: .active
         )
@@ -573,12 +590,22 @@ final class RemoteVideoCanvasNSView: NSView {
                 localFileDrag = drag
                 switch drag.outcome {
                 case .active:
-                    sendDraggedPointer(buttons: AppleInputController.leftButton, point: drag.latestPoint)
+                    sendDraggedPointer(
+                        buttons: AppleInputController.leftButton,
+                        point: drag.initialPoint
+                    )
+                    if drag.latestPoint.x != drag.initialPoint.x
+                            || drag.latestPoint.y != drag.initialPoint.y {
+                        sendDraggedPointer(
+                            buttons: AppleInputController.leftButton,
+                            point: drag.latestPoint
+                        )
+                    }
                 case .concluded:
-                    sendDraggedPointer(buttons: 0, point: drag.latestPoint)
-                    localFileDrag = nil
-                case .cancelled:
-                    await fileTransfer.cancelDrop(sessionID: sessionID)
+                    sendDraggedPointer(
+                        buttons: AppleInputController.leftButton,
+                        point: drag.initialPoint
+                    )
                     sendDraggedPointer(buttons: 0, point: drag.latestPoint)
                     localFileDrag = nil
                 }
@@ -593,27 +620,22 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        guard var drag = localFileDrag,
-              let point = remotePoint(forDraggingLocation: sender.draggingLocation) else {
-            return []
-        }
+        guard var drag = localFileDrag else { return [] }
+        guard let point = remotePoint(forDraggingLocation: sender.draggingLocation) else { return [] }
+        let pointChanged = point.x != drag.latestPoint.x || point.y != drag.latestPoint.y
         drag.latestPoint = point
         localFileDrag = drag
-        if drag.sessionID != nil {
+        if drag.sessionID != nil, pointChanged {
             sendDraggedPointer(buttons: AppleInputController.leftButton, point: point)
         }
         return .copy
     }
 
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
-        guard var drag = localFileDrag else { return }
-        drag.outcome = .cancelled
-        localFileDrag = drag
-        if let sessionID = drag.sessionID, let fileTransfer {
-            Task { await fileTransfer.cancelDrop(sessionID: sessionID) }
-            sendDraggedPointer(buttons: 0, point: drag.latestPoint)
-            localFileDrag = nil
-        }
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        guard let drag = localFileDrag,
+              drag.draggingSequenceNumber == sender.draggingSequenceNumber,
+              case .active = drag.outcome else { return }
+        cancelLocalFileDrag()
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
@@ -799,6 +821,10 @@ final class RemoteVideoCanvasNSView: NSView {
         guard let input else { return }
         lastRemotePoint = point
         let displayID = inputDisplayID
+        if buttons == AppleInputController.leftButton {
+            enqueueFileDragMove(input: input, point: point, displayID: displayID)
+            return
+        }
         enqueueInput {
             await input.fileDragPointer(
                 buttons: buttons,
@@ -807,6 +833,44 @@ final class RemoteVideoCanvasNSView: NSView {
                 displayID: displayID
             )
         }
+    }
+
+    private func enqueueFileDragMove(
+        input: AppleInputController,
+        point: (x: Int, y: Int),
+        displayID: UInt32?
+    ) {
+        guard fileDragMoveTask == nil else {
+            pendingFileDragMove = point
+            return
+        }
+        let previous = inputTask
+        let task = Task { @MainActor [weak self] in
+            _ = await previous?.value
+            guard let self else { return }
+            defer { fileDragMoveTask = nil }
+            guard !Task.isCancelled else {
+                pendingFileDragMove = nil
+                return
+            }
+            await input.fileDragPointer(
+                buttons: AppleInputController.leftButton,
+                x: point.x,
+                y: point.y,
+                displayID: displayID
+            )
+            while !Task.isCancelled, let latestPoint = pendingFileDragMove {
+                pendingFileDragMove = nil
+                await input.fileDragPointer(
+                    buttons: AppleInputController.leftButton,
+                    x: latestPoint.x,
+                    y: latestPoint.y,
+                    displayID: displayID
+                )
+            }
+        }
+        fileDragMoveTask = task
+        inputTask = task
     }
 
     private func draggedFileURLs(from sender: any NSDraggingInfo) -> [URL]? {
