@@ -72,22 +72,10 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         pipeline.close()
     }
 
-    func testSynchronousDecodeFailureKeepsSubmittingWithoutReplacingDecoder() throws {
-        let harness = try makeHarness()
-        harness.decoder.nextError = AppleHEVCDecoderError.decodeFailed(-12909)
-
-        harness.pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 10)])
-        harness.pipeline.submit([accessUnit(source: 200, timestamp: 2, order: 11)])
-
-        XCTAssertEqual(harness.decoder.submissions.map(\.order), [10, 11])
-        XCTAssertEqual(harness.decoderFactoryCount, 1)
-        XCTAssertFalse(harness.decoder.isClosed)
-    }
-
-    func testSynchronousReferenceMissingKeepsSubmittingToStableDecoder() throws {
+    func testSynchronousBadDataRequestsRefreshAndKeepsSubmittingWithoutReplacingDecoder() throws {
         let harness = try makeHarness()
         harness.decoder.nextError = AppleHEVCDecoderError.decodeFailed(
-            kVTVideoDecoderReferenceMissingErr
+            kVTVideoDecoderBadDataErr
         )
 
         harness.pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 10)])
@@ -99,13 +87,53 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         XCTAssertFalse(harness.decoder.isClosed)
     }
 
-    func testRecoverableReferenceMissingFailureKeepsSubmittingToStableDecoder() throws {
+    func testNativeSynchronousRefreshClassifierUsesOnlyRawVCPStatuses() {
+        for status in [
+            kVTVideoDecoderReferenceMissingErr,
+            kVTVideoDecoderBadDataErr,
+            OSStatus(-8969),
+            OSStatus(-100),
+        ] {
+            XCTAssertTrue(
+                AppleHEVCDecodePipeline.nativeSynchronousStatusRequestsRefresh(status),
+                "Expected native refresh classification for \(status)"
+            )
+        }
+
+        for status in [
+            kVTVideoEncoderMalfunctionErr,
+            OSStatus(-1),
+            OSStatus(bitPattern: 0xA004_326D),
+        ] {
+            XCTAssertFalse(
+                AppleHEVCDecodePipeline.nativeSynchronousStatusRequestsRefresh(status),
+                "Unexpected native refresh classification for \(status)"
+            )
+        }
+    }
+
+    func testSynchronousEncoderMalfunctionDoesNotInventAnImmediateNativeRefresh() throws {
+        let harness = try makeHarness()
+        harness.decoder.nextError = AppleHEVCDecoderError.decodeFailed(
+            kVTVideoEncoderMalfunctionErr
+        )
+
+        harness.pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 10)])
+        harness.pipeline.submit([accessUnit(source: 200, timestamp: 2, order: 11)])
+
+        XCTAssertEqual(harness.decoder.submissions.map(\.order), [10, 11])
+        XCTAssertTrue(harness.refreshRequests.isEmpty)
+        XCTAssertEqual(harness.decoderFactoryCount, 1)
+        XCTAssertFalse(harness.decoder.isClosed)
+    }
+
+    func testAsynchronousBadDataRequestsRefreshAndKeepsSubmittingToStableDecoder() throws {
         let harness = try makeHarness()
         harness.pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 10)])
 
         harness.decoder.emitFailure(
             timestamp: 1,
-            status: kVTVideoDecoderReferenceMissingErr
+            status: kVTVideoDecoderBadDataErr
         )
         harness.callbackQueue.sync {}
         harness.pipeline.submit([accessUnit(source: 200, timestamp: 2, order: 11)])
@@ -116,55 +144,96 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         XCTAssertFalse(harness.decoder.isClosed)
     }
 
-    func testReferenceMissingFailuresShareOneRefreshUntilOutputRecovers() throws {
+    func testEveryAsynchronousDecoderStatusRequestsRefresh() throws {
+        let statuses = [
+            kVTVideoDecoderReferenceMissingErr,
+            kVTVideoDecoderBadDataErr,
+            kVTVideoEncoderMalfunctionErr,
+            OSStatus(-42),
+        ]
+        for (index, status) in statuses.enumerated() {
+            let harness = try makeHarness()
+            let timestamp = UInt32(index + 1)
+
+            harness.decoder.emitFailure(timestamp: timestamp, status: status)
+            harness.callbackQueue.sync {}
+
+            XCTAssertEqual(harness.refreshRequests, [timestamp])
+            XCTAssertEqual(harness.decoderFactoryCount, 1)
+            XCTAssertFalse(harness.decoder.isClosed)
+            harness.pipeline.close()
+        }
+    }
+
+    func testNonDecoderCallbackFailuresDoNotRequestRefresh() throws {
+        let harness = try makeHarness()
+
+        harness.decoder.emitFailure(
+            timestamp: 1,
+            status: noErr,
+            reason: .frameDropped
+        )
+        harness.decoder.emitFailure(
+            timestamp: 2,
+            status: noErr,
+            reason: .missingImageBuffer
+        )
+        harness.callbackQueue.sync {}
+
+        XCTAssertTrue(harness.refreshRequests.isEmpty)
+    }
+
+    func testBadDataFailuresRequestRefreshForEachNewTimestamp() throws {
         let harness = try makeHarness()
         harness.pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 10)])
 
         for timestamp in UInt32(1)...4 {
             harness.decoder.emitFailure(
                 timestamp: timestamp,
-                status: kVTVideoDecoderReferenceMissingErr
+                status: kVTVideoDecoderBadDataErr
             )
         }
         harness.callbackQueue.sync {}
         harness.pipeline.submit([accessUnit(source: 200, timestamp: 5, order: 11)])
 
         XCTAssertEqual(harness.decoder.submissions.map(\.order), [10, 11])
-        XCTAssertEqual(harness.refreshRequests, [1])
+        XCTAssertEqual(harness.refreshRequests, [1, 2, 3, 4])
+        XCTAssertEqual(
+            harness.refreshEvents.map(\.startsRefreshState),
+            [true, false, false, false]
+        )
         XCTAssertEqual(harness.decoderFactoryCount, 1)
         XCTAssertFalse(harness.decoder.isClosed)
     }
 
-    func testDuplicateReferenceMissingTimestampRequestsOneRefresh() throws {
+    func testDuplicateBadDataTimestampRequestsOneRefresh() throws {
         let harness = try makeHarness()
 
         harness.decoder.emitFailure(
             timestamp: 1,
-            status: kVTVideoDecoderReferenceMissingErr
+            status: kVTVideoDecoderBadDataErr
         )
         harness.decoder.emitFailure(
             timestamp: 1,
-            status: kVTVideoDecoderReferenceMissingErr
+            status: kVTVideoDecoderBadDataErr
         )
         harness.callbackQueue.sync {}
 
         XCTAssertEqual(harness.refreshRequests, [1])
     }
 
-    func testSuccessfulFrameAllowsALaterReferenceMissingFailureToRequestRefresh() throws {
+    func testChangedTimestampRequestsLaterRefreshWithoutWaitingForOutput() throws {
         let harness = try makeHarness()
         harness.pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 10)])
 
         harness.decoder.emitFailure(
             timestamp: 1,
-            status: kVTVideoDecoderReferenceMissingErr
+            status: kVTVideoDecoderBadDataErr
         )
-        harness.callbackQueue.sync {}
-        harness.decoder.emitFrame(timestamp: 2)
         harness.callbackQueue.sync {}
         harness.decoder.emitFailure(
             timestamp: 3,
-            status: kVTVideoDecoderReferenceMissingErr
+            status: kVTVideoDecoderBadDataErr
         )
         harness.callbackQueue.sync {}
 
@@ -440,6 +509,70 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         pipeline.close()
     }
 
+    func testDiagnosticsExposeAcceptedVideoToolboxDecodeBlockingSynchronizedOutput() throws {
+        let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.diagnostics")
+        let decoder = FakeDecoder()
+        let callbacks = CallbackStore()
+        let pipeline = try AppleHEVCDecodePipeline(
+            tileCount: sources.count,
+            sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
+            callbackQueue: callbackQueue,
+            decoderFactory: { failure, frame, longTermReference in
+                decoder.failureHandler = failure
+                decoder.frameHandler = frame
+                decoder.longTermReferenceHandler = longTermReference
+                return decoder
+            },
+            outputHandler: { callbacks.recordOutput($0) },
+            synchronizesVideoToolboxTiles: true,
+            freezeDiagnosticsEnabled: true,
+            refreshHandler: { _ in },
+            errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
+        )
+
+        pipeline.submit([
+            accessUnit(
+                source: 100,
+                timestamp: 90_000,
+                order: 10,
+                frameSequenceNumber: 42,
+                subframeBoundary: .last
+            ),
+        ])
+
+        var diagnostics = pipeline.diagnostics()
+        XCTAssertEqual(diagnostics.decoderBackend, .videoToolbox)
+        XCTAssertEqual(diagnostics.selectedAccessUnitCount, 1)
+        XCTAssertEqual(diagnostics.admittedAccessUnitCount, 1)
+        XCTAssertEqual(diagnostics.videoSliceCount, 1)
+        XCTAssertEqual(diagnostics.acceptedDecodeCount, 1)
+        XCTAssertEqual(diagnostics.rejectedDecodeCount, 0)
+        XCTAssertEqual(diagnostics.decoderCallbackCount, 0)
+        XCTAssertEqual(diagnostics.outstandingDecodeCount, 1)
+        XCTAssertEqual(diagnostics.maximumOutstandingDecodeCount, 1)
+        XCTAssertNotNil(diagnostics.lastSelectedAccessUnitAt)
+        XCTAssertNotNil(diagnostics.lastDecodeAttemptAt)
+        XCTAssertNil(diagnostics.lastDecoderCallbackAt)
+        XCTAssertEqual(diagnostics.tileSynchronization.pendingGroupCount, 1)
+        XCTAssertEqual(diagnostics.tileSynchronization.oldestFrameSequenceNumber, 42)
+        XCTAssertEqual(diagnostics.tileSynchronization.oldestSubmittedTileCount, 1)
+        XCTAssertEqual(diagnostics.tileSynchronization.oldestDecodedTileCount, 0)
+        XCTAssertTrue(diagnostics.tileSynchronization.oldestGroupIsClosed)
+        XCTAssertTrue(callbacks.outputBatches.isEmpty)
+
+        decoder.emitFrame(timestamp: 90_000, region: .tile(0), frameSequenceNumber: 42)
+        callbackQueue.sync {}
+        callbackQueue.sync {}
+
+        diagnostics = pipeline.diagnostics()
+        XCTAssertEqual(diagnostics.decoderCallbackCount, 1)
+        XCTAssertEqual(diagnostics.outstandingDecodeCount, 0)
+        XCTAssertNotNil(diagnostics.lastDecoderCallbackAt)
+        XCTAssertEqual(diagnostics.tileSynchronization, .empty)
+        XCTAssertEqual(callbacks.outputBatches.map { $0.map(\.region) }, [[.tile(0)]])
+        pipeline.close()
+    }
+
     func testCanEnableSynchronizedTilePresentationWithoutReplacingDecoder() throws {
         let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.mode-change")
         let decoder = FakeDecoder()
@@ -522,7 +655,7 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
                 return decoder
             },
             outputHandler: { _ in },
-            refreshHandler: { callbacks.recordRefresh(timestamp: $0) },
+            refreshHandler: { callbacks.recordRefresh($0) },
             errorHandler: { XCTFail("Unexpected pipeline error: \($0)") }
         )
         decoder.failureHandler = { callbacks.emitFailure($0) }
@@ -598,6 +731,7 @@ private extension AppleHEVCDecodePipelineTests {
 
         var decoderFactoryCount: Int { callbacks.decoderFactoryCount }
         var refreshRequests: [UInt32] { callbacks.refreshRequests }
+        var refreshEvents: [AppleHEVCDecodeRefreshRequest] { callbacks.refreshEvents }
     }
 
     final class CallbackStore: @unchecked Sendable {
@@ -605,7 +739,8 @@ private extension AppleHEVCDecodePipelineTests {
         private var storedFailureHandler: AppleHEVCDecoder.FailureHandler?
         private var storedFrameHandler: AppleHEVCDecoder.FrameHandler?
         private var storedDecoderFactoryCount = 0
-        private var storedRefreshRequests = [UInt32]()
+        private var storedRefreshEvents = [AppleHEVCDecodeRefreshRequest]()
+        private var storedOutputBatches = [[AppleHEVCDecoder.DecodedFrame]]()
 
         var decoderFactoryCount: Int {
             lock.lock()
@@ -616,7 +751,19 @@ private extension AppleHEVCDecodePipelineTests {
         var refreshRequests: [UInt32] {
             lock.lock()
             defer { lock.unlock() }
-            return storedRefreshRequests
+            return storedRefreshEvents.map(\.timestamp)
+        }
+
+        var refreshEvents: [AppleHEVCDecodeRefreshRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedRefreshEvents
+        }
+
+        var outputBatches: [[AppleHEVCDecoder.DecodedFrame]] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedOutputBatches
         }
 
         func install(
@@ -630,9 +777,15 @@ private extension AppleHEVCDecodePipelineTests {
             lock.unlock()
         }
 
-        func recordRefresh(timestamp: UInt32) {
+        func recordRefresh(_ request: AppleHEVCDecodeRefreshRequest) {
             lock.lock()
-            storedRefreshRequests.append(timestamp)
+            storedRefreshEvents.append(request)
+            lock.unlock()
+        }
+
+        func recordOutput(_ frames: [AppleHEVCDecoder.DecodedFrame]) {
+            lock.lock()
+            storedOutputBatches.append(frames)
             lock.unlock()
         }
 

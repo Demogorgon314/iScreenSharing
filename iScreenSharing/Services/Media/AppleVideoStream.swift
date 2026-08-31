@@ -15,6 +15,8 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     private static let sourceAdoptionStall: TimeInterval = 2
     private static let minimumAdoptionPacketsPerSource = 5
     private static let receiverReportInterval: TimeInterval = 1
+    private static let freezeDiagnosticDelay: TimeInterval = 1
+    private static let freezeDiagnosticInterval: TimeInterval = 1
     private static let initialRecovery = AppleVideoInitialRecoveryPolicy()
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
@@ -25,6 +27,7 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     private let feedback: AppleVideoFeedbackController
     private let rateControlMode: AppleVideoRateControlMode
     private let qualityDiagnosticsEnabled: Bool
+    private let freezeDiagnosticsEnabled: Bool
     private let networkQueue = DispatchQueue(
         label: "com.isharescreen.video-stream.network",
         qos: .userInteractive
@@ -62,6 +65,7 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     private var latestReceiveQueueDelayMilliseconds = 0.0
     private var lastInitialKeyFrameRequestTime: TimeInterval = 0
     private var lastStallKeyFrameRequestTime: TimeInterval = 0
+    private var lastFreezeDiagnosticTime: TimeInterval = 0
     private var refreshScheduler = AppleVideoRefreshScheduler()
     private var restartSourceSelectionPending = false
 
@@ -82,6 +86,7 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
             environmentValue: environment["ISHARESCREEN_RCTL_MODE"]
         )
         qualityDiagnosticsEnabled = environment["ISHARESCREEN_QUALITY_DIAGNOSTICS"] == "1"
+        freezeDiagnosticsEnabled = environment["ISHARESCREEN_FREEZE_DIAGNOSTICS"] == "1"
         feedback = try AppleVideoFeedbackController(
             sender: AppleVideoFeedbackSender(receiver: receiver, mediaStreamIndex: video.mediaStreamIndex),
             keyBlob: video.viewerKey,
@@ -198,6 +203,7 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
                 self.initialPacketCountBaseline.removeAll(keepingCapacity: false)
                 self.lastInitialKeyFrameRequestTime = 0
                 self.lastStallKeyFrameRequestTime = 0
+                self.lastFreezeDiagnosticTime = 0
                 self.playbackWatchdogStartTime = 0
                 self.refreshScheduler.reset()
                 self.restartSourceSelectionPending = true
@@ -470,8 +476,11 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
                         )
                     }
                 },
-                refreshHandler: { [weak self] timestamp in
-                    self?.scheduleKeyFramesForAllTiles(timestamp: timestamp)
+                refreshHandler: { [weak self] request in
+                    self?.scheduleKeyFramesForAllTiles(
+                        timestamp: request.timestamp,
+                        discardsBufferedAccessUnits: request.startsRefreshState
+                    )
                 },
                 errorHandler: { [weak self] error in self?.fail(error) }
             )
@@ -521,6 +530,12 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
             lastVideoPacketTime: lastVideoPacketTime,
             lastKeyFrameRequestTime: lastStallKeyFrameRequestTime
         )
+        logDecoderStallIfNeeded(
+            now: now,
+            lastDisplayedFrameTime: lastDisplayedFrameTime,
+            lastVideoPacketTime: lastVideoPacketTime,
+            recoveryAction: action
+        )
         switch action {
         case .none:
             return
@@ -529,6 +544,55 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
             decodePipeline?.resetDecodingOrder()
             scheduleWatchdogKeyFrameRequest()
         }
+    }
+
+    private func logDecoderStallIfNeeded(
+        now: TimeInterval,
+        lastDisplayedFrameTime: TimeInterval,
+        lastVideoPacketTime: TimeInterval,
+        recoveryAction: AppleVideoStallRecoveryPolicy.Action
+    ) {
+        guard freezeDiagnosticsEnabled else { return }
+        let displayAge = now - lastDisplayedFrameTime
+        let packetAge = now - lastVideoPacketTime
+        guard displayAge >= Self.freezeDiagnosticDelay,
+              packetAge < Self.stallRecovery.recentPacketWindow else {
+            lastFreezeDiagnosticTime = 0
+            return
+        }
+        guard lastFreezeDiagnosticTime == 0
+                || now - lastFreezeDiagnosticTime >= Self.freezeDiagnosticInterval,
+              let diagnostics = decodePipeline?.diagnostics() else { return }
+        lastFreezeDiagnosticTime = now
+
+        let backend = diagnostics.decoderBackend?.rawValue ?? "none"
+        let action = recoveryAction == .requestKeyFrames ? "requestFIR" : "observe"
+        let selectedAge = Self.diagnosticAge(
+            now: now,
+            since: diagnostics.lastSelectedAccessUnitAt
+        )
+        let attemptAge = Self.diagnosticAge(
+            now: now,
+            since: diagnostics.lastDecodeAttemptAt
+        )
+        let callbackAge = Self.diagnosticAge(
+            now: now,
+            since: diagnostics.lastDecoderCallbackAt
+        )
+        let synchronization = diagnostics.tileSynchronization
+        let oldestFrame = synchronization.oldestFrameSequenceNumber.map(String.init) ?? "none"
+
+        Self.logger.notice(
+            "[DEBUG-VTSTALL-91C7] gen=\(diagnostics.decoderGeneration) backend=\(backend, privacy: .public) action=\(action, privacy: .public) age display=\(displayAge * 1_000, format: .fixed(precision: 1))ms packet=\(packetAge * 1_000, format: .fixed(precision: 1))ms selected=\(selectedAge, privacy: .public) attempt=\(attemptAge, privacy: .public) callback=\(callbackAge, privacy: .public) admission=\(diagnostics.selectedAccessUnitCount)/\(diagnostics.admittedAccessUnitCount)/\(diagnostics.videoSliceCount) decode=\(diagnostics.acceptedDecodeCount)/\(diagnostics.rejectedDecodeCount)/\(diagnostics.decoderCallbackCount)/\(diagnostics.decoderFailureCount) outstanding=\(diagnostics.outstandingDecodeCount)/\(diagnostics.maximumOutstandingDecodeCount) sync groups=\(synchronization.pendingGroupCount) oldest=\(oldestFrame, privacy: .public) closed=\(synchronization.oldestGroupIsClosed) tiles=\(synchronization.oldestDecodedTileCount)/\(synchronization.oldestSubmittedTileCount)"
+        )
+    }
+
+    private static func diagnosticAge(
+        now: TimeInterval,
+        since timestamp: TimeInterval?
+    ) -> String {
+        guard let timestamp else { return "none" }
+        return String(format: "%.1fms", max(0, now - timestamp) * 1_000)
     }
 
     private func replaceDecoderForChangedParameterSetsIfNeeded() {
@@ -573,9 +637,14 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
         }
     }
 
-    private func scheduleKeyFramesForAllTiles(timestamp: UInt32? = nil) {
-        processor.discardBufferedAccessUnits()
-        cachedUnits.removeAll(keepingCapacity: false)
+    private func scheduleKeyFramesForAllTiles(
+        timestamp: UInt32? = nil,
+        discardsBufferedAccessUnits: Bool = true
+    ) {
+        if discardsBufferedAccessUnits {
+            processor.discardBufferedAccessUnits()
+            cachedUnits.removeAll(keepingCapacity: false)
+        }
         guard refreshScheduler.accept(
             timestamp: timestamp ?? processor.currentPlayoutTimestamp
         ) else { return }

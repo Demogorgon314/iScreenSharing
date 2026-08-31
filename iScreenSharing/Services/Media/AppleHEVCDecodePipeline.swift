@@ -23,6 +23,29 @@ protocol AppleHEVCDecodeSubmitting: AnyObject {
 
 extension AppleHEVCDecoder: AppleHEVCDecodeSubmitting {}
 
+struct AppleHEVCDecodePipelineDiagnostics: Equatable, Sendable {
+    let decoderGeneration: UInt64
+    let decoderBackend: AppleHEVCDecoder.Backend?
+    let selectedAccessUnitCount: Int
+    let admittedAccessUnitCount: Int
+    let videoSliceCount: Int
+    let acceptedDecodeCount: Int
+    let rejectedDecodeCount: Int
+    let decoderCallbackCount: Int
+    let decoderFailureCount: Int
+    let outstandingDecodeCount: Int
+    let maximumOutstandingDecodeCount: Int
+    let lastSelectedAccessUnitAt: TimeInterval?
+    let lastDecodeAttemptAt: TimeInterval?
+    let lastDecoderCallbackAt: TimeInterval?
+    let tileSynchronization: AppleVideoTileFrameSynchronizer.Diagnostics
+}
+
+struct AppleHEVCDecodeRefreshRequest: Equatable, Sendable {
+    let timestamp: UInt32
+    let startsRefreshState: Bool
+}
+
 /// Owns DON admission, playout time, and a stable decoder session for one
 /// negotiated high-performance video stream.
 final class AppleHEVCDecodePipeline: @unchecked Sendable {
@@ -39,7 +62,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
 
     typealias OutputHandler = @Sendable ([AppleHEVCDecoder.DecodedFrame]) -> Void
     typealias LongTermReferenceHandler = @Sendable (UInt16) -> Void
-    typealias RefreshHandler = @Sendable (UInt32) -> Void
+    typealias RefreshHandler = @Sendable (AppleHEVCDecodeRefreshRequest) -> Void
     typealias ErrorHandler = @Sendable (Error) -> Void
 
     private final class CallbackBridge: @unchecked Sendable {
@@ -108,12 +131,22 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
     private var admission = AppleHEVCDecodingOrderQueue()
     private var playoutClock = AppleVideoPlayoutClock()
     private var lastRefreshRequestTimestamp: UInt32?
-    private var tilesAwaitingRefresh = Set<Int>()
+    private var hasEnteredRefreshState = false
     private var decoderGeneration: UInt64 = 0
+    private var selectedAccessUnitCount = 0
+    private var admittedAccessUnitCount = 0
+    private var videoSliceCount = 0
+    private var acceptedDecodeCount = 0
+    private var rejectedDecodeCount = 0
+    private var decoderCallbackCount = 0
+    private var decoderFailureCount = 0
+    private var outstandingDecodeCount = 0
+    private var maximumOutstandingDecodeCount = 0
+    private var lastSelectedAccessUnitAt: TimeInterval?
+    private var lastDecodeAttemptAt: TimeInterval?
+    private var lastDecoderCallbackAt: TimeInterval?
     private var isClosed = false
-    private let freezeDiagnosticsEnabled = ProcessInfo.processInfo.environment[
-        "ISHARESCREEN_FREEZE_DIAGNOSTICS"
-    ] == "1"
+    private let freezeDiagnosticsEnabled: Bool
 
     init(
         tileCount: Int,
@@ -122,6 +155,9 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         decoderFactory: DecoderFactory,
         outputHandler: @escaping OutputHandler,
         synchronizesVideoToolboxTiles: Bool = false,
+        freezeDiagnosticsEnabled: Bool = ProcessInfo.processInfo.environment[
+            "ISHARESCREEN_FREEZE_DIAGNOSTICS"
+        ] == "1",
         longTermReferenceHandler: @escaping LongTermReferenceHandler = { _ in },
         refreshHandler: @escaping RefreshHandler,
         errorHandler: @escaping ErrorHandler
@@ -136,10 +172,12 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         self.errorHandler = errorHandler
         callbackBridge = CallbackBridge()
         self.synchronizesVideoToolboxTiles = synchronizesVideoToolboxTiles
+        self.freezeDiagnosticsEnabled = freezeDiagnosticsEnabled
         tileFrameSynchronizer = nil
         decoder = nil
 
         decoder = try makeDecoder(using: decoderFactory)
+        resetDecoderDiagnostics()
         updateTileFrameSynchronizer()
         callbackBridge.install(
             frameHandler: { [weak self, callbackQueue] generation, frame in
@@ -169,15 +207,26 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         let selectedUnits = accessUnits.filter {
             sourceToTile[$0.synchronizationSource] != nil
         }
+        if freezeDiagnosticsEnabled, !selectedUnits.isEmpty {
+            selectedAccessUnitCount += selectedUnits.count
+            lastSelectedAccessUnitAt = CACurrentMediaTime()
+        }
         let output = admission.enqueue(selectedUnits)
+        if freezeDiagnosticsEnabled {
+            admittedAccessUnitCount += output.accessUnits.count
+        }
 
         for accessUnit in output.accessUnits {
             guard let tileIndex = sourceToTile[accessUnit.synchronizationSource],
                   accessUnit.nalUnits.contains(where: Self.isVideoSlice) else { continue }
+            if freezeDiagnosticsEnabled { videoSliceCount += 1 }
             let presentationTime = playoutClock.presentationTime(
                 for: accessUnit.timestamp,
                 hostTime: CACurrentMediaTime()
             )
+            let tracksCompletion = freezeDiagnosticsEnabled
+                && decoder?.backend == .videoToolbox
+            if tracksCompletion { beginTrackedDecode() }
             do {
                 let shouldFlush = tileFrameSynchronizer?.recordSubmission(
                     frameSequenceNumber:
@@ -186,7 +235,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                     subframeBoundary: accessUnit.subframeBoundary
                 ) == true
                 if shouldFlush { scheduleSynchronizedFlush(generation: decoderGeneration) }
-                _ = try decoder?.decode(
+                let accepted = try decoder?.decode(
                     accessUnit.nalUnits,
                     tileIndex: tileIndex,
                     decodingOrderNumber: accessUnit.decodingOrderNumber,
@@ -194,8 +243,16 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                     rtpTimestamp: accessUnit.timestamp,
                     presentationTime: presentationTime,
                     timing: accessUnit.timing
-                )
+                ) ?? false
+                if tracksCompletion {
+                    if accepted {
+                        acceptedDecodeCount += 1
+                    } else {
+                        rejectTrackedDecode()
+                    }
+                }
             } catch let AppleHEVCDecoderError.decodeFailed(status) {
+                if tracksCompletion { rejectTrackedDecode() }
                 let shouldFlush = tileFrameSynchronizer?.recordDecodeFailure(
                     frameSequenceNumber:
                         accessUnit.timing?.observedFrameSequenceNumber,
@@ -203,11 +260,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                 ) == true
                 if shouldFlush { scheduleSynchronizedFlush(generation: decoderGeneration) }
                 var shouldLog = true
-                if status == kVTVideoDecoderReferenceMissingErr {
-                    shouldLog = beginRefreshRecoveryIfNeeded(
-                        forTile: tileIndex,
-                        timestamp: accessUnit.timestamp
-                    )
+                if Self.nativeSynchronousStatusRequestsRefresh(status) {
+                    shouldLog = requestRefreshIfNeeded(timestamp: accessUnit.timestamp)
                 }
                 if shouldLog {
                     logFreezeDiagnostic(
@@ -218,6 +272,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
                     )
                 }
             } catch {
+                if tracksCompletion { rejectTrackedDecode() }
                 errorHandler(error)
                 break
             }
@@ -246,9 +301,29 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         decoder?.close()
         decoder = nil
         tileFrameSynchronizer?.reset()
-        tilesAwaitingRefresh.removeAll(keepingCapacity: true)
         decoder = try makeDecoder(using: decoderFactory)
+        resetDecoderDiagnostics()
         updateTileFrameSynchronizer()
+    }
+
+    func diagnostics() -> AppleHEVCDecodePipelineDiagnostics {
+        AppleHEVCDecodePipelineDiagnostics(
+            decoderGeneration: decoderGeneration,
+            decoderBackend: decoder?.backend,
+            selectedAccessUnitCount: selectedAccessUnitCount,
+            admittedAccessUnitCount: admittedAccessUnitCount,
+            videoSliceCount: videoSliceCount,
+            acceptedDecodeCount: acceptedDecodeCount,
+            rejectedDecodeCount: rejectedDecodeCount,
+            decoderCallbackCount: decoderCallbackCount,
+            decoderFailureCount: decoderFailureCount,
+            outstandingDecodeCount: outstandingDecodeCount,
+            maximumOutstandingDecodeCount: maximumOutstandingDecodeCount,
+            lastSelectedAccessUnitAt: lastSelectedAccessUnitAt,
+            lastDecodeAttemptAt: lastDecodeAttemptAt,
+            lastDecoderCallbackAt: lastDecoderCallbackAt,
+            tileSynchronization: tileFrameSynchronizer?.diagnostics() ?? .empty
+        )
     }
 
     func close() {
@@ -269,6 +344,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         generation: UInt64
     ) {
         guard !isClosed, generation == decoderGeneration else { return }
+        completeTrackedDecode(isFailure: true)
         let shouldFlush = tileFrameSynchronizer?.recordDecodeFailure(
             frameSequenceNumber: failure.frameSequenceNumber,
             tileIndex: failure.tileIndex
@@ -279,11 +355,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         )
         guard failure.reason == .decoderStatus else { return }
         var shouldLog = true
-        if failure.status == kVTVideoDecoderReferenceMissingErr {
-            shouldLog = beginRefreshRecoveryIfNeeded(
-                forTile: failure.tileIndex,
-                timestamp: failure.rtpTimestamp
-            )
+        if failure.status != noErr {
+            shouldLog = requestRefreshIfNeeded(timestamp: failure.rtpTimestamp)
         }
         if shouldLog {
             Self.logger.notice(
@@ -327,12 +400,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         generation: UInt64
     ) {
         guard !isClosed, generation == decoderGeneration else { return }
-        switch frame.region {
-        case let .tile(tileIndex):
-            tilesAwaitingRefresh.remove(tileIndex)
-        case .fullCanvas:
-            tilesAwaitingRefresh.removeAll(keepingCapacity: true)
-        }
+        completeTrackedDecode(isFailure: false)
         guard let tileFrameSynchronizer else {
             outputHandler([frame])
             return
@@ -369,18 +437,69 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         longTermReferenceHandler(decodingOrderNumber)
     }
 
-    @discardableResult
-    private func beginRefreshRecoveryIfNeeded(
-        forTile tileIndex: Int,
-        timestamp: UInt32
-    ) -> Bool {
-        let wasRecovering = !tilesAwaitingRefresh.isEmpty
-        tilesAwaitingRefresh.insert(tileIndex)
-        guard !wasRecovering else { return false }
-        if timestamp != lastRefreshRequestTimestamp {
-            lastRefreshRequestTimestamp = timestamp
-            refreshHandler(timestamp)
+    private func resetDecoderDiagnostics() {
+        selectedAccessUnitCount = 0
+        admittedAccessUnitCount = 0
+        videoSliceCount = 0
+        acceptedDecodeCount = 0
+        rejectedDecodeCount = 0
+        decoderCallbackCount = 0
+        decoderFailureCount = 0
+        outstandingDecodeCount = 0
+        maximumOutstandingDecodeCount = 0
+        lastSelectedAccessUnitAt = nil
+        lastDecodeAttemptAt = nil
+        lastDecoderCallbackAt = nil
+    }
+
+    private func beginTrackedDecode() {
+        outstandingDecodeCount += 1
+        maximumOutstandingDecodeCount = max(
+            maximumOutstandingDecodeCount,
+            outstandingDecodeCount
+        )
+        lastDecodeAttemptAt = CACurrentMediaTime()
+    }
+
+    private func rejectTrackedDecode() {
+        rejectedDecodeCount += 1
+        outstandingDecodeCount = max(0, outstandingDecodeCount - 1)
+    }
+
+    private func completeTrackedDecode(isFailure: Bool) {
+        guard freezeDiagnosticsEnabled,
+              decoder?.backend == .videoToolbox else { return }
+        decoderCallbackCount += 1
+        if isFailure { decoderFailureCount += 1 }
+        outstandingDecodeCount = max(0, outstandingDecodeCount - 1)
+        lastDecoderCallbackAt = CACurrentMediaTime()
+    }
+
+    static func nativeSynchronousStatusRequestsRefresh(_ status: OSStatus) -> Bool {
+        // AVConference classifies the raw 16-bit VCP submission result before
+        // wrapping it in its own error domain. Keep this an exact raw-status
+        // comparison so a wrapped 0xA004xxxx value cannot match accidentally.
+        switch status {
+        case kVTVideoDecoderReferenceMissingErr,
+             kVTVideoDecoderBadDataErr,
+             -8969,
+             -100:
+            return true
+        default:
+            return false
         }
+    }
+
+    @discardableResult
+    private func requestRefreshIfNeeded(timestamp: UInt32) -> Bool {
+        let startsRefreshState = !hasEnteredRefreshState
+        hasEnteredRefreshState = true
+        guard timestamp != lastRefreshRequestTimestamp else { return false }
+        lastRefreshRequestTimestamp = timestamp
+        refreshHandler(AppleHEVCDecodeRefreshRequest(
+            timestamp: timestamp,
+            startsRefreshState: startsRefreshState
+        ))
         return true
     }
 

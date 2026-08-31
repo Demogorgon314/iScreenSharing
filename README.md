@@ -231,7 +231,9 @@ The following environment variables are intended for local development:
   estimate (the default), force a diagnostic 60.001 Mbps report, or suppress
   RCTL
 - `ISHARESCREEN_QUALITY_DIAGNOSTICS=1`: enable additional quality logging
-- `ISHARESCREEN_FREEZE_DIAGNOSTICS=1`: enable decode/freeze recovery logging
+- `ISHARESCREEN_FREEZE_DIAGNOSTICS=1`: enable decode/freeze recovery logging,
+  including VT accepted/callback/outstanding counts, seamless tile-group
+  head-of-line state, and VT teardown wait duration
 - `ISHARESCREEN_PIPELINE_DIAGNOSTICS=1`: correlate decoder output, playback and
   main-queue delivery, display scheduling, drawable acquisition, Metal GPU
   execution, display-link targets, and physical presentation; emits only

@@ -75,6 +75,9 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         subsystem: "com.wangkai.iShareScreen",
         category: "VideoDecoder"
     )
+    private static let freezeDiagnosticsEnabled = ProcessInfo.processInfo.environment[
+        "ISHARESCREEN_FREEZE_DIAGNOSTICS"
+    ] == "1"
 
     private enum Session {
         case videoProcessing(AppleVCPDecompressionSession)
@@ -450,7 +453,16 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     }
 
     private static func invalidate(_ session: VTDecompressionSession) {
-        _ = VTDecompressionSessionWaitForAsynchronousFrames(session)
+        let startedAt = CACurrentMediaTime()
+        if freezeDiagnosticsEnabled {
+            logger.notice("[DEBUG-VTSTALL-91C7] wait begin backend=VT")
+        }
+        let status = VTDecompressionSessionWaitForAsynchronousFrames(session)
+        if freezeDiagnosticsEnabled {
+            logger.notice(
+                "[DEBUG-VTSTALL-91C7] wait end backend=VT status=\(status, privacy: .public) duration=\((CACurrentMediaTime() - startedAt) * 1_000, format: .fixed(precision: 2))ms"
+            )
+        }
         VTDecompressionSessionInvalidate(session)
     }
 

@@ -5,6 +5,22 @@ import struct ScreenSharingProtocol.AppleHEVCSubframeBoundaryParser
 /// The sender may update any sparse subset of tiles, so neither tile count nor
 /// tile position is a frame boundary.
 final class AppleVideoTileFrameSynchronizer: @unchecked Sendable {
+    struct Diagnostics: Equatable, Sendable {
+        let pendingGroupCount: Int
+        let oldestFrameSequenceNumber: UInt16?
+        let oldestSubmittedTileCount: Int
+        let oldestDecodedTileCount: Int
+        let oldestGroupIsClosed: Bool
+
+        static let empty = Diagnostics(
+            pendingGroupCount: 0,
+            oldestFrameSequenceNumber: nil,
+            oldestSubmittedTileCount: 0,
+            oldestDecodedTileCount: 0,
+            oldestGroupIsClosed: false
+        )
+    }
+
     private struct Group {
         var submittedTiles = [Int]()
         var submittedTileSet = Set<Int>()
@@ -101,6 +117,22 @@ final class AppleVideoTileFrameSynchronizer: @unchecked Sendable {
             groupOrder.removeAll(keepingCapacity: false)
             currentFrameSequenceNumber = nil
             flushScheduled = false
+        }
+    }
+
+    func diagnostics() -> Diagnostics {
+        lock.withTileFrameSynchronizerLock {
+            guard let oldestFrameSequenceNumber = groupOrder.first,
+                  let oldestGroup = groups[oldestFrameSequenceNumber] else {
+                return .empty
+            }
+            return Diagnostics(
+                pendingGroupCount: groupOrder.count,
+                oldestFrameSequenceNumber: oldestFrameSequenceNumber,
+                oldestSubmittedTileCount: oldestGroup.submittedTileSet.count,
+                oldestDecodedTileCount: oldestGroup.decodedFrames.count,
+                oldestGroupIsClosed: oldestGroup.isClosed
+            )
         }
     }
 
