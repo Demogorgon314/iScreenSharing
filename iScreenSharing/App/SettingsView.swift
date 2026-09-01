@@ -14,7 +14,11 @@ struct SettingsView: View {
 
             TailscaleSettingsView(tailscale: tailscale, sessions: sessions)
                 .tabItem {
-                    Label("Tailscale", systemImage: "circle.grid.3x3.fill")
+                    Label {
+                        Text("Tailscale")
+                    } icon: {
+                        Image(nsImage: TailscaleMarkImage.settingsTab)
+                    }
                 }
         }
         .frame(width: 560, height: 330)
@@ -62,30 +66,26 @@ private struct DisplaySettingsView: View {
                 }
             }
 
-            Section {
-                DisclosureGroup("Developer / Experimental") {
-                    Toggle(
-                        "Synchronize video presentation",
-                        isOn: $synchronizesVideoPresentation
-                    )
-                    Toggle(
-                        "Use low-latency VideoToolbox",
-                        isOn: lowLatencyDecoder
-                    )
-                }
+            Section("Developer / Experimental") {
+                Toggle(
+                    "Synchronize video presentation",
+                    isOn: $synchronizesVideoPresentation
+                )
+                Toggle(
+                    "Use low-latency VideoToolbox",
+                    isOn: lowLatencyDecoder
+                )
             }
 
-            Section {
-                DisclosureGroup("Diagnostics") {
-                    Toggle("Show video performance", isOn: $showsVideoPerformanceOverlay)
-                    Picker("Metrics level", selection: $videoPerformanceLevel) {
-                        ForEach(VideoPerformanceLevel.allCases) { level in
-                            Text(level.title).tag(level)
-                        }
+            Section("Diagnostics") {
+                Toggle("Show video performance", isOn: $showsVideoPerformanceOverlay)
+                Picker("Metrics level", selection: $videoPerformanceLevel) {
+                    ForEach(VideoPerformanceLevel.allCases) { level in
+                        Text(level.title).tag(level)
                     }
-                    .disabled(!showsVideoPerformanceOverlay)
-                    Toggle("Show Metal performance HUD", isOn: $showsMetalPerformanceHUD)
                 }
+                .disabled(!showsVideoPerformanceOverlay)
+                Toggle("Show Metal performance HUD", isOn: $showsMetalPerformanceHUD)
             }
         }
         .formStyle(.grouped)
@@ -120,6 +120,8 @@ private struct TailscaleSettingsView: View {
     @ObservedObject var sessions: SessionManager
     @State private var shouldOpenLogin = false
     @State private var showsLogoutConfirmation = false
+    @AppStorage(TailscalePeerVisibility.showsOtherOperatingSystemsKey)
+    private var showsOtherOperatingSystems = false
 
     var body: some View {
         Group {
@@ -182,7 +184,18 @@ private struct TailscaleSettingsView: View {
                     Label("Connected", systemImage: "circle.fill")
                         .foregroundStyle(.green)
                 }
-                LabeledContent("Available computers", value: "\(tailscale.peers.count)")
+                LabeledContent("Visible computers", value: "\(visiblePeerCount)")
+            }
+
+            Section {
+                Toggle(
+                    "Show devices running other operating systems",
+                    isOn: $showsOtherOperatingSystems
+                )
+            } header: {
+                Text("Devices")
+            } footer: {
+                Text("Windows, Linux, iOS, Android, and other non-macOS devices are hidden from the Tailscale list by default.")
             }
 
             Section {
@@ -211,8 +224,7 @@ private struct TailscaleSettingsView: View {
 
     private var loginView: some View {
         VStack(spacing: 18) {
-            Image(systemName: "circle.grid.3x3.fill")
-                .font(.system(size: 56))
+            TailscaleMark(size: 56)
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 6) {
@@ -239,6 +251,13 @@ private struct TailscaleSettingsView: View {
         }
         .padding(36)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var visiblePeerCount: Int {
+        TailscalePeerVisibility.filteredPeers(
+            tailscale.peers,
+            showsOtherOperatingSystems: showsOtherOperatingSystems
+        ).count
     }
 
     private func statusView(_ title: String) -> some View {

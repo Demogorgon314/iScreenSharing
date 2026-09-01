@@ -1,6 +1,26 @@
 import Combine
 import Foundation
 
+enum TailscalePeerVisibility {
+    static let showsOtherOperatingSystemsKey = "tailscaleShowsOtherOperatingSystems"
+
+    static func filteredPeers(
+        _ peers: [TailscalePeer],
+        showsOtherOperatingSystems: Bool
+    ) -> [TailscalePeer] {
+        guard !showsOtherOperatingSystems else { return peers }
+        return peers.filter(isMacOrUnknown)
+    }
+
+    private static func isMacOrUnknown(_ peer: TailscalePeer) -> Bool {
+        let operatingSystem = peer.operatingSystem?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        guard !operatingSystem.isEmpty else { return true }
+        return operatingSystem == "macos" || operatingSystem == "darwin"
+    }
+}
+
 @MainActor
 final class TailscaleModel: ObservableObject {
     @Published private(set) var state: EmbeddedTailscaleState = .starting

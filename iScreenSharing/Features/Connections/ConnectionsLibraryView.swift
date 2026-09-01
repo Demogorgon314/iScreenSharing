@@ -23,6 +23,8 @@ struct ConnectionsLibraryView: View {
     @State private var shouldOpenTailscaleLogin = false
     @State private var editingGroupID: ConnectionGroup.ID?
     @State private var groupNameDraft = ""
+    @AppStorage(TailscalePeerVisibility.showsOtherOperatingSystemsKey)
+    private var showsOtherTailscaleOperatingSystems = false
     @FocusState private var searchFocused: Bool
     @FocusState private var groupNameFocused: Bool
 
@@ -66,8 +68,12 @@ struct ConnectionsLibraryView: View {
     }
 
     private var filteredTailscalePeers: [TailscalePeer] {
-        guard !searchText.isEmpty else { return tailscale.peers }
-        return tailscale.peers.filter {
+        let visiblePeers = TailscalePeerVisibility.filteredPeers(
+            tailscale.peers,
+            showsOtherOperatingSystems: showsOtherTailscaleOperatingSystems
+        )
+        guard !searchText.isEmpty else { return visiblePeers }
+        return visiblePeers.filter {
             $0.name.localizedStandardContains(searchText)
                 || $0.dnsName.localizedStandardContains(searchText)
                 || $0.addresses.contains(where: { $0.localizedStandardContains(searchText) })
@@ -81,8 +87,12 @@ struct ConnectionsLibraryView: View {
                     .tag(SidebarItem.allConnections)
                 Label("Network", systemImage: "network")
                     .tag(SidebarItem.network)
-                Label("Tailscale", systemImage: "circle.grid.3x3.fill")
-                    .tag(SidebarItem.tailscale)
+                Label {
+                    Text("Tailscale")
+                } icon: {
+                    TailscaleMark()
+                }
+                .tag(SidebarItem.tailscale)
                 ForEach(store.groups) { group in
                     groupSidebarRow(group)
                         .tag(SidebarItem.group(group.id))
@@ -90,13 +100,13 @@ struct ConnectionsLibraryView: View {
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 200, max: 260)
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 16) {
+                HStack(spacing: 4) {
                     Button {
                         createGroup()
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SidebarFooterButtonStyle())
                     .help("New Group")
 
                     Button {
@@ -104,8 +114,9 @@ struct ConnectionsLibraryView: View {
                     } label: {
                         Image(systemName: "minus")
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(SidebarFooterButtonStyle())
                     .disabled(selectedGroup == nil)
+                    .help("Delete Group")
                     Spacer()
                 }
                 .padding(.horizontal, 12)
@@ -300,11 +311,19 @@ struct ConnectionsLibraryView: View {
                 Button("Open Login") { openTailscaleLogin() }
             }
         case .running where filteredTailscalePeers.isEmpty:
-            ContentUnavailableView(
-                "No Tailscale Computers",
-                systemImage: "circle.grid.3x3.fill",
-                description: Text("Computers signed in to the same tailnet will appear here.")
-            )
+            ContentUnavailableView {
+                Label {
+                    Text("No Tailscale Computers")
+                } icon: {
+                    TailscaleMark(size: 48)
+                }
+            } description: {
+                Text(
+                    showsOtherTailscaleOperatingSystems
+                        ? "Computers signed in to the same tailnet will appear here."
+                        : "Macs signed in to the same tailnet will appear here."
+                )
+            }
         case .running:
             if layout == .list {
                 tailscaleList
@@ -332,8 +351,7 @@ struct ConnectionsLibraryView: View {
 
     private var tailscaleLoginContent: some View {
         VStack(spacing: 22) {
-            Image(systemName: "circle.grid.3x3.fill")
-                .font(.system(size: 76))
+            TailscaleMark(size: 76)
                 .foregroundStyle(.primary)
 
             VStack(spacing: 8) {
@@ -625,6 +643,9 @@ struct ConnectionsLibraryView: View {
     }
 
     private func delete(_ group: ConnectionGroup) {
+        if editingGroupID == group.id {
+            cancelGroupName()
+        }
         store.delete(group)
         if sidebarSelection == .group(group.id) {
             sidebarSelection = .allConnections
@@ -640,6 +661,34 @@ struct ConnectionsLibraryView: View {
                 ConnectionDocumentService.present(error)
             }
         }
+    }
+}
+
+private struct SidebarFooterButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        SidebarFooterButtonStyleBody(configuration: configuration)
+    }
+}
+
+private struct SidebarFooterButtonStyleBody: View {
+    let configuration: ButtonStyleConfiguration
+
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        configuration.label
+            .frame(width: 28, height: 28)
+            .contentShape(Rectangle())
+            .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.45))
+            .background {
+                Circle()
+                    .fill(
+                        configuration.isPressed && isEnabled
+                            ? Color.primary.opacity(0.12)
+                            : Color.clear
+                    )
+            }
+            .opacity(configuration.isPressed && isEnabled ? 0.72 : 1)
     }
 }
 

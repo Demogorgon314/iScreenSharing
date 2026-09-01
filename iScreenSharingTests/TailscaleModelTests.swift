@@ -219,6 +219,38 @@ final class TailscaleModelTests: XCTestCase {
         XCTAssertEqual(peer.softwareDescription, "Linux")
     }
 
+    func testPeerVisibilityShowsMacOSAndUnknownDevicesByDefault() {
+        let macOSPeer = makePeer(id: "macos", operatingSystem: "macOS")
+        let darwinPeer = makePeer(id: "darwin", operatingSystem: "darwin")
+        let unknownPeer = makePeer(id: "unknown", operatingSystem: nil)
+        let blankPeer = makePeer(id: "blank", operatingSystem: "  ")
+        let linuxPeer = makePeer(id: "linux", operatingSystem: "linux")
+
+        XCTAssertEqual(
+            TailscalePeerVisibility.filteredPeers(
+                [macOSPeer, darwinPeer, unknownPeer, blankPeer, linuxPeer],
+                showsOtherOperatingSystems: false
+            ),
+            [macOSPeer, darwinPeer, unknownPeer, blankPeer]
+        )
+    }
+
+    func testPeerVisibilityCanShowEveryOperatingSystem() {
+        let peers = [
+            makePeer(id: "macos", operatingSystem: "macOS"),
+            makePeer(id: "windows", operatingSystem: "windows"),
+            makePeer(id: "linux", operatingSystem: "linux"),
+        ]
+
+        XCTAssertEqual(
+            TailscalePeerVisibility.filteredPeers(
+                peers,
+                showsOtherOperatingSystems: true
+            ),
+            peers
+        )
+    }
+
     func testVideoNetworkPathRequiresAnActivePeerAndPrioritizesCurrentRoute() {
         XCTAssertEqual(
             EmbeddedTailscaleRuntime.videoNetworkPath(
@@ -264,6 +296,17 @@ final class TailscaleModelTests: XCTestCase {
                 relay: "\n"
             ),
             .tailscaleUnknown
+        )
+    }
+
+    private func makePeer(id: String, operatingSystem: String?) -> TailscalePeer {
+        TailscalePeer(
+            id: id,
+            name: id,
+            dnsName: "\(id).example.ts.net",
+            addresses: ["100.64.0.10"],
+            isOnline: true,
+            operatingSystem: operatingSystem
         )
     }
 }

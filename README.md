@@ -54,7 +54,9 @@ vendor extension.
   connections, groups, recent items, and Keychain credentials
 - An embedded userspace Tailscale node with browser login, peer discovery,
   encrypted on-disk state, and RFB TCP plus packet-preserving UDP media routed
-  through the tailnet, plus native account status and logout controls in Settings
+  through the tailnet. The connection library shows Macs and peers without OS
+  metadata by default, with an option to show devices running other operating
+  systems, plus native account status and logout controls in Settings
 
 ## Architecture
 
