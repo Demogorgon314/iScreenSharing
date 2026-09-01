@@ -91,6 +91,8 @@ public struct AppleClipboardRequest: Equatable, Sendable {
 }
 
 public enum AppleClipboardMessage {
+    private static let maximumEncryptedRecordPayloadLength = 0x8000
+
     public static let maximumPayloadLength = 7 * 1_024 * 1_024
     public static let maximumArchiveLength = 64 * 1_024 * 1_024
     public static let maximumItemCount = 1_024
@@ -187,11 +189,23 @@ public enum AppleClipboardMessage {
         return 16 + compressedSize
     }
 
-    public static func fragments(of message: Data, maximumLength: Int = 60_000) -> [Data] {
-        guard maximumLength > 0 else { return [] }
-        return stride(from: 0, to: message.count, by: maximumLength).map { offset in
-            message.subdata(in: offset..<min(offset + maximumLength, message.count))
-        }
+    /// Splits a complete type-31 message into the plaintext records emitted by
+    /// ScreenSharing.framework on macOS 15.7.7: one header, then 32 KiB payload chunks.
+    public static func fragments(of message: Data) -> [Data] {
+        guard !message.isEmpty else { return [] }
+        let headerLength = min(16, message.count)
+        var fragments = [message.subdata(in: 0..<headerLength)]
+        fragments.append(contentsOf: stride(
+            from: headerLength,
+            to: message.count,
+            by: maximumEncryptedRecordPayloadLength
+        ).map { offset in
+            message.subdata(in: offset..<min(
+                offset + maximumEncryptedRecordPayloadLength,
+                message.count
+            ))
+        })
+        return fragments
     }
 
     private static func packedData(

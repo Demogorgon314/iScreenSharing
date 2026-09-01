@@ -1,6 +1,10 @@
 import class ScreenSharingProtocol.AppleEncryptedRecordLayer
+import enum ScreenSharingProtocol.AppleClipboardMessage
 import enum ScreenSharingProtocol.AppleRFBMessages
 import enum ScreenSharingProtocol.StandardRFBMessages
+import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleClipboardFlavor
+import struct ScreenSharingProtocol.AppleClipboardItem
 import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleRecordKeys
 import struct ScreenSharingProtocol.AppleScrollWheelEvent
@@ -141,6 +145,29 @@ final class AppleInputControllerTests: XCTestCase {
         harness.session.close()
     }
 
+    func testLargeClipboardUsesOneEncryptedWriterTransaction() async throws {
+        let harness = try makeHighPerformanceHarness(supportsHighPrecisionScroll: true)
+        let archive = AppleClipboardArchive(items: [
+            AppleClipboardItem(flavors: [
+                AppleClipboardFlavor(
+                    type: "public.data",
+                    aliases: [],
+                    value: makeIncompressibleData(count: 130_000)
+                )
+            ])
+        ])
+        let message = try AppleClipboardMessage.send(archive: archive)
+        let fragments = AppleClipboardMessage.fragments(of: message)
+        XCTAssertGreaterThan(fragments.count, 2)
+
+        try await harness.input.sendClipboard(archive)
+
+        XCTAssertEqual(harness.transport.sentMessages, [
+            try harness.expectedRecordLayer.encrypt(fragments),
+        ])
+        harness.session.close()
+    }
+
     func testInputTimestampUsesWrappingMicrosecondDelta() {
         var timestamp = AppleInputTimestamp()
 
@@ -209,6 +236,16 @@ final class AppleInputControllerTests: XCTestCase {
             scrollCount: 1,
             flags: 0
         )
+    }
+
+    private func makeIncompressibleData(count: Int) -> Data {
+        var state: UInt64 = 0x4d59_5df4_d0f3_3173
+        return Data((0..<count).map { _ in
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return UInt8(truncatingIfNeeded: state >> 56)
+        })
     }
 }
 

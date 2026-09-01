@@ -179,31 +179,42 @@ struct ConnectionsLibraryView: View {
                 .fixedSize()
 
                 Menu {
-                    Button("Connect") {
+                    Button {
                         connectSelectedConnection()
+                    } label: {
+                        Label("Connect", systemImage: "globe")
                     }
                     .disabled(selectedConnection == nil)
-                    Button("Edit") {
+                    Button {
                         editSelectedConnection()
-                    }
-                    .disabled(selectedConnection == nil)
-                    Button("Delete", role: .destructive) {
-                        deleteSelectedConnection()
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
                     }
                     .disabled(selectedConnection == nil)
                     Divider()
-                    Menu("Add to Existing Group") {
+                    Button(role: .destructive) {
+                        deleteSelectedConnection()
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .disabled(selectedConnection == nil)
+                    Divider()
+                    Menu {
                         ForEach(store.groups) { group in
                             Button(group.name) { addSelectedConnection(to: group) }
                         }
+                    } label: {
+                        Label("Add to Existing Group", systemImage: "plus")
                     }
                     .disabled(selectedConnection == nil || store.groups.isEmpty)
-                    Button("Create New Group") {
+                    Button {
                         createGroup(includingSelectedConnection: true)
+                    } label: {
+                        Label("Create New Group", systemImage: "folder.badge.plus")
                     }
                     .disabled(selectedConnection == nil)
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "ellipsis")
                 }
 
                 Button {
@@ -738,6 +749,7 @@ private struct TailscalePeerRow: View {
 
             if isHovered {
                 Button("Connect", action: onConnect)
+                    .nativeConnectButtonFeedback()
                     .disabled(peer.endpoint == nil)
             }
             Button(action: onEdit) {
@@ -818,6 +830,7 @@ private struct ConnectionRow: View {
 
             if isHovered {
                 Button("Connect", action: onConnect)
+                    .nativeConnectButtonFeedback()
             } else {
                 Text(connection.lastConnectedAt, format: .dateTime.month().day().year().hour().minute())
                     .foregroundStyle(.secondary)

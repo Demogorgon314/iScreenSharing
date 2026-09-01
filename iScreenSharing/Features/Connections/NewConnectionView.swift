@@ -46,6 +46,7 @@ struct NewConnectionView: View {
                     connect()
                 }
                 .keyboardShortcut(.defaultAction)
+                .nativeConnectButtonFeedback()
                 .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || coordinator.state == .connecting)
             }
         }

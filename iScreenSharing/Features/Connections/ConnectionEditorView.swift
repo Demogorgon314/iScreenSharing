@@ -82,6 +82,7 @@ struct ConnectionEditorView: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Connect") { save(connect: true) }
+                    .nativeConnectButtonFeedback()
                 Button("Done") { save(connect: false) }
                     .keyboardShortcut(.defaultAction)
             }

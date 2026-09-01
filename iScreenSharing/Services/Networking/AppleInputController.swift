@@ -310,9 +310,7 @@ actor AppleInputController {
             promises: promises,
             sessionID: sessionID
         )
-        for fragment in AppleClipboardMessage.fragments(of: message) {
-            try await sendThrowing(fragment)
-        }
+        try await sendThrowing(AppleClipboardMessage.fragments(of: message))
     }
 
     func sendClipboard(_ text: String) async throws {
@@ -336,11 +334,15 @@ actor AppleInputController {
     }
 
     private func sendThrowing(_ message: Data) async throws {
+        try await sendThrowing([message])
+    }
+
+    private func sendThrowing(_ messages: [Data]) async throws {
         guard let session, !isClosed else { return }
         if session.sharingType == .standard {
             throw AppleInputControllerError.unsupportedInStandardMode
         }
-        try await session.sendEncrypted(message)
+        try await session.sendEncrypted(messages)
         sentEventCount += 1
     }
 

@@ -168,10 +168,27 @@ final class AppleClipboardMessageTests: XCTestCase {
         }
     }
 
-    func testSplitsLargeClipboardMessageIntoRecordSafeFragments() {
-        let message = Data(repeating: 7, count: 130_000)
+    func testSplitsClipboardHeaderAndPayloadLikeNativeEncryptedRecords() {
+        let payloadLength = 65_541
+        var message = Data(repeating: 0, count: 16)
+        message[0] = 0x1f
+        message.writeUInt32BE(UInt32(payloadLength), at: 12)
+        message.append(Data(repeating: 7, count: payloadLength))
+
         let fragments = AppleClipboardMessage.fragments(of: message)
-        XCTAssertEqual(fragments.map(\.count), [60_000, 60_000, 10_000])
+
+        XCTAssertEqual(fragments.map(\.count), [16, 32_768, 32_768, 5])
+        XCTAssertEqual(fragments[0], message.prefix(16))
+        XCTAssertEqual(fragments.reduce(into: Data()) { $0.append($1) }, message)
+    }
+
+    func testSmallClipboardStillEncryptsHeaderAndPayloadSeparately() throws {
+        let message = try AppleClipboardMessage.send(text: "clipboard")
+
+        let fragments = AppleClipboardMessage.fragments(of: message)
+
+        XCTAssertEqual(fragments.map(\.count), [16, message.count - 16])
+        XCTAssertEqual(fragments[0], message.prefix(16))
         XCTAssertEqual(fragments.reduce(into: Data()) { $0.append($1) }, message)
     }
 }

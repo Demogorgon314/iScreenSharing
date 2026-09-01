@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 import SwiftUI
 
 struct AuthenticationView: View {
@@ -58,11 +59,10 @@ struct AuthenticationView: View {
     private var authenticationContent: some View {
         VStack(spacing: 18) {
             HStack(alignment: .top, spacing: 16) {
-                Image(systemName: "rectangle.inset.filled.and.person.filled")
-                    .font(.system(size: 48, weight: .regular))
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.indigo, .blue)
-                    .frame(width: 58, height: 58)
+                AuthenticationDeviceIcon(
+                    deviceInfo: connectionStore.connection(for: coordinator.endpoint)?.deviceInfo,
+                    deviceName: coordinator.endpoint.displayName
+                )
 
                 VStack(alignment: .leading, spacing: 14) {
                     Text("Screen Sharing requires a user name and password to sign in to “\(coordinator.endpoint.displayName)”.")
@@ -148,5 +148,28 @@ struct AuthenticationView: View {
             password: password,
             rememberPassword: rememberPassword
         )
+    }
+}
+
+private struct AuthenticationDeviceIcon: View {
+    let deviceInfo: AppleRemoteDeviceInfo?
+    let deviceName: String
+
+    var body: some View {
+        RemoteDeviceIcon(deviceInfo: deviceInfo, size: 54)
+            .frame(width: 62, height: 62)
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(Color.accentColor, in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(.background, lineWidth: 2)
+                    }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Authentication required for \(deviceName)")
     }
 }

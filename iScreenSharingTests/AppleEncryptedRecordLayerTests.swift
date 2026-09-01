@@ -11,14 +11,18 @@ final class AppleEncryptedRecordLayerTests: XCTestCase {
         }
         let layer = try makeLayer()
         let expectedLayer = try makeLayer()
-        let firstMessage = Data("first".utf8)
+        let firstMessages = [
+            Data("header".utf8),
+            Data("payload-one".utf8),
+            Data("payload-two".utf8),
+        ]
         let secondMessage = Data("second".utf8)
         let expectedRecords = [
-            try expectedLayer.encrypt(firstMessage),
+            try expectedLayer.encrypt(firstMessages),
             try expectedLayer.encrypt(secondMessage),
         ]
 
-        let first = Task { try await writer.send([firstMessage], using: layer) }
+        let first = Task { try await writer.send(firstMessages, using: layer) }
         await sink.waitForFirstRecord()
         let second = Task { try await writer.send([secondMessage], using: layer) }
         for _ in 0..<20 { await Task.yield() }
