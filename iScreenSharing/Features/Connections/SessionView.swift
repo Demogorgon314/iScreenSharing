@@ -114,13 +114,8 @@ struct SessionView: View {
                     fileTransfer: fileTransfer
                 )
             }
-            Button { commandState.setScalesToFit(!commandState.displayScale.scalesToFit) } label: {
-                Label(
-                    commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On",
-                    systemImage: "arrow.up.left.and.down.right.and.arrow.up.right.and.down.left"
-                )
-            }
-            .help(commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On")
+        }
+        ToolbarItemGroup {
             Menu {
                 Toggle("Use Shared Clipboard", isOn: sharedClipboardBinding)
                     .disabled(!commandState.canToggleSharedClipboard)
@@ -141,12 +136,14 @@ struct SessionView: View {
             .disabled(!commandState.canUseClipboard)
             if let capabilities = sessions.session(for: endpoint)?.remoteSystemCapabilities,
                sessions.session(for: endpoint)?.inputController != nil {
-                RemoteSystemCommandButtons(
+                RemoteSystemCommandsMenu(
                     capabilities: capabilities,
                     isDisabled: isObserving || isChangingMode,
                     perform: performRemoteSystemCommand
                 )
             }
+        }
+        ToolbarItemGroup {
             if let keyboardInputSource = sessions.session(for: endpoint)?.keyboardInputSourceService {
                 KeyboardInputSourceButton(
                     service: keyboardInputSource,
@@ -161,22 +158,27 @@ struct SessionView: View {
             }
             .help(isObserving ? "Switch to Control Mode" : "Switch to Observe Mode")
             .disabled(isChangingMode || sessions.session(for: endpoint) == nil)
+        }
+        ToolbarItemGroup {
+            Button { commandState.setScalesToFit(!commandState.displayScale.scalesToFit) } label: {
+                Label(
+                    commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On",
+                    systemImage: "arrow.up.left.and.down.right.and.arrow.up.right.and.down.left"
+                )
+            }
+            .help(commandState.displayScale.scalesToFit ? "Turn Scaling Off" : "Turn Scaling On")
             Toggle(isOn: dynamicResolutionBinding) {
                 Label("Dynamic Resolution", systemImage: "display")
             }
             .toggleStyle(.button)
             .help("Dynamic Resolution")
             .disabled(!commandState.canUseDynamicResolution)
-            Toggle(isOn: videoPerformanceBinding) {
-                Label("Video Performance", systemImage: "chart.xyaxis.line")
-            }
-            .toggleStyle(.button)
-            .help("Video Performance")
-            Toggle(isOn: metalPerformanceHUDBinding) {
-                Label("Metal Performance HUD", systemImage: "gauge.with.needle")
-            }
-            .toggleStyle(.button)
-            .help("Metal Performance HUD")
+        }
+        ToolbarItemGroup {
+            DiagnosticsToolbarMenu(
+                videoPerformance: videoPerformanceBinding,
+                metalPerformanceHUD: metalPerformanceHUDBinding
+            )
             if let audio = sessions.session(for: endpoint)?.audioStream {
                 AudioMuteButton(audio: audio)
             }
@@ -341,21 +343,45 @@ private struct StandardQualityToolbarControl: View {
     }
 }
 
-private struct RemoteSystemCommandButtons: View {
+private struct RemoteSystemCommandsMenu: View {
     @ObservedObject var capabilities: AppleRemoteSystemCapabilities
     let isDisabled: Bool
     let perform: (AppleRemoteSystemCommand) -> Void
 
     var body: some View {
-        ForEach(AppleRemoteSystemCommand.allCases, id: \.self) { command in
-            Button {
-                perform(command)
-            } label: {
-                Label(command.title, systemImage: command.systemImage)
+        Menu {
+            ForEach(AppleRemoteSystemCommand.allCases, id: \.self) { command in
+                Button {
+                    perform(command)
+                } label: {
+                    Label(command.title, systemImage: command.systemImage)
+                }
+                .disabled(isDisabled || !capabilities.supports(command))
             }
-            .help(command.title)
-            .disabled(isDisabled || !capabilities.supports(command))
+        } label: {
+            Label("Remote Mac", systemImage: "rectangle.3.group")
         }
+        .help("Remote Mac Controls")
+        .disabled(!hasSupportedCommand)
+    }
+
+    private var hasSupportedCommand: Bool {
+        AppleRemoteSystemCommand.allCases.contains { capabilities.supports($0) }
+    }
+}
+
+private struct DiagnosticsToolbarMenu: View {
+    @Binding var videoPerformance: Bool
+    @Binding var metalPerformanceHUD: Bool
+
+    var body: some View {
+        Menu {
+            Toggle("Video Performance", isOn: $videoPerformance)
+            Toggle("Metal Performance HUD", isOn: $metalPerformanceHUD)
+        } label: {
+            Label("Diagnostics", systemImage: "chart.xyaxis.line")
+        }
+        .help("Performance Diagnostics")
     }
 }
 

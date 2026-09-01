@@ -17,7 +17,7 @@ enum AppleRemoteSystemCommand: UInt32, CaseIterable, Sendable {
 
     var systemImage: String {
         switch self {
-        case .launchpad: "square.grid.3x3"
+        case .launchpad: "square.grid.3x3.fill"
         case .desktop: "menubar.dock.rectangle"
         case .missionControl: "rectangle.3.group"
         case .appWindows: "macwindow.on.rectangle"
