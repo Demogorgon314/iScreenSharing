@@ -1305,10 +1305,11 @@ extension RemoteVideoCanvasNSView: NSDraggingSource {
         operation: NSDragOperation
     ) {
         remoteDraggingSession = nil
-        guard buttonMask & AppleInputController.leftButton != 0,
-              let point = lastRemotePoint else { return }
+        // AppKit owns the physical mouse-up once the remote promise becomes a
+        // local drag. Mirroring that release to the last in-canvas coordinate
+        // would complete a second Finder drop on the remote Mac. The native
+        // drag-ended hook only finishes local bookkeeping.
         buttonMask &= ~AppleInputController.leftButton
-        sendDraggedPointer(buttons: buttonMask, point: point)
     }
 }
 

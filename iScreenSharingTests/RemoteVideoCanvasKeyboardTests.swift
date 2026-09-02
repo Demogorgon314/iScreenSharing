@@ -170,6 +170,87 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
         await service.close()
     }
 
+    func testEndingRemoteFilePromiseDragDoesNotDropAtLastRemotePoint() async throws {
+        let keys = try AppleRecordKeys(
+            key: Data(repeating: 0x11, count: 16),
+            initializationVector: Data(repeating: 0x22, count: 16)
+        )
+        let transport = DragInputTransport(suspendedSendNumber: 2)
+        let session = try makeSession(transport: transport)
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let canvas = AppleCanvas(width: 100, height: 100, tileCount: 1)
+        let input = AppleInputController(
+            session: session,
+            canvas: canvas,
+            microseconds: { 123 }
+        )
+        let view = RemoteVideoCanvasNSView(
+            canvas: canvas,
+            frames: AppleVideoFrameStore(),
+            input: input,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+        view.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        let mouseDown = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 20, y: 20),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        ))
+        let reentryMove = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: NSPoint(x: 80, y: 80),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 0,
+            pressure: 0
+        ))
+
+        view.mouseDown(with: mouseDown)
+        await waitUntil { transport.sentMessages.count == 1 }
+        view.draggingSession(
+            NSDraggingSession(),
+            endedAt: .zero,
+            operation: .copy
+        )
+        view.mouseMoved(with: reentryMove)
+        await transport.waitUntilSendIsSuspended()
+
+        let expectedLayer = AppleEncryptedRecordLayer(keys: keys)
+        _ = try expectedLayer.encrypt(try expectedLayer.encryptPointerEvent(
+            buttons: AppleInputController.leftButton,
+            x: 20,
+            y: 80,
+            clickCount: 1,
+            timestampDelta: 123
+        ))
+        let expectedMove = try expectedLayer.encryptPointerEvent(
+            buttons: 0,
+            x: 80,
+            y: 20,
+            clickCount: 0,
+            timestampDelta: 0
+        )
+        let expectedEncryptedMove = try expectedLayer.encrypt(expectedMove)
+
+        XCTAssertEqual(transport.sentMessages[1], expectedEncryptedMove)
+        transport.resumeSuspendedSend()
+    }
+
     func testLocalFileDragStartsAtEntryPointAfterOfferFinishes() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-drag-entry-\(UUID().uuidString).txt")
