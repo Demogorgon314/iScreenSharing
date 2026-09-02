@@ -22,7 +22,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
     }
 
     func testPublishesEachDisplayCropForMultiDisplayLayout() {
-        let model = AppleDisplayLayoutModel()
+        let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
         let layout = AppleDisplayLayout(
             scaledWidth: 1920,
             scaledHeight: 540,
@@ -179,7 +179,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         )
     }
 
-    func testIgnoresIncompleteLayoutBeforeInitialDualDisplayLayout() {
+    func testIgnoresIncompleteLayoutAndSpatiallyOrdersInitialDualDisplayLayout() {
         let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
         let first = AppleDisplayRect(displayID: 11, x: 200, y: 0, width: 300, height: 100)
         let second = AppleDisplayRect(displayID: 22, x: 0, y: 0, width: 200, height: 100)
@@ -202,10 +202,50 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
             displays: [first, second]
         ))
 
-        XCTAssertEqual(model.layout?.displays.map(\.displayID), [11, 22])
+        XCTAssertEqual(model.layout?.displays.map(\.displayID), [22, 11])
+        XCTAssertEqual(model.displayID(for: 0), 22)
+        XCTAssertEqual(model.displayID(for: 1), 11)
     }
 
-    func testSortsChangedDualDisplayLayoutByLogicalFrame() {
+    func testUsesBackingFramesForNativeDisplaySlotOrder() {
+        let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
+        let backingLeft = AppleDisplayRect(
+            displayID: 11,
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+            logicalX: 150,
+            logicalY: 0,
+            logicalWidth: 100,
+            logicalHeight: 50
+        )
+        let backingRight = AppleDisplayRect(
+            displayID: 22,
+            x: 200,
+            y: 0,
+            width: 300,
+            height: 100,
+            logicalX: 0,
+            logicalY: 0,
+            logicalWidth: 150,
+            logicalHeight: 50
+        )
+
+        model.receive(AppleDisplayLayout(
+            scaledWidth: 250,
+            scaledHeight: 50,
+            backingWidth: 500,
+            backingHeight: 100,
+            displays: [backingRight, backingLeft]
+        ))
+
+        XCTAssertEqual(model.layout?.displays.map(\.displayID), [11, 22])
+        XCTAssertEqual(model.displayID(for: 0), 11)
+        XCTAssertEqual(model.displayID(for: 1), 22)
+    }
+
+    func testSortsChangedDualDisplayLayoutByBackingFrame() {
         let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
         let first = AppleDisplayRect(
             displayID: 11,
@@ -271,7 +311,7 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         XCTAssertEqual(model.layout?.displays.map(\.displayID), [22, 11])
     }
 
-    func testKeepsInputTargetsInInitialMediaSlotOrderAfterLayoutSort() throws {
+    func testKeepsInputTargetsInInitialSpatialMediaSlotOrder() throws {
         let model = AppleDisplayLayoutModel(expectedDisplayCount: 2)
         let mediaSlotOne = AppleDisplayRect(
             displayID: 11,
@@ -313,15 +353,15 @@ final class AppleDisplayLayoutModelTests: XCTestCase {
         ))
 
         XCTAssertEqual(model.layout?.displays.map(\.displayID), [22, 11])
-        XCTAssertEqual(model.displayID(for: 0), 11)
-        XCTAssertEqual(model.displayID(for: 1), 22)
+        XCTAssertEqual(model.displayID(for: 0), 22)
+        XCTAssertEqual(model.displayID(for: 1), 11)
         XCTAssertEqual(
             try XCTUnwrap(model.inputMapping(for: 0)).backingFrame,
-            CGRect(x: 300, y: 0, width: 200, height: 100)
+            CGRect(x: 0, y: 0, width: 300, height: 100)
         )
         XCTAssertEqual(
             try XCTUnwrap(model.inputMapping(for: 1)).backingFrame,
-            CGRect(x: 0, y: 0, width: 300, height: 100)
+            CGRect(x: 300, y: 0, width: 200, height: 100)
         )
     }
 }

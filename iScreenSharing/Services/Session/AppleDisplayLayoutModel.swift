@@ -61,23 +61,23 @@ final class AppleDisplayLayoutModel: ObservableObject {
 
     func receive(_ layout: AppleDisplayLayout) {
         guard layout.displays.count >= expectedDisplayCount else { return }
-        guard let currentLayout = self.layout else {
-            mediaDisplayIDs = layout.displays.map(\.displayID)
-            self.layout = layout
-            return
-        }
-        guard layout != currentLayout else { return }
-
         let displays = layout.displays.count > 1
             ? layout.displays.sorted(by: Self.isSpatiallyOrdered)
             : layout.displays
-        self.layout = AppleDisplayLayout(
+        let orderedLayout = AppleDisplayLayout(
             scaledWidth: layout.scaledWidth,
             scaledHeight: layout.scaledHeight,
             backingWidth: layout.backingWidth,
             backingHeight: layout.backingHeight,
             displays: displays
         )
+        guard let currentLayout = self.layout else {
+            mediaDisplayIDs = displays.map(\.displayID)
+            self.layout = orderedLayout
+            return
+        }
+        guard orderedLayout != currentLayout else { return }
+        self.layout = orderedLayout
     }
 
     func receivePendingMessages(_ messages: [Data]) {
@@ -89,10 +89,10 @@ final class AppleDisplayLayoutModel: ObservableObject {
     }
 
     private static func isSpatiallyOrdered(_ lhs: AppleDisplayRect, _ rhs: AppleDisplayRect) -> Bool {
-        if lhs.logicalX != rhs.logicalX { return lhs.logicalX < rhs.logicalX }
-        if lhs.logicalY != rhs.logicalY { return lhs.logicalY < rhs.logicalY }
-        if lhs.logicalWidth != rhs.logicalWidth { return lhs.logicalWidth < rhs.logicalWidth }
-        if lhs.logicalHeight != rhs.logicalHeight { return lhs.logicalHeight < rhs.logicalHeight }
+        if lhs.x != rhs.x { return lhs.x < rhs.x }
+        if lhs.y != rhs.y { return lhs.y < rhs.y }
+        if lhs.width != rhs.width { return lhs.width < rhs.width }
+        if lhs.height != rhs.height { return lhs.height < rhs.height }
         return lhs.displayID < rhs.displayID
     }
 

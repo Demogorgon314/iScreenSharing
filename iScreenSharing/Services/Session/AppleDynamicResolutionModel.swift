@@ -11,7 +11,6 @@ final class AppleDynamicResolutionModel: ObservableObject {
             guard isEnabled != oldValue else { return }
             cancel()
             lastRequestedSizes = nil
-            lastRequestTime = nil
             didChangeEnabled(isEnabled)
             if !isEnabled { requestFixedResolutionMode() }
         }
@@ -19,16 +18,12 @@ final class AppleDynamicResolutionModel: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private static let debounceMilliseconds = 500
-    private static let minimumRequestInterval: TimeInterval = 2.5
-
     private let displayCount: Int
     private let didChangeEnabled: (Bool) -> Void
     private let requestFixedResolution: @MainActor () async throws -> Void
     private var task: Task<Void, Never>?
-    private var viewportSizes = [Int: AppleDynamicResolutionSize]()
     private var lastRequestedSizes: [AppleDynamicResolutionSize]?
     private var pendingSizes: [AppleDynamicResolutionSize]?
-    private var lastRequestTime: TimeInterval?
 
     init(
         displayCount: Int = 1,
@@ -54,10 +49,8 @@ final class AppleDynamicResolutionModel: ObservableObject {
               isEnabled,
               (0..<displayCount).contains(displayIndex),
               let size = AppleDynamicResolutionSize.normalized(viewport: viewport) else { return }
-        viewportSizes[displayIndex] = size
-        let sizes = (0..<displayCount).compactMap { viewportSizes[$0] }
-        guard sizes.count == displayCount,
-              sizes != lastRequestedSizes,
+        let sizes = [size]
+        guard sizes != lastRequestedSizes,
               sizes != pendingSizes else { return }
         if displayCount == 1, let canvas,
            canvas.width == size.width * 2,
@@ -81,18 +74,10 @@ final class AppleDynamicResolutionModel: ObservableObject {
                     try await Task.sleep(for: .milliseconds(Self.debounceMilliseconds))
                 }
                 guard let self, let controller, self.isEnabled else { return }
-                if let lastRequestTime = self.lastRequestTime {
-                    let elapsed = ProcessInfo.processInfo.systemUptime - lastRequestTime
-                    let remaining = Self.minimumRequestInterval - elapsed
-                    if remaining > 0 {
-                        try await Task.sleep(for: .milliseconds(Int(remaining * 1_000)))
-                    }
-                }
                 try Task.checkCancellation()
                 try await controller.request(displaySizes: sizes)
                 self.lastRequestedSizes = sizes
                 if self.pendingSizes == sizes { self.pendingSizes = nil }
-                self.lastRequestTime = ProcessInfo.processInfo.systemUptime
                 self.errorMessage = nil
             } catch is CancellationError {
                 if self?.pendingSizes == sizes { self?.pendingSizes = nil }

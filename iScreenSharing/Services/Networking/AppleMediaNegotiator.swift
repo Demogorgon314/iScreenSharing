@@ -138,6 +138,12 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                 pendingMessages.append(try await session.receiveEncrypted())
             }
         }
+        if let displaySelection = Self.displaySelectionMessage(displayCount: displayCount) {
+            // Native establishes the global screen after DisplayInfo2 is complete. The pointer
+            // coordinates below share that combined backing space, so the server must not retain
+            // an individual-display selection from display setup or a previous transition.
+            try await session.sendEncrypted(displaySelection)
+        }
         try await session.sendEncrypted(configuration)
 
         var retryCount = 0
@@ -246,6 +252,10 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
             AppleRFBMessages.framebufferUpdateRequest(),
             AppleRFBMessages.autoFramebufferUpdate(),
         ]
+    }
+
+    static func displaySelectionMessage(displayCount: Int) -> Data? {
+        displayCount > 1 ? AppleRFBMessages.selectCombinedDisplays : nil
     }
 
 }

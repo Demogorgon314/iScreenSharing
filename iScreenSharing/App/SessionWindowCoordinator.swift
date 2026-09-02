@@ -444,7 +444,17 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
             displayLayout: displayLayout,
             dynamicResolution: dynamicResolution
         )
-        controller.showWindow(nil)
+        if key.displayIndex > 0,
+           let primaryWindow = windowControllers[
+               WindowKey(endpoint: key.endpoint, displayIndex: 0)
+           ]?.window {
+            // Native auxiliary display controllers order their windows below
+            // the session leader. Showing one normally would make it key and
+            // make its independent toolbar appear to replace Display 1's.
+            window.order(.below, relativeTo: primaryWindow.windowNumber)
+        } else {
+            controller.showWindow(nil)
+        }
         SessionToolbarPreferences.applyStoredPreferences(
             to: window,
             defaults: toolbarPreferencesDefaults

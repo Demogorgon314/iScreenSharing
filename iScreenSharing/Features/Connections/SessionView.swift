@@ -32,8 +32,11 @@ struct SessionView: View {
                     fileTransfer: isObserving ? nil : session.fileTransferService,
                     cursors: session.cursorStore,
                     displayScale: commandState.displayScale,
-                    stretchesVideoToFillBounds:
-                        commandState.canUseDynamicResolution && commandState.usesDynamicResolution,
+                    stretchesVideoToFillBounds: AppleVideoPresentationPolicy.stretchesToFillBounds(
+                        canUseDynamicResolution: commandState.canUseDynamicResolution,
+                        usesDynamicResolution: commandState.usesDynamicResolution,
+                        displayCount: displayLayout.displayCount
+                    ),
                     synchronizesPresentation: commandState.synchronizesVideoPresentation,
                     showsPerformanceOverlay: commandState.showsVideoPerformanceOverlay,
                     performanceLevel: commandState.videoPerformanceLevel,
@@ -420,6 +423,16 @@ private struct AudioMuteButton: View {
             )
         }
         .help(audio.isMuted ? "Unmute" : "Mute")
+    }
+}
+
+enum AppleVideoPresentationPolicy {
+    static func stretchesToFillBounds(
+        canUseDynamicResolution: Bool,
+        usesDynamicResolution: Bool,
+        displayCount: Int
+    ) -> Bool {
+        canUseDynamicResolution && usesDynamicResolution && displayCount == 1
     }
 }
 

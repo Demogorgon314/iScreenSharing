@@ -3,6 +3,34 @@ import XCTest
 @testable import iScreenSharing
 
 final class AppleVideoCanvasLayoutTests: XCTestCase {
+    func testSingleDynamicDisplayRetainsFillPresentationDuringResize() {
+        XCTAssertTrue(AppleVideoPresentationPolicy.stretchesToFillBounds(
+            canUseDynamicResolution: true,
+            usesDynamicResolution: true,
+            displayCount: 1
+        ))
+    }
+
+    func testDualDisplayPeerWindowKeepsNativeAspectAfterSharedResolutionChange() {
+        let stretchesToFillBounds = AppleVideoPresentationPolicy.stretchesToFillBounds(
+            canUseDynamicResolution: true,
+            usesDynamicResolution: true,
+            displayCount: 2
+        )
+        let layout = AppleVideoCanvasLayout.fullCanvas(
+            canvas: AppleCanvas(width: 1_600, height: 900, tileCount: 4),
+            bounds: CGRect(x: 0, y: 0, width: 1_000, height: 1_000),
+            fixedScale: nil,
+            stretchesToFillBounds: stretchesToFillBounds
+        )
+
+        XCTAssertFalse(stretchesToFillBounds)
+        XCTAssertEqual(
+            layout.container,
+            CGRect(x: 0, y: 218.75, width: 1_000, height: 562.5)
+        )
+    }
+
     func testFullCanvasLayoutUsesOneTextureAcrossTheVisibleCanvas() {
         let layout = AppleVideoCanvasLayout.fullCanvas(
             canvas: AppleCanvas(width: 1920, height: 1200, tileCount: 4),

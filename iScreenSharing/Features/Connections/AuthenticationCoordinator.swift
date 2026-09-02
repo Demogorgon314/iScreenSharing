@@ -80,15 +80,15 @@ final class AuthenticationCoordinator: ObservableObject {
             let fallbackDisplaySize = viewportStore.size(for: endpoint)
                 .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
                 ?? AppleDynamicResolutionSize(width: 1440, height: 900)
-            let initialDisplaySizes = (0..<virtualDisplayCount.rawValue).map { displayIndex in
-                viewportStore.size(for: endpoint, displayIndex: displayIndex)
-                    .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
-                    ?? fallbackDisplaySize
-            }
-            let requestedDisplaySizes = virtualDisplayCount == .one
-                && !sessionFeaturePreferences.usesDynamicResolution
-                ? [.fixed1080p]
-                : initialDisplaySizes
+            let supportsDynamicResolution = virtualDisplayCount == .one
+                && sessionFeaturePreferences.usesDynamicResolution
+            let requestedDisplaySize = supportsDynamicResolution
+                ? fallbackDisplaySize
+                : .fixed1080p
+            let requestedDisplaySizes = Array(
+                repeating: requestedDisplaySize,
+                count: virtualDisplayCount.rawValue
+            )
             let sharingType = savedConnection?.sharingType ?? .highPerformance
             let standardQuality = savedConnection?.standardQuality ?? .high
             let credentials = try ScreenSharingCredentials(username: username, password: password)

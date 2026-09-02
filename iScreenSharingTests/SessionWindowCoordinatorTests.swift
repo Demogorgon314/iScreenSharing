@@ -3,6 +3,8 @@ import Foundation
 import class ScreenSharingProtocol.AppleEncryptedRecordLayer
 import enum ScreenSharingProtocol.AppleRFBMessages
 import struct ScreenSharingProtocol.AppleCanvas
+import struct ScreenSharingProtocol.AppleDisplayLayout
+import struct ScreenSharingProtocol.AppleDisplayRect
 import struct ScreenSharingProtocol.AppleRecordKeys
 import struct ScreenSharingProtocol.RFBServerInfo
 import XCTest
@@ -10,6 +12,67 @@ import XCTest
 
 @MainActor
 final class SessionWindowCoordinatorTests: XCTestCase {
+    func testPrimaryWindowRemainsInFrontAfterAuxiliaryDisplayIsCreated() async throws {
+        let suiteName = "SessionWindowCoordinatorTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defaults.set(true, forKey: SessionToolbarPreferences.isVisibleKey)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let endpoint = try ConnectionEndpoint(host: "example.local")
+        let session = try makeSession(endpoint: endpoint)
+        let streams = [
+            WindowLifecycleVideoStream(
+                canvas: AppleCanvas(width: 1_920, height: 1_080, tileCount: 4),
+                displayIndex: 0
+            ),
+            WindowLifecycleVideoStream(
+                canvas: AppleCanvas(width: 1_920, height: 1_080, tileCount: 4),
+                displayIndex: 1
+            ),
+        ]
+        streams.forEach { $0.start() }
+        session.install(videoStreams: streams)
+        let displayLayout = AppleDisplayLayoutModel(expectedDisplayCount: 2)
+        session.install(displayLayoutModel: displayLayout)
+        session.install(dynamicResolutionModel: AppleDynamicResolutionModel(displayCount: 2))
+        let sessions = SessionManager()
+        sessions.install(session)
+        let coordinator = SessionWindowCoordinator(toolbarPreferencesDefaults: defaults)
+
+        coordinator.show(endpoint: endpoint, sessions: sessions)
+        await waitForMainQueue()
+        let primary = try XCTUnwrap(NSApp.windows.first {
+            $0.identifier?.rawValue == "session-example.local-5900-display-1"
+        })
+
+        // DisplayInfo2 arrives after the leader window is already visible in a
+        // real session. Creating the auxiliary window must not bring it above
+        // that leader or transfer the active session chrome to Display 2.
+        displayLayout.receive(AppleDisplayLayout(
+            scaledWidth: 1_920,
+            scaledHeight: 540,
+            backingWidth: 3_840,
+            backingHeight: 1_080,
+            displays: [
+                AppleDisplayRect(displayID: 1, x: 0, y: 0, width: 1_920, height: 1_080),
+                AppleDisplayRect(displayID: 2, x: 1_920, y: 0, width: 1_920, height: 1_080),
+            ]
+        ))
+        await waitForMainQueue()
+        let secondary = try XCTUnwrap(NSApp.windows.first {
+            $0.identifier?.rawValue == "session-example.local-5900-display-2"
+        })
+        defer {
+            primary.close()
+            session.close()
+        }
+
+        XCTAssertFalse(secondary.isKeyWindow)
+        XCTAssertLessThan(primary.orderedIndex, secondary.orderedIndex)
+        XCTAssertTrue(primary.toolbar?.isVisible == true)
+        XCTAssertTrue(secondary.toolbar?.isVisible == true)
+        XCTAssertFalse(primary.toolbar === secondary.toolbar)
+    }
+
     func testMiniaturizedSingleWindowPausesAndResumesFrameUpdatesInOrder() async {
         let recorder = WindowFrameUpdateRecorder()
         let controller = SessionWindowFrameUpdateController { message in
@@ -399,8 +462,8 @@ private actor WindowFrameUpdateRecorder {
 }
 
 private final class WindowLifecycleVideoStream: SessionVideoStream, @unchecked Sendable {
-    init(canvas: AppleCanvas) {
-        super.init(canvas: canvas, displayIndex: 0, tileCount: canvas.tileCount)
+    init(canvas: AppleCanvas, displayIndex: Int = 0) {
+        super.init(canvas: canvas, displayIndex: displayIndex, tileCount: canvas.tileCount)
     }
 
     override func start() {

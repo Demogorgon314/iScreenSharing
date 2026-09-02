@@ -186,7 +186,7 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         }
     }
 
-    func testRestoresEachVirtualDisplaySizeDuringAuthentication() async throws {
+    func testDualDisplayAuthenticationUsesFixed1080pWhenDynamicPreferenceIsEnabled() async throws {
         let endpoint = try ConnectionEndpoint("example.local")
         let session = try makeSession(endpoint: endpoint)
         let connections = ConnectionStore(defaults: defaults)
@@ -221,11 +221,46 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         try await waitUntil { coordinator.state == .authenticated }
 
         let request = await displaySizes.firstRequest()
-        XCTAssertEqual(request, [
-            AppleDynamicResolutionSize(width: 1200, height: 800),
-            AppleDynamicResolutionSize(width: 900, height: 700),
-        ])
+        XCTAssertEqual(request, [.fixed1080p, .fixed1080p])
         XCTAssertNotNil(session.dynamicResolutionModel)
+    }
+
+    func testSingleDisplayUsesFixed1080pWhenDynamicResolutionIsDisabled() async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = try makeSession(endpoint: endpoint)
+        let connections = ConnectionStore(defaults: defaults)
+        connections.record(endpoint)
+        let saved = try XCTUnwrap(connections.connection(for: endpoint))
+        try connections.update(
+            saved,
+            name: saved.name,
+            endpoint: endpoint,
+            preferredUsername: "",
+            sharingType: .highPerformance,
+            virtualDisplayCount: .one
+        )
+        let preferences = SessionFeaturePreferences(defaults: defaults)
+        preferences.setUsesDynamicResolution(false)
+        let displaySizes = DisplaySizeRecorder()
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            sessionActivator: makeSessionActivator(
+                authenticator: MockAuthenticator(result: .success(session)),
+                connectionStore: connections,
+                preferences: preferences,
+                controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes)
+            ),
+            credentialStore: MockCredentialStore(),
+            connectionStore: connections,
+            sessionFeaturePreferences: preferences,
+            sessionManager: SessionManager()
+        )
+
+        coordinator.signIn(username: "user", password: "password", rememberPassword: false)
+        try await waitUntil { coordinator.state == .authenticated }
+
+        let request = await displaySizes.firstRequest()
+        XCTAssertEqual(request, [.fixed1080p])
     }
 
     func testSeedsDualDisplayLayoutBeforePublishingSession() async throws {

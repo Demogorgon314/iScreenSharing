@@ -14,6 +14,14 @@ final class AppleMediaNegotiatorTests: XCTestCase {
         )
     }
 
+    func testSelectsCombinedDesktopAfterDualDisplayLayoutBecomesAvailable() {
+        XCTAssertNil(AppleMediaNegotiator.displaySelectionMessage(displayCount: 1))
+        XCTAssertEqual(
+            AppleMediaNegotiator.displaySelectionMessage(displayCount: 2),
+            AppleRFBMessages.selectCombinedDisplays
+        )
+    }
+
     func testDualMediaStreamsKeepVirtualDisplayOrder() {
         XCTAssertEqual(
             AppleMediaStreamDisplayMapping.displayIndex(forMediaStreamIndex: 0, displayCount: 2),
