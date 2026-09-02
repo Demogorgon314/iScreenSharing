@@ -178,7 +178,6 @@ final class RemoteVideoCanvasNSView: NSView {
     private struct RemoteFilePromise {
         let sourcePath: String
         let fileName: String
-        let isLast: Bool
     }
 
     var displayScale: AppleVideoDisplayScale {
@@ -253,6 +252,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private var fileDragTask: Task<Void, Never>?
     private var localFileDrag: LocalFileDrag?
     private weak var remoteDraggingSession: NSDraggingSession?
+    private var activeRemoteDragSessionID: UInt32?
     private let repostCurrentEvent: () -> Void
     private var displayLink: CADisplayLink?
     private var displayLinkTarget: RemoteVideoCanvasDisplayLinkTarget?
@@ -521,6 +521,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard activeRemoteDragSessionID == nil else { return }
         buttonMask &= ~AppleInputController.leftButton
         sendPointer(event)
     }
@@ -781,9 +782,6 @@ final class RemoteVideoCanvasNSView: NSView {
         if let input {
             let modifiers = activeModifiers
             activeModifiers.removeAll()
-            let shouldReleasePointer = buttonMask != 0
-            buttonMask = 0
-            let point = lastRemotePoint
             enqueueInput {
                 for (keyCode, modifier) in modifiers {
                     await input.key(
@@ -792,9 +790,6 @@ final class RemoteVideoCanvasNSView: NSView {
                         keyCode: keyCode,
                         keyboardType: modifier.keyboardType
                     )
-                }
-                if shouldReleasePointer, let point {
-                    await input.pointer(buttons: 0, x: point.x, y: point.y, displayID: self.inputDisplayID)
                 }
             }
         }
@@ -882,7 +877,8 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func beginRemoteFileDragIfNeeded(with event: NSEvent) -> Bool {
-        guard remoteDraggingSession == nil,
+        guard activeRemoteDragSessionID == nil,
+              remoteDraggingSession == nil,
               let fileTransfer,
               let drag = fileTransfer.remoteDrag.drag else { return false }
         let location = convert(event.locationInWindow, from: nil)
@@ -898,7 +894,6 @@ final class RemoteVideoCanvasNSView: NSView {
             provider.userInfo = [
                 "fileName": promise.fileName,
                 "filePath": promise.sourcePath,
-                "lastItem": promise.isLast,
             ]
             let image = providedImage ?? NSWorkspace.shared.icon(for: contentType)
             let item = NSDraggingItem(pasteboardWriter: provider)
@@ -909,10 +904,35 @@ final class RemoteVideoCanvasNSView: NSView {
             )
             return item
         }
+        activeRemoteDragSessionID = drag.sessionID
         let session = beginDraggingSession(with: items, event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = true
         remoteDraggingSession = session
         return true
+    }
+
+    private func finishRemoteFileDrag() {
+        remoteDraggingSession = nil
+        guard let sessionID = activeRemoteDragSessionID else { return }
+        activeRemoteDragSessionID = nil
+        let pointerButtons = AppleInputController.leftButton
+            | AppleInputController.rightButton
+            | AppleInputController.middleButton
+        buttonMask &= ~pointerButtons
+        let fileTransfer = fileTransfer
+        let input = input
+        let point = lastRemotePoint
+        let displayID = inputDisplayID
+        enqueueInput {
+            await fileTransfer?.cancelRemoteDrag(sessionID: sessionID)
+            guard let input, let point else { return }
+            await input.fileDragPointer(
+                buttons: 0,
+                x: point.x,
+                y: point.y,
+                displayID: displayID
+            )
+        }
     }
 
     private func repostCurrentEventForRemoteDrag() {
@@ -934,11 +954,10 @@ final class RemoteVideoCanvasNSView: NSView {
             guard usedNames.insert(fileName).inserted else { continue }
             values.append((sourcePath, fileName))
         }
-        return values.enumerated().map { index, value in
+        return values.map { value in
             RemoteFilePromise(
                 sourcePath: value.sourcePath,
-                fileName: value.fileName,
-                isLast: index == values.count - 1
+                fileName: value.fileName
             )
         }
     }
@@ -1304,12 +1323,7 @@ extension RemoteVideoCanvasNSView: NSDraggingSource {
         endedAt screenPoint: NSPoint,
         operation: NSDragOperation
     ) {
-        remoteDraggingSession = nil
-        // AppKit owns the physical mouse-up once the remote promise becomes a
-        // local drag. Mirroring that release to the last in-canvas coordinate
-        // would complete a second Finder drop on the remote Mac. The native
-        // drag-ended hook only finishes local bookkeeping.
-        buttonMask &= ~AppleInputController.leftButton
+        finishRemoteFileDrag()
     }
 }
 
@@ -1333,9 +1347,7 @@ extension RemoteVideoCanvasNSView: NSFilePromiseProviderDelegate {
             completionHandler(AppleFileTransferServiceError.unavailable)
             return
         }
-        let isLast = info["lastItem"] as? Bool == true
         Task { @MainActor in
-            if isLast { await fileTransfer.clearRemoteDrag() }
             do {
                 _ = try await fileTransfer.receiveRemoteFile(
                     sourcePath: sourcePath,

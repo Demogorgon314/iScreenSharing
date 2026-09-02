@@ -399,6 +399,22 @@ actor AppleFileTransferService {
         stopAccessing(pendingDrop)
     }
 
+    func cancelRemoteDrag(sessionID: UInt32) async {
+        guard remoteDragSessionID == sessionID else { return }
+        remoteDragExpirationTask?.cancel()
+        remoteDragExpirationTask = nil
+        remoteDragSessionID = nil
+        await remoteDrag.clear(sessionID: sessionID)
+        guard !isClosed else { return }
+        do {
+            let message = try AppleFileTransferMessage.cancelDrop(sessionID: sessionID)
+            try await send([message])
+        } catch {
+            // Native treats drag cancellation as best effort, then releases the
+            // pointer so a failed control write cannot leave mouse buttons stuck.
+        }
+    }
+
     @discardableResult
     func receive(_ fragment: Data) async -> Bool {
         guard !fragment.isEmpty else { return false }

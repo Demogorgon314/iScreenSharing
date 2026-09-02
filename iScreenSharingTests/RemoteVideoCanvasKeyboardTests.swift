@@ -170,7 +170,7 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
         await service.close()
     }
 
-    func testEndingRemoteFilePromiseDragDoesNotDropAtLastRemotePoint() async throws {
+    func testResigningFirstResponderDoesNotReleasePointerButton() async throws {
         let keys = try AppleRecordKeys(
             key: Data(repeating: 0x11, count: 16),
             initializationVector: Data(repeating: 0x22, count: 16)
@@ -208,7 +208,7 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
             clickCount: 1,
             pressure: 1
         ))
-        let reentryMove = try XCTUnwrap(NSEvent.mouseEvent(
+        let move = try XCTUnwrap(NSEvent.mouseEvent(
             with: .mouseMoved,
             location: NSPoint(x: 80, y: 80),
             modifierFlags: [],
@@ -222,12 +222,8 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
 
         view.mouseDown(with: mouseDown)
         await waitUntil { transport.sentMessages.count == 1 }
-        view.draggingSession(
-            NSDraggingSession(),
-            endedAt: .zero,
-            operation: .copy
-        )
-        view.mouseMoved(with: reentryMove)
+        _ = view.resignFirstResponder()
+        view.mouseMoved(with: move)
         await transport.waitUntilSendIsSuspended()
 
         let expectedLayer = AppleEncryptedRecordLayer(keys: keys)
@@ -239,7 +235,7 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
             timestampDelta: 123
         ))
         let expectedMove = try expectedLayer.encryptPointerEvent(
-            buttons: 0,
+            buttons: AppleInputController.leftButton,
             x: 80,
             y: 20,
             clickCount: 0,

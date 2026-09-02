@@ -906,6 +906,46 @@ final class AppleFileTransferServiceTests: XCTestCase {
         XCTAssertNil(service.remoteDrag.drag)
     }
 
+    func testCancellingRemoteDragSendsNativeCancelOnceForActiveSession() async throws {
+        let archive = AppleClipboardArchive(items: [
+            AppleClipboardItem(flavors: [
+                AppleClipboardFlavor(
+                    type: "public.file-url",
+                    aliases: [
+                        AppleClipboardTypeAlias(
+                            tagClass: "com.apple.ostype",
+                            preferredTag: "furl"
+                        )
+                    ],
+                    value: Data("file:///remote/file.txt".utf8)
+                )
+            ])
+        ])
+        var message = try AppleClipboardMessage.send(archive: archive, sessionID: 0x1234)
+        message[0] = 0x20
+        let recorder = FileTransferSendRecorder()
+        let service = AppleFileTransferService(
+            remoteName: "Remote Mac",
+            history: AppleFileTransferHistory(),
+            sender: FakeFileCopySender(outputs: []),
+            send: { messages in await recorder.record(messages) }
+        )
+
+        let accepted = await service.receive(message)
+        XCTAssertTrue(accepted)
+        await service.cancelRemoteDrag(sessionID: 0x4321)
+        XCTAssertNotNil(service.remoteDrag.drag)
+        await service.cancelRemoteDrag(sessionID: 0x1234)
+        await service.cancelRemoteDrag(sessionID: 0x1234)
+
+        XCTAssertNil(service.remoteDrag.drag)
+        let sentMessages = await recorder.messages
+        XCTAssertEqual(
+            sentMessages,
+            [try AppleFileTransferMessage.cancelDrop(sessionID: 0x1234)]
+        )
+    }
+
     func testRemoteDragExpiresAfterNativeLifetime() async throws {
         let archive = AppleClipboardArchive(items: [
             AppleClipboardItem(flavors: [
