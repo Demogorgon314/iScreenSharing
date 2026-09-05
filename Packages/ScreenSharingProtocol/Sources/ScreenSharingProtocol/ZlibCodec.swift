@@ -22,10 +22,10 @@ public enum ZlibCodec {
         return output
     }
 
-    /// Produces the unterminated zlib stream used by Apple's drag-and-drop
+    /// Produces the unterminated zlib stream used by Apple's clipboard and drag-and-drop
     /// messages: one level-9 deflate call with `Z_SYNC_FLUSH` and no Adler-32
-    /// trailer. This is intentionally distinct from the completed stream used
-    /// by ordinary clipboard messages.
+    /// trailer. This is intentionally distinct from the completed stream
+    /// produced by `compress`.
     public static func compressSyncFlush(
         _ input: Data,
         maximumOutputLength: Int = defaultMaximumOutputLength
@@ -54,6 +54,8 @@ public enum ZlibCodec {
         return output
     }
 
+    /// Decodes one independent sync-flush or completed zlib stream. The decoded
+    /// byte count must match `expectedSize` and stay within `maximumOutputLength`.
     public static func decompressSyncFlush(
         _ input: Data,
         expectedSize: Int,
@@ -89,14 +91,26 @@ public enum ZlibCodec {
             while true {
                 stream.pointee.dst_ptr = destination
                 stream.pointee.dst_size = chunkSize
+                let remainingInput = stream.pointee.src_size
                 let status = compression_stream_process(stream, 0)
+                guard status != COMPRESSION_STATUS_ERROR else { throw ZlibCodecError.invalidStream }
                 let produced = chunkSize - stream.pointee.dst_size
+                guard produced <= maximumOutputLength - output.count else {
+                    throw ZlibCodecError.outputTooLarge
+                }
                 if produced > 0 { output.append(destination, count: produced) }
-                guard output.count <= maximumOutputLength else { throw ZlibCodecError.outputTooLarge }
-                if status == COMPRESSION_STATUS_END || stream.pointee.src_size == 0 { break }
+                if status == COMPRESSION_STATUS_END { break }
                 guard status == COMPRESSION_STATUS_OK else { throw ZlibCodecError.invalidStream }
+                // Consuming all input does not drain the decoder's internal
+                // output. A full destination needs another pass, including
+                // when a sync-flush stream has no final end marker.
+                if stream.pointee.src_size == 0 && produced < chunkSize { break }
+                guard produced > 0 || stream.pointee.src_size < remainingInput else {
+                    throw ZlibCodecError.invalidStream
+                }
             }
         }
+        guard output.count == expectedSize else { throw ZlibCodecError.invalidStream }
         return output
     }
 

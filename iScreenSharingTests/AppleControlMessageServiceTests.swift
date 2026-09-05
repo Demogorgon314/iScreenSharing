@@ -16,6 +16,28 @@ import XCTest
 
 @MainActor
 final class AppleControlMessageServiceTests: XCTestCase {
+    func testLargeClipboardIsInstalledAndFollowingCursorUpdateIsDelivered() async throws {
+        let recorder = ControlDispatchRecorder()
+        let harness = try makeHarness(receiveCursorUpdate: { await recorder.recordCursor($0) })
+        defer { harness.manager.disconnect(harness.endpoint) }
+        let serverLayer = try makeRecordLayer()
+        let sessionID = try await requestClipboard(harness, serverLayer: serverLayer)
+        let archive = binaryClipboard(seed: 27, count: 100_000)
+        let message = try AppleClipboardMessage.send(archive: archive, sessionID: sessionID)
+        let records = AppleClipboardMessage.fragments(of: message) + [cursorSelection(id: 7)]
+        harness.transport.enqueueReceived(try serverLayer.encrypt(records))
+
+        harness.service.start()
+        await fulfillment(of: [harness.transport.readStarted], timeout: 1)
+
+        XCTAssertEqual(harness.pasteboard.data(forType: .png), archive.items[0].flavors[0].value)
+        let cursorUpdates = await recorder.cursorUpdates
+        XCTAssertEqual(cursorUpdates, [.select(id: 7)])
+        XCTAssertNotNil(harness.manager.session(for: harness.endpoint))
+        harness.manager.disconnect(harness.endpoint)
+        await fulfillment(of: [harness.transport.cancelled], timeout: 1)
+    }
+
     func testClipboardContinuationsAreNotRoutedAsOtherControlMessages() async throws {
         let vectors: [(seed: UInt64, prefix: UInt8)] = [
             (57, 0x00), (784, 0x1e), (842, 0x20), (332, 0x22),
@@ -40,8 +62,7 @@ final class AppleControlMessageServiceTests: XCTestCase {
             let sessionID = try await requestClipboard(harness, serverLayer: serverLayer)
             let archive = binaryClipboard(seed: vector.seed)
             let message = try AppleClipboardMessage.send(archive: archive, sessionID: sessionID)
-            // Confirm a valid native-sized continuation independently of routing
-            // and the separate multi-output-block codec bug.
+            // Confirm a valid native-sized continuation independently of routing.
             XCTAssertEqual(try AppleClipboardMessage.archive(from: message), archive)
             let fragments = AppleClipboardMessage.fragments(of: message)
             XCTAssertEqual(fragments[2].first, vector.prefix)
@@ -250,9 +271,9 @@ final class AppleControlMessageServiceTests: XCTestCase {
         return message
     }
 
-    private func binaryClipboard(seed: UInt64) -> AppleClipboardArchive {
+    private func binaryClipboard(seed: UInt64, count: Int = 50_000) -> AppleClipboardArchive {
         var state = seed
-        let bytes = Data((0..<50_000).map { _ -> UInt8 in
+        let bytes = Data((0..<count).map { _ -> UInt8 in
             state ^= state << 13
             state ^= state >> 7
             state ^= state << 17

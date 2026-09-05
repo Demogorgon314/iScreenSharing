@@ -3,6 +3,30 @@ import XCTest
 import ScreenSharingProtocol
 
 final class AppleClipboardMessageTests: XCTestCase {
+    func testReassemblesAndDecodesLargeBinaryClipboardWithoutTruncating() throws {
+        var state: UInt64 = 27
+        let image = Data((0..<100_000).map { _ -> UInt8 in
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return UInt8(truncatingIfNeeded: state)
+        })
+        let archive = AppleClipboardArchive(items: [AppleClipboardItem(flavors: [
+            AppleClipboardFlavor(type: "public.png", aliases: [], value: image),
+        ])])
+        let message = try AppleClipboardMessage.send(archive: archive, sessionID: 7)
+        var reassembler = AppleClipboardReassembler()
+        var completed: Data?
+
+        for fragment in AppleClipboardMessage.fragments(of: message) {
+            completed = try reassembler.process(fragment)
+        }
+
+        let envelope = try AppleClipboardMessage.envelope(from: XCTUnwrap(completed))
+        XCTAssertEqual(envelope.sessionID, 7)
+        XCTAssertEqual(envelope.archive, archive)
+    }
+
     func testBuildsEnableAndFetchMessages() {
         XCTAssertEqual(AppleClipboardMessage.enable, Data([0x15, 0, 0, 1, 0, 0, 0, 0]))
         XCTAssertEqual(AppleClipboardMessage.disable, Data([0x15, 0, 0, 2, 0, 0, 0, 0]))
