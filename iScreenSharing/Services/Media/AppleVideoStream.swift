@@ -42,12 +42,30 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     )
     private let lifecycleLock = NSLock()
     private let countLock = NSLock()
+    private let receiverReportSourceLock = NSLock()
     private var playbackTimer: DispatchSourceTimer?
     private var rateControlTimer: DispatchSourceTimer?
     private var decodePipeline: AppleHEVCDecodePipeline?
     private var decoderParameterSets: AppleHEVCParameterSets?
     private var decoderMode: AppleVideoDecoderMode = .automatic
-    private var sourceToTile = [UInt32: Int]()
+    private var receiverReportSource: UInt32?
+    // Playback owns the complete tile mapping. Network feedback reads only
+    // the primary-source snapshot, without waiting for playback/decoder work.
+    private var sourceToTileStorage = [UInt32: Int]()
+    private var sourceToTile: [UInt32: Int] {
+        get {
+            dispatchPrecondition(condition: .onQueue(queue))
+            return sourceToTileStorage
+        }
+        set {
+            dispatchPrecondition(condition: .onQueue(queue))
+            sourceToTileStorage = newValue
+            let primarySource = newValue.first(where: { $0.value == 0 })?.key
+            receiverReportSourceLock.withVideoStreamLock {
+                receiverReportSource = primarySource
+            }
+        }
+    }
     private var restartSourceToTile = [UInt32: Int]()
     private var abandonedSources = Set<UInt32>()
     private var cachedUnits = [UInt32: [AppleHEVCAccessUnit]]()
@@ -179,6 +197,8 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
                     return
                 }
 
+                self.restartSourceToTile = self.sourceToTile
+                self.sourceToTile.removeAll(keepingCapacity: false)
                 self.networkQueue.sync {
                     self.lifecycleLock.withVideoStreamLock {
                         self.mediaGeneration &+= 1
@@ -189,8 +209,6 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
                 self.decodePipeline?.close()
                 self.decodePipeline = nil
                 self.decoderParameterSets = nil
-                self.restartSourceToTile = self.sourceToTile
-                self.sourceToTile.removeAll(keepingCapacity: false)
                 self.abandonedSources.removeAll(keepingCapacity: false)
                 self.cachedUnits.removeAll(keepingCapacity: false)
                 self.countLock.withVideoStreamLock {
@@ -720,7 +738,7 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
         let currentTime = ProcessInfo.processInfo.systemUptime
         guard currentTime - lastReceiverReportTime >= Self.receiverReportInterval else { return }
         do {
-            let source = sourceToTile.first(where: { $0.value == 0 })?.key
+            let source = receiverReportSourceLock.withVideoStreamLock { receiverReportSource }
                 ?? processor.primarySources(tileCount: mediaCanvas.tileCount).first
             guard let source,
                   let report = processor.receptionReport(for: source) else { return }
