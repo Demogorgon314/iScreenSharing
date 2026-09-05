@@ -85,6 +85,12 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         )
     }
 
+    /// Interrupts route I/O while activation still owns the session. Activation
+    /// must then call close() to clean up its partially installed resources.
+    func cancelPendingActivation() {
+        route.close()
+    }
+
     func close() {
         closeLock.lock()
         guard !hasClosed else {

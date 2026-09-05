@@ -88,18 +88,23 @@ final class SessionActivation: SessionActivating {
                 )
             }
 
-            switch configuration.sharingType {
-            case .standard:
-                try await activateStandard(
-                    session,
-                    quality: configuration.standardQuality
-                )
-            case .highPerformance:
-                try await activateHighPerformance(
-                    session,
-                    endpoint: endpoint,
-                    configuration: configuration
-                )
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                switch configuration.sharingType {
+                case .standard:
+                    try await activateStandard(
+                        session,
+                        quality: configuration.standardQuality
+                    )
+                case .highPerformance:
+                    try await activateHighPerformance(
+                        session,
+                        endpoint: endpoint,
+                        configuration: configuration
+                    )
+                }
+            } onCancel: {
+                session.cancelPendingActivation()
             }
 
             try Task.checkCancellation()
@@ -107,6 +112,7 @@ final class SessionActivation: SessionActivating {
             return session
         } catch {
             pendingSession?.close()
+            try Task.checkCancellation()
             throw error
         }
     }

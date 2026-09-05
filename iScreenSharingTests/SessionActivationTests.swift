@@ -74,6 +74,7 @@ final class SessionActivationTests: XCTestCase {
         XCTAssertNotNil(session.remoteSystemCapabilities)
         XCTAssertNotNil(session.keyboardInputSourceService)
         XCTAssertNotNil(session.controlState)
+        XCTAssertEqual(transport.cancelCount, 0)
         session.close()
     }
 

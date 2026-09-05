@@ -48,28 +48,37 @@ struct RFBAuthenticationService: RFBAuthenticating {
         let route = try await routeOpener.open(endpoint, sharingType: sharingType)
         let transport = route.control
         do {
-            let probe = try await performVersionHandshake(on: transport)
-            guard probe.securityTypes.contains(.appleRSA) else {
-                throw RFBAuthenticationError.unsupportedAppleRSA
-            }
+            return try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                let probe = try await performVersionHandshake(on: transport)
+                guard probe.securityTypes.contains(.appleRSA) else {
+                    throw RFBAuthenticationError.unsupportedAppleRSA
+                }
 
-            let masterKey = try await authenticateRSA1(
-                credentials: credentials,
-                transport: transport
-            )
-            let serverInfo = try await initializeSession(
-                on: transport,
-                sharingType: sharingType
-            )
-            return RFBAuthenticatedSession(
-                endpoint: endpoint,
-                sharingType: sharingType,
-                masterKey: masterKey,
-                serverInfo: serverInfo,
-                route: route
-            )
+                let masterKey = try await authenticateRSA1(
+                    credentials: credentials,
+                    transport: transport
+                )
+                let serverInfo = try await initializeSession(
+                    on: transport,
+                    sharingType: sharingType
+                )
+                try Task.checkCancellation()
+                return RFBAuthenticatedSession(
+                    endpoint: endpoint,
+                    sharingType: sharingType,
+                    masterKey: masterKey,
+                    serverInfo: serverInfo,
+                    route: route
+                )
+            } onCancel: {
+                // Authentication owns the route until it returns a session.
+                // Closing it wakes callback-based and blocking TCP reads alike.
+                route.close()
+            }
         } catch {
             route.close()
+            try Task.checkCancellation()
             throw error
         }
     }

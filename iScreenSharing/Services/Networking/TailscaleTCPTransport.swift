@@ -213,9 +213,11 @@ private final class FileDescriptorState: @unchecked Sendable {
         let currentDescriptor = descriptor
         let descriptorToClose = activeOperations == 0 ? currentDescriptor : -1
         if descriptorToClose >= 0 { descriptor = -1 }
+        // Keep release() from closing and recycling the descriptor before the
+        // shutdown that wakes its outstanding read/write operations.
+        if currentDescriptor >= 0 { Darwin.shutdown(currentDescriptor, SHUT_RDWR) }
         lock.unlock()
 
-        if currentDescriptor >= 0 { Darwin.shutdown(currentDescriptor, SHUT_RDWR) }
         if descriptorToClose >= 0 { Darwin.close(descriptorToClose) }
     }
 }

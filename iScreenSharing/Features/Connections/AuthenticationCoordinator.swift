@@ -115,8 +115,10 @@ final class AuthenticationCoordinator: ObservableObject {
                     state = .authenticated
                     persistCredentialsInBackground(credentials, remember: rememberPassword)
                 } catch is CancellationError {
+                    guard !Task.isCancelled else { return }
                     state = .idle
                 } catch {
+                    guard !Task.isCancelled else { return }
                     state = .failed(error.localizedDescription)
                 }
             }

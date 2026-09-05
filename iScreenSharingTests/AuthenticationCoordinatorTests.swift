@@ -1,3 +1,4 @@
+import Combine
 import enum ScreenSharingProtocol.AppleRSA1Error
 import class ScreenSharingProtocol.AppleEncryptedRecordLayer
 import struct ScreenSharingProtocol.AppleCanvas
@@ -445,6 +446,44 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         XCTAssertNil(sessions.session(for: endpoint))
     }
 
+    func testCancelledAttemptCannotOverwriteReplacementSession() async throws {
+        try await assertCancelledAttemptCannotOverwriteReplacement(error: CancellationError())
+    }
+
+    func testCancelledAttemptNetworkErrorCannotOverwriteReplacementSession() async throws {
+        try await assertCancelledAttemptCannotOverwriteReplacement(error: RFBNetworkError.connectionClosed)
+    }
+
+    private func assertCancelledAttemptCannotOverwriteReplacement(error: Error) async throws {
+        let endpoint = try ConnectionEndpoint("example.local")
+        let replacement = try makeSession(endpoint: endpoint)
+        defer { replacement.close() }
+        let activator = DelayedFirstSessionActivator(replacement: replacement)
+        let sessions = SessionManager()
+        let coordinator = AuthenticationCoordinator(
+            endpoint: endpoint,
+            sessionActivator: activator,
+            credentialStore: MockCredentialStore(),
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionManager: sessions
+        )
+        coordinator.signIn(username: "user", password: "password", rememberPassword: false)
+        try await waitUntil { activator.firstAttempt != nil }
+        coordinator.signIn(username: "user", password: "password", rememberPassword: false)
+        try await waitUntil { coordinator.state == .authenticated }
+
+        let overwritten = expectation(description: "Old cancelled attempt must not change replacement state")
+        overwritten.isInverted = true
+        let observation = coordinator.$state.dropFirst().sink { _ in overwritten.fulfill() }
+        defer { observation.cancel() }
+        activator.firstAttempt?.resume(throwing: error)
+        activator.firstAttempt = nil
+        await fulfillment(of: [overwritten], timeout: 1)
+
+        XCTAssertEqual(coordinator.state, .authenticated)
+        XCTAssertTrue(sessions.session(for: endpoint) === replacement)
+    }
+
     private func makeSessionActivator(
         authenticator: any RFBAuthenticating,
         connectionStore: ConnectionStore,
@@ -529,6 +568,29 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         message.appendUInt16BE(UInt16(payload.count))
         message.append(payload)
         return message
+    }
+}
+
+@MainActor
+private final class DelayedFirstSessionActivator: SessionActivating {
+    let replacement: RFBAuthenticatedSession
+    var firstAttempt: CheckedContinuation<RFBAuthenticatedSession, Error>?
+    private var attemptCount = 0
+
+    init(replacement: RFBAuthenticatedSession) {
+        self.replacement = replacement
+    }
+
+    func activate(
+        endpoint: ConnectionEndpoint,
+        credentials: ScreenSharingCredentials,
+        configuration: SessionActivationConfiguration
+    ) async throws -> RFBAuthenticatedSession {
+        attemptCount += 1
+        if attemptCount == 1 {
+            return try await withCheckedThrowingContinuation { firstAttempt = $0 }
+        }
+        return replacement
     }
 }
 
