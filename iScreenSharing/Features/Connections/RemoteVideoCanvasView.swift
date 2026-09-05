@@ -370,7 +370,10 @@ final class RemoteVideoCanvasNSView: NSView {
             object: window,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reportWindowIsKey(false) }
+            MainActor.assumeIsolated {
+                self?.releaseActiveModifiers()
+                self?.reportWindowIsKey(false)
+            }
         }
         windowDidChangeScreenObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeScreenNotification,
@@ -779,21 +782,26 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     override func resignFirstResponder() -> Bool {
-        if let input {
-            let modifiers = activeModifiers
-            activeModifiers.removeAll()
-            enqueueInput {
-                for (keyCode, modifier) in modifiers {
-                    await input.key(
-                        isDown: false,
-                        symbol: modifier.symbol,
-                        keyCode: keyCode,
-                        keyboardType: modifier.keyboardType
-                    )
-                }
+        releaseActiveModifiers()
+        return super.resignFirstResponder()
+    }
+
+    private func releaseActiveModifiers() {
+        let modifiers = activeModifiers
+        activeModifiers.removeAll()
+        guard let input, !modifiers.isEmpty else { return }
+        // A window can lose key status while retaining its first responder.
+        // Release through the same queue as the corresponding key-down events.
+        enqueueInput {
+            for (keyCode, modifier) in modifiers {
+                await input.key(
+                    isDown: false,
+                    symbol: modifier.symbol,
+                    keyCode: keyCode,
+                    keyboardType: modifier.keyboardType
+                )
             }
         }
-        return super.resignFirstResponder()
     }
 
     private func sendPointer(_ event: NSEvent) {

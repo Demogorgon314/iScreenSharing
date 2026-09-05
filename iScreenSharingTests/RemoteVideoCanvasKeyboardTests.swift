@@ -247,6 +247,125 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
         transport.resumeSuspendedSend()
     }
 
+    func testLosingKeyWindowReleasesShiftWithoutChangingFirstResponder() async throws {
+        try await assertLosingKeyWindowReleasesShift(keyCode: 56, symbol: 0xffe1, suspendedSendNumber: 2)
+    }
+
+    func testLosingKeyWindowReleasesRightShift() async throws {
+        try await assertLosingKeyWindowReleasesShift(keyCode: 60, symbol: 0xffe2, suspendedSendNumber: 2)
+    }
+
+    func testLosingKeyWindowQueuesShiftReleaseBehindBlockedKeyDown() async throws {
+        try await assertLosingKeyWindowReleasesShift(keyCode: 56, symbol: 0xffe1, suspendedSendNumber: 1)
+    }
+
+    private func assertLosingKeyWindowReleasesShift(
+        keyCode: UInt16,
+        symbol: UInt32,
+        suspendedSendNumber: Int
+    ) async throws {
+        let keys = try AppleRecordKeys(
+            key: Data(repeating: 0x11, count: 16),
+            initializationVector: Data(repeating: 0x22, count: 16)
+        )
+        let followingKeySent = expectation(description: "Shift release precedes the following key")
+        let transport = DragInputTransport(suspendedSendNumber: suspendedSendNumber) { count in
+            if count == 3 { followingKeySent.fulfill() }
+        }
+        defer { transport.resumeSuspendedSend() }
+        let session = try makeSession(transport: transport)
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let canvas = AppleCanvas(width: 100, height: 100, tileCount: 1)
+        let input = AppleInputController(session: session, canvas: canvas, microseconds: { 123 })
+        let view = RemoteVideoCanvasNSView(
+            canvas: canvas,
+            frames: AppleVideoFrameStore(),
+            input: input,
+            cursors: nil,
+            displayScale: AppleVideoDisplayScale(),
+            synchronizesPresentation: true,
+            sourceRect: nil,
+            inputMapping: nil,
+            inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+        // Exercise AppKit's notification seam in a hidden test window. A key
+        // window change does not require replacing that window's first responder.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: true
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { window.contentView = nil }
+        XCTAssertTrue(window.makeFirstResponder(view))
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        let shiftDown = try XCTUnwrap(NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: .shift,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: keyCode
+        ))
+        view.flagsChanged(with: shiftDown)
+        if suspendedSendNumber == 1 {
+            await transport.waitUntilSendIsSuspended()
+        }
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        // Repeated notifications must not enqueue duplicate releases.
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        XCTAssertTrue(window.firstResponder === view)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+
+        // A following key is a barrier: on the broken path it becomes the
+        // second wire event because the Shift release was never queued.
+        let escape = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 1,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false,
+            keyCode: 53
+        ))
+        view.keyDown(with: escape)
+        await transport.waitUntilSendIsSuspended()
+
+        let keyboardType = UInt16(clamping:
+            shiftDown.cgEvent?.getIntegerValueField(.keyboardEventKeyboardType) ?? 0
+        )
+        let expected = AppleEncryptedRecordLayer(keys: keys)
+        let down = try expected.encrypt(try expected.encryptKeyEvent(
+            isDown: true, keySymbol: symbol, timestampDelta: 123,
+            keyboardType: keyboardType, keyCode: keyCode
+        ))
+        let up = try expected.encrypt(try expected.encryptKeyEvent(
+            isDown: false, keySymbol: symbol, timestampDelta: 0,
+            keyboardType: keyboardType, keyCode: keyCode
+        ))
+        XCTAssertEqual(transport.sentMessages, Array([down, up].prefix(suspendedSendNumber)))
+        transport.resumeSuspendedSend()
+        await fulfillment(of: [followingKeySent], timeout: 2)
+        let escapeKeyboardType = UInt16(clamping:
+            escape.cgEvent?.getIntegerValueField(.keyboardEventKeyboardType) ?? 0
+        )
+        let escapeDown = try expected.encrypt(try expected.encryptKeyEvent(
+            isDown: true, keySymbol: 0xff1b, timestampDelta: 0,
+            keyboardType: escapeKeyboardType, keyCode: 53
+        ))
+        XCTAssertEqual(transport.sentMessages, [down, up, escapeDown])
+    }
+
     func testLocalFileDragStartsAtEntryPointAfterOfferFinishes() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-drag-entry-\(UUID().uuidString).txt")
@@ -592,13 +711,15 @@ private final class TestDraggingInfo: NSObject, @preconcurrency NSDraggingInfo {
 private final class DragInputTransport: RFBTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let suspendedSendNumber: Int?
+    private let onSend: @Sendable (Int) -> Void
     private var messages = [Data]()
     private var suspensionWasReleased = false
     private var suspendedSend: CheckedContinuation<Void, Never>?
     private var suspensionWaiters = [CheckedContinuation<Void, Never>]()
 
-    init(suspendedSendNumber: Int? = nil) {
+    init(suspendedSendNumber: Int? = nil, onSend: @escaping @Sendable (Int) -> Void = { _ in }) {
         self.suspendedSendNumber = suspendedSendNumber
+        self.onSend = onSend
     }
 
     var sentMessages: [Data] {
@@ -608,10 +729,11 @@ private final class DragInputTransport: RFBTransport, @unchecked Sendable {
     func start(timeout: Duration) async throws { }
 
     func send(_ data: Data) async throws {
-        let shouldSuspend = lock.withLock {
+        let (count, shouldSuspend) = lock.withLock {
             messages.append(data)
-            return messages.count == suspendedSendNumber && !suspensionWasReleased
+            return (messages.count, messages.count == suspendedSendNumber && !suspensionWasReleased)
         }
+        onSend(count)
         guard shouldSuspend else { return }
         await withCheckedContinuation { continuation in
             let state = lock.withLock { () -> (Bool, [CheckedContinuation<Void, Never>]) in
