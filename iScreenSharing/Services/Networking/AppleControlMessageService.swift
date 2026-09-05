@@ -101,6 +101,7 @@ final class AppleControlMessageService: @unchecked Sendable {
     private func process(_ message: Data) async {
         guard !message.isEmpty else { return }
         countLock.withControlMessageLock { messageCount += 1 }
+        if await clipboardExchange.receiveContinuation(message) { return }
         if await receiveFileTransferMessage(message) { return }
         if message[0] == 0 {
             if let canvas = AppleMediaConfiguration.canvas(from: message) {

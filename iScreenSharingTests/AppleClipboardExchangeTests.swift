@@ -167,9 +167,73 @@ final class AppleClipboardExchangeTests: XCTestCase {
         XCTAssertEqual(requests.count, 2)
     }
 
+    func testExpiredResponseKeepsConsumingItsContinuationsWithoutInstallingClipboard() async throws {
+        let pasteboard = makePasteboard()
+        let service = AppleClipboardService(pasteboard: pasteboard)
+        let recorder = ClipboardExchangeRecorder()
+        let clock = ClipboardExchangeTestClock()
+        let exchange = makeExchange(
+            service: service,
+            recorder: recorder,
+            uptimeNanoseconds: { clock.value },
+            requestLifetimeNanoseconds: 120
+        )
+        try await exchange.requestRemoteClipboard()
+        let message = try AppleClipboardMessage.send(archive: .text("expired"), sessionID: 0x1234_5678)
+        let acceptedHeader = await exchange.receive(Data(message.prefix(16)))
+        XCTAssertTrue(acceptedHeader)
+        clock.value = 121
+
+        let acceptedEmpty = await exchange.receiveContinuation(Data())
+        let acceptedFirstPayload = await exchange.receiveContinuation(message.subdata(in: 16..<18))
+        let acceptedLastPayload = await exchange.receiveContinuation(Data(message.dropFirst(18)))
+
+        XCTAssertFalse(acceptedEmpty)
+        XCTAssertTrue(acceptedFirstPayload)
+        XCTAssertTrue(acceptedLastPayload)
+        XCTAssertNil(pasteboard.string(forType: .string))
+        let claimedNextMessage = await exchange.receiveContinuation(Data([0, 0, 0, 0]))
+        XCTAssertFalse(claimedNextMessage)
+        try await exchange.requestRemoteClipboard()
+        let acceptedFresh = await exchange.receive(
+            try AppleClipboardMessage.send(archive: .text("fresh"), sessionID: 0x1234_5678)
+        )
+        XCTAssertTrue(acceptedFresh)
+        XCTAssertEqual(pasteboard.string(forType: .string), "fresh")
+    }
+
+    func testSupersedingRequestPreservesOldResponseBoundaryAndAcceptsNewResponse() async throws {
+        let pasteboard = makePasteboard()
+        let service = AppleClipboardService(pasteboard: pasteboard)
+        let recorder = ClipboardExchangeRecorder()
+        let clock = ClipboardExchangeTestClock()
+        let exchange = makeExchange(
+            service: service,
+            recorder: recorder,
+            makeSessionID: { 0x1234_5678 + UInt32(clock.value) }
+        )
+        try await exchange.requestRemoteClipboard()
+        let oldResponse = try AppleClipboardMessage.send(archive: .text("obsolete"), sessionID: 0x1234_5678)
+        let acceptedHeader = await exchange.receive(Data(oldResponse.prefix(16)))
+        XCTAssertTrue(acceptedHeader)
+        clock.value = 1
+
+        try await exchange.requestRemoteClipboard()
+        let acceptedContinuation = await exchange.receiveContinuation(Data(oldResponse.dropFirst(16)))
+
+        XCTAssertTrue(acceptedContinuation)
+        XCTAssertNil(pasteboard.string(forType: .string))
+        let acceptedNewResponse = await exchange.receive(
+            try AppleClipboardMessage.send(archive: .text("current"), sessionID: 0x1234_5679)
+        )
+        XCTAssertTrue(acceptedNewResponse)
+        XCTAssertEqual(pasteboard.string(forType: .string), "current")
+    }
+
     private func makeExchange(
         service: AppleClipboardService,
         recorder: ClipboardExchangeRecorder,
+        makeSessionID: @escaping @Sendable () -> UInt32 = { 0x1234_5678 },
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         },
@@ -177,7 +241,7 @@ final class AppleClipboardExchangeTests: XCTestCase {
     ) -> AppleClipboardExchange {
         AppleClipboardExchange(
             clipboard: service,
-            makeSessionID: { 0x1234_5678 },
+            makeSessionID: makeSessionID,
             uptimeNanoseconds: uptimeNanoseconds,
             requestLifetimeNanoseconds: requestLifetimeNanoseconds,
             sendRequest: { promises, sessionID in

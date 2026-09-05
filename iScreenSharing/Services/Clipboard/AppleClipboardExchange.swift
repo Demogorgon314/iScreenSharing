@@ -87,6 +87,13 @@ actor AppleClipboardExchange {
         }
     }
 
+    /// Claims an unfinished message's records before the control reader treats
+    /// their arbitrary payload bytes as a new message type.
+    func receiveContinuation(_ message: Data) async -> Bool {
+        guard reassembler.isInProgress else { return false }
+        return await receive(message)
+    }
+
     private func receiveClipboardFragment(_ fragment: Data) async {
         do {
             guard let complete = try reassembler.process(fragment) else { return }
@@ -165,7 +172,8 @@ actor AppleClipboardExchange {
     }
 
     private func beginRequest(_ state: RequestState) {
-        reassembler = AppleClipboardReassembler()
+        // Request replacement does not change the boundary of an incoming
+        // message. Finish consuming it, then reject its obsolete session ID.
         requestState = state
         requestDeadlineNanoseconds = uptimeNanoseconds() &+ requestLifetimeNanoseconds
     }
@@ -178,7 +186,6 @@ actor AppleClipboardExchange {
     private func expireRequestIfNeeded() {
         guard let deadline = requestDeadlineNanoseconds,
               uptimeNanoseconds() >= deadline else { return }
-        reassembler = AppleClipboardReassembler()
         resetRequest()
     }
 }
