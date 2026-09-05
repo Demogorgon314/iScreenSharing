@@ -1,9 +1,101 @@
 import struct ScreenSharingProtocol.AppleCanvas
+import Metal
 import XCTest
 @testable import iScreenSharing
 
 @MainActor
 final class AppleNV24MetalLayerTests: XCTestCase {
+    func testEncodedFramesAreNotRecycledUntilGPUCompletion() throws {
+        for (format, tileCount) in [
+            (kCVPixelFormatType_32BGRA, 1),
+            (AppleHEVCDecoder.nativePixelFormat, 1),
+            (AppleHEVCDecoder.nativePixelFormat, 2),
+        ] {
+            let context = try XCTUnwrap(AppleNV24MetalContext())
+            let layer = AppleNV24MetalLayer(context: context)
+            let canvas = AppleCanvas(width: 8, height: 4, tileCount: tileCount)
+            layer.bounds = CGRect(x: 0, y: 0, width: 8, height: 4)
+            layer.contentsScale = 1
+            layer.update(
+                layouts: AppleVideoCanvasLayout.tiles(
+                    canvas: canvas,
+                    bounds: layer.bounds,
+                    slotHeight: CGFloat(4 / tileCount),
+                    fixedScale: nil,
+                    stretchesToFillBounds: true
+                ),
+                fullCanvasLayout: AppleVideoCanvasLayout.Tile(container: layer.bounds, content: layer.bounds),
+                canvasSize: layer.bounds.size,
+                bounds: layer.bounds
+            )
+            var pool: CVPixelBufferPool?
+            let attributes = [
+                kCVPixelBufferPixelFormatTypeKey as String: format,
+                kCVPixelBufferWidthKey as String: 8,
+                kCVPixelBufferHeightKey as String: 4 / tileCount,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary,
+            ] as CFDictionary
+            XCTAssertEqual(CVPixelBufferPoolCreate(nil, nil, attributes, &pool), kCVReturnSuccess)
+            let bufferPool = try XCTUnwrap(pool)
+            let allocationLimit = [kCVPixelBufferPoolAllocationThresholdKey as String: tileCount] as CFDictionary
+            let commandBuffer = try XCTUnwrap(context.commandQueue.makeCommandBuffer())
+            let gate = try XCTUnwrap(context.device.makeSharedEvent())
+            defer { gate.signaledValue = 1 }
+            commandBuffer.encodeWaitForEvent(gate, value: 1)
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm, width: 8, height: 4, mipmapped: false
+            )
+            descriptor.usage = .renderTarget
+            let destination = try XCTUnwrap(context.device.makeTexture(descriptor: descriptor))
+
+            try autoreleasepool {
+                for index in 0..<tileCount {
+                    var pixelBuffer: CVPixelBuffer?
+                    XCTAssertEqual(
+                        CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, bufferPool, allocationLimit, &pixelBuffer),
+                        kCVReturnSuccess
+                    )
+                    layer.update(
+                        makeFrame(pixelBuffer: try XCTUnwrap(pixelBuffer)),
+                        at: tileCount == 1 ? AppleVideoFrameStore.fullCanvasIndex : index
+                    )
+                }
+                XCTAssertTrue(layer.encode(into: commandBuffer, texture: destination))
+                layer.prepareForInactivity()
+            }
+            CVMetalTextureCacheFlush(context.textureCache, 0)
+            var recycled: CVPixelBuffer?
+            let beforeCompletion = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+                nil, bufferPool, allocationLimit, &recycled
+            )
+            XCTAssertEqual(beforeCompletion, kCVReturnWouldExceedAllocationThreshold, "Pixel format: \(format)")
+            recycled = nil
+
+            commandBuffer.commit()
+            XCTAssertNotEqual(commandBuffer.status, .completed)
+            XCTAssertEqual(
+                CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, bufferPool, allocationLimit, &recycled),
+                kCVReturnWouldExceedAllocationThreshold
+            )
+            recycled = nil
+            gate.signaledValue = 1
+            commandBuffer.waitUntilCompleted()
+            XCTAssertEqual(commandBuffer.status, .completed)
+            CVMetalTextureCacheFlush(context.textureCache, 0)
+            try autoreleasepool {
+                var availableBuffers = [CVPixelBuffer]()
+                for _ in 0..<tileCount {
+                    XCTAssertEqual(
+                        CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, bufferPool, allocationLimit, &recycled),
+                        kCVReturnSuccess
+                    )
+                    availableBuffers.append(try XCTUnwrap(recycled))
+                }
+                withExtendedLifetime(availableBuffers) {}
+            }
+        }
+    }
+
     func testCreatesMetalRenderingContext() {
         XCTAssertNotNil(AppleNV24MetalContext())
     }

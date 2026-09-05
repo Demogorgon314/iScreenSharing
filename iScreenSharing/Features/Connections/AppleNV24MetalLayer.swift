@@ -3,6 +3,12 @@ import Metal
 import OSLog
 import QuartzCore
 
+// The completion queue only releases these immutable references; it never
+// accesses image contents. Core Video retention prevents buffer-pool reuse.
+private struct AppleMetalTextureReferences: @unchecked Sendable {
+    let images: [CVMetalTexture]
+}
+
 private final class AppleMetalInFlightGate: @unchecked Sendable {
     private let lock = NSLock()
     private var isInFlight = false
@@ -408,11 +414,22 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         encode(into: commandBuffer, texture: drawable.texture)
     }
 
-    private func encode(into commandBuffer: MTLCommandBuffer, texture: MTLTexture) -> Bool {
+    /// Encodes the current frames and keeps their Core Video images in use
+    /// until the command buffer completes, independently of later frame updates.
+    func encode(into commandBuffer: MTLCommandBuffer, texture: MTLTexture) -> Bool {
+        var images = [CVMetalTexture]()
+        defer {
+            if !images.isEmpty {
+                let references = AppleMetalTextureReferences(images: images)
+                commandBuffer.addCompletedHandler { _ in
+                    withExtendedLifetime(references) {}
+                }
+            }
+        }
         guard renderingBounds.width > 0, renderingBounds.height > 0 else { return false }
         if let frame = latestFrames[AppleVideoFrameStore.fullCanvasIndex] {
             if CVPixelBufferGetPixelFormatType(frame.pixelBuffer) == kCVPixelFormatType_32BGRA,
-               let source = bgraTexture(from: frame.pixelBuffer) {
+               let source = bgraTexture(from: frame.pixelBuffer, retaining: &images) {
                 return encodeRGBA(
                     source,
                     layout: fullCanvasLayout,
@@ -424,7 +441,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
                 [(frame, fullCanvasLayout)],
                 into: texture,
                 bounds: renderingBounds,
-                commandBuffer: commandBuffer
+                commandBuffer: commandBuffer,
+                retaining: &images
             )
         }
         guard let compositedCanvas = canvasTexture(),
@@ -432,7 +450,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
                   nativeTileFrames(),
                   into: compositedCanvas,
                   bounds: CGRect(origin: .zero, size: canvasSize),
-                  commandBuffer: commandBuffer
+                  commandBuffer: commandBuffer,
+                  retaining: &images
               ) else { return false }
         return encodeRGBA(
             compositedCanvas,
@@ -446,7 +465,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         _ frames: [(AppleVideoFrameStore.Frame, AppleVideoCanvasLayout.Tile)],
         into texture: MTLTexture,
         bounds: CGRect,
-        commandBuffer: MTLCommandBuffer
+        commandBuffer: MTLCommandBuffer,
+        retaining images: inout [CVMetalTexture]
     ) -> Bool {
         guard !frames.isEmpty else { return false }
         let pass = MTLRenderPassDescriptor()
@@ -457,7 +477,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
         encoder.setRenderPipelineState(context.pipeline)
         for (frame, layout) in frames {
-            encode(frame, layout: layout, bounds: bounds, using: encoder)
+            encode(frame, layout: layout, bounds: bounds, using: encoder, retaining: &images)
         }
         encoder.endEncoding()
         return true
@@ -492,13 +512,14 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         _ frame: AppleVideoFrameStore.Frame,
         layout: AppleVideoCanvasLayout.Tile,
         bounds: CGRect,
-        using encoder: MTLRenderCommandEncoder
+        using encoder: MTLRenderCommandEncoder,
+        retaining images: inout [CVMetalTexture]
     ) {
         let pixelBuffer = frame.pixelBuffer
         guard CVPixelBufferGetPlaneCount(pixelBuffer) >= 2,
               let vertices = vertices(for: layout, bounds: bounds),
-              let luma = texture(from: pixelBuffer, plane: 0, format: .r8Unorm),
-              let chroma = texture(from: pixelBuffer, plane: 1, format: .rg8Unorm) else { return }
+              let luma = texture(from: pixelBuffer, plane: 0, format: .r8Unorm, retaining: &images),
+              let chroma = texture(from: pixelBuffer, plane: 1, format: .rg8Unorm, retaining: &images) else { return }
         encoder.setVertexBytes(
             vertices,
             length: MemoryLayout<Vertex>.stride * vertices.count,
@@ -635,7 +656,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private func texture(
         from pixelBuffer: CVPixelBuffer,
         plane: Int,
-        format: MTLPixelFormat
+        format: MTLPixelFormat,
+        retaining images: inout [CVMetalTexture]
     ) -> MTLTexture? {
         var image: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
@@ -650,10 +672,14 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             &image
         )
         guard status == kCVReturnSuccess, let image else { return nil }
+        images.append(image)
         return CVMetalTextureGetTexture(image)
     }
 
-    private func bgraTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+    private func bgraTexture(
+        from pixelBuffer: CVPixelBuffer,
+        retaining images: inout [CVMetalTexture]
+    ) -> MTLTexture? {
         var image: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(
             nil,
@@ -667,6 +693,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             &image
         )
         guard status == kCVReturnSuccess, let image else { return nil }
+        images.append(image)
         return CVMetalTextureGetTexture(image)
     }
 }
