@@ -20,6 +20,11 @@ protocol AppleClipboardReceiving: AnyObject {
 
 @MainActor
 final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
+    private static let receivingOwners = NSMapTable<NSString, AppleClipboardService>(
+        keyOptions: .strongMemory,
+        valueOptions: .weakMemory
+    )
+
     @Published private(set) var lastReceivedText: String?
     @Published private(set) var isSharingEnabled: Bool
 
@@ -39,6 +44,15 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
     private var hasStarted = false
     private var isClosed = false
     private var eligibilityGeneration: UInt64 = 0
+    private var receivingChangeCount: Int?
+
+    private var pasteboardKey: NSString { pasteboard.name.rawValue as NSString }
+
+    private var canReceiveRemoteClipboard: Bool {
+        isSharingEnabled && !isClosed && isControlling
+            && Self.receivingOwners.object(forKey: pasteboardKey) === self
+            && receivingChangeCount == pasteboard.changeCount
+    }
 
     var allowsRemoteSynchronization: Bool {
         isSharingEnabled && !isClosed && isControlling
@@ -78,6 +92,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         let wasEligible = allowsRemoteSynchronization
         if isKey {
             keySessionWindows.insert(identifier)
+            claimRemoteClipboard()
         } else {
             keySessionWindows.remove(identifier)
         }
@@ -88,6 +103,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         guard !isClosed, controlling != isControlling else { return }
         let wasEligible = allowsRemoteSynchronization
         isControlling = controlling
+        eligibilityGeneration &+= 1
         eligibilityDidChange(from: wasEligible)
         scheduleRemoteSharingStateUpdate()
     }
@@ -98,6 +114,7 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         let wasEligible = allowsRemoteSynchronization
         pasteboardChangeCount = pasteboard.changeCount
         isSharingEnabled = enabled
+        eligibilityGeneration &+= 1
         if !enabled { hasUnfulfilledPromises = false }
         didChangeSharingEnabled(enabled)
         eligibilityDidChange(from: wasEligible)
@@ -154,16 +171,17 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         pasteboard.clearContents()
         pasteboard.writeObjects(pasteboardItems)
         pasteboardChangeCount = pasteboard.changeCount
+        receivingChangeCount = pasteboard.changeCount
         hasUnfulfilledPromises = false
         lastReceivedText = archive.preferredText
     }
 
     func synchronizationLease() -> UInt64? {
-        allowsRemoteSynchronization ? eligibilityGeneration : nil
+        canReceiveRemoteClipboard ? eligibilityGeneration : nil
     }
 
     func isSynchronizationLeaseValid(_ lease: UInt64) -> Bool {
-        allowsRemoteSynchronization && lease == eligibilityGeneration
+        canReceiveRemoteClipboard && lease == eligibilityGeneration
     }
 
     func receiveIfEligible(_ archive: AppleClipboardArchive, lease: UInt64) -> Bool {
@@ -176,6 +194,9 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         guard !isClosed else { return }
         let wasEligible = allowsRemoteSynchronization
         isClosed = true
+        if Self.receivingOwners.object(forKey: pasteboardKey) === self {
+            Self.receivingOwners.removeObject(forKey: pasteboardKey)
+        }
         advertisementTask?.cancel()
         advertisementTask = nil
         sharingStateTask?.cancel()
@@ -183,6 +204,18 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
         hasUnfulfilledPromises = false
         keySessionWindows.removeAll()
         eligibilityDidChange(from: wasEligible)
+    }
+
+    private func claimRemoteClipboard() {
+        // Copy notifications and their data can arrive after the user switches
+        // to the local app to paste. Keep the last session's receive ownership
+        // until another session takes over or the local pasteboard changes.
+        if Self.receivingOwners.object(forKey: pasteboardKey) !== self
+            || receivingChangeCount != pasteboard.changeCount {
+            eligibilityGeneration &+= 1
+        }
+        Self.receivingOwners.setObject(self, forKey: pasteboardKey)
+        receivingChangeCount = pasteboard.changeCount
     }
 
     private func synchronizeIfChanged() {
@@ -215,7 +248,6 @@ final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
     private func eligibilityDidChange(from wasEligible: Bool) {
         let isEligible = allowsRemoteSynchronization
         guard wasEligible != isEligible else { return }
-        eligibilityGeneration &+= 1
         if isEligible {
             synchronizeIfChanged()
         } else {

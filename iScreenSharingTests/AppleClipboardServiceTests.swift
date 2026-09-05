@@ -353,7 +353,7 @@ final class AppleClipboardServiceTests: XCTestCase {
         second.close()
     }
 
-    func testFocusLeasePreventsLateRemoteClipboardInstallation() throws {
+    func testNewLocalCopyInvalidatesRemoteLeaseEvenAfterSessionRefocuses() throws {
         let pasteboard = makePasteboard()
         let service = AppleClipboardService(
             pasteboard: pasteboard,
@@ -365,10 +365,93 @@ final class AppleClipboardServiceTests: XCTestCase {
         let lease = try XCTUnwrap(service.synchronizationLease())
 
         service.setSessionWindow(windowID, isKey: false)
+        pasteboard.clearContents()
+        pasteboard.setString("new local copy", forType: .string)
 
         XCTAssertFalse(service.receiveIfEligible(.text("remote"), lease: lease))
-        XCTAssertNil(pasteboard.string(forType: .string))
+        XCTAssertNil(service.synchronizationLease())
+        service.setSessionWindow(windowID, isKey: true)
+        XCTAssertFalse(service.receiveIfEligible(.text("stale remote"), lease: lease))
+        XCTAssertEqual(pasteboard.string(forType: .string), "new local copy")
+        let freshLease = try XCTUnwrap(service.synchronizationLease())
+        XCTAssertTrue(service.receiveIfEligible(.text("fresh remote"), lease: freshLease))
         service.close()
+    }
+
+    func testOnlyMostRecentlyFocusedSessionCanReceiveRemoteClipboard() throws {
+        let pasteboard = makePasteboard()
+        let first = AppleClipboardService(pasteboard: pasteboard, isApplicationActive: { true })
+        let second = AppleClipboardService(pasteboard: pasteboard, isApplicationActive: { true })
+        first.start()
+        second.start()
+        defer { first.close(); second.close() }
+        let firstWindow = UUID()
+        let secondWindow = UUID()
+        first.setSessionWindow(firstWindow, isKey: true)
+        let firstLease = try XCTUnwrap(first.synchronizationLease())
+        first.setSessionWindow(firstWindow, isKey: false)
+        second.setSessionWindow(secondWindow, isKey: true)
+        let secondLease = try XCTUnwrap(second.synchronizationLease())
+        second.setSessionWindow(secondWindow, isKey: false)
+
+        XCTAssertNil(first.synchronizationLease())
+        XCTAssertFalse(first.receiveIfEligible(.text("first remote"), lease: firstLease))
+        XCTAssertTrue(second.receiveIfEligible(.text("second remote"), lease: secondLease))
+        second.close()
+        XCTAssertNil(first.synchronizationLease())
+        first.setSessionWindow(firstWindow, isKey: true)
+        XCTAssertFalse(first.receiveIfEligible(.text("stale first remote"), lease: firstLease))
+        let freshLease = try XCTUnwrap(first.synchronizationLease())
+        XCTAssertTrue(first.receiveIfEligible(.text("fresh first remote"), lease: freshLease))
+        XCTAssertEqual(pasteboard.string(forType: .string), "fresh first remote")
+    }
+
+    func testRevokingSharingControlOrSessionInvalidatesPendingRemoteClipboard() throws {
+        let pasteboard = makePasteboard()
+        let service = AppleClipboardService(pasteboard: pasteboard, isApplicationActive: { true })
+        service.start()
+        defer { service.close() }
+        service.setSessionWindow(UUID(), isKey: true)
+        let sharedLease = try XCTUnwrap(service.synchronizationLease())
+
+        service.setSharingEnabled(false)
+        XCTAssertNil(service.synchronizationLease())
+        service.setSharingEnabled(true)
+        XCTAssertFalse(service.receiveIfEligible(.text("before disabling"), lease: sharedLease))
+        let controlLease = try XCTUnwrap(service.synchronizationLease())
+        service.setControlling(false)
+        XCTAssertNil(service.synchronizationLease())
+        service.setControlling(true)
+        XCTAssertFalse(service.receiveIfEligible(.text("before observing"), lease: controlLease))
+        let finalLease = try XCTUnwrap(service.synchronizationLease())
+        service.close()
+        XCTAssertFalse(service.receiveIfEligible(.text("after close"), lease: finalLease))
+        XCTAssertNil(pasteboard.string(forType: .string))
+    }
+
+    func testBackgroundReceiveOwnershipDoesNotExposeNewLocalClipboardToRemoteRequests() async throws {
+        let pasteboard = makePasteboard()
+        let advertised = expectation(description: "Local promises sent while focused")
+        let service = AppleClipboardService(
+            pasteboard: pasteboard,
+            advertise: { _ in advertised.fulfill() },
+            isApplicationActive: { true }
+        )
+        service.start()
+        defer { service.close() }
+        pasteboard.clearContents()
+        pasteboard.setString("advertised while focused", forType: .string)
+        let windowID = UUID()
+        service.setSessionWindow(windowID, isKey: true)
+        await fulfillment(of: [advertised], timeout: 1)
+
+        service.setSessionWindow(windowID, isKey: false)
+
+        XCTAssertNotNil(service.synchronizationLease())
+        XCTAssertFalse(service.allowsRemoteSynchronization)
+        pasteboard.clearContents()
+        pasteboard.setString("new local clipboard", forType: .string)
+        XCTAssertNil(service.archiveForRemoteRequest())
     }
 
     func testFailedAdvertisementDoesNotAdvanceChangeCountBaseline() async {

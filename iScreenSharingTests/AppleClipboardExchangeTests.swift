@@ -1,11 +1,103 @@
 import AppKit
 import enum ScreenSharingProtocol.AppleClipboardMessage
 import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleClipboardFlavor
+import struct ScreenSharingProtocol.AppleClipboardItem
 import XCTest
 @testable import iScreenSharing
 
 @MainActor
 final class AppleClipboardExchangeTests: XCTestCase {
+    func testAutomaticImageClipboardCanFinishAfterSwitchingToLocalApplication() async throws {
+        // A remote image change notification can arrive after the user has
+        // already switched to the local application where they will paste it.
+        for departureStage in 0...2 {
+            let pasteboard = makePasteboard()
+            var applicationIsActive = true
+            let service = AppleClipboardService(
+                pasteboard: pasteboard,
+                isApplicationActive: { applicationIsActive }
+            )
+            service.start()
+            defer { service.close() }
+            let windowID = UUID()
+            service.setSessionWindow(windowID, isKey: true)
+            let recorder = ClipboardExchangeRecorder()
+            let exchange = makeExchange(service: service, recorder: recorder)
+            let image = Data((0..<4_096).map { UInt8(truncatingIfNeeded: $0) })
+            let archive = AppleClipboardArchive(items: [AppleClipboardItem(flavors: [
+                AppleClipboardFlavor(type: "public.png", aliases: [], value: image),
+            ])])
+            let messages = [
+                remoteClipboardNotification(subtype: 2),
+                try AppleClipboardMessage.send(archive: archive, promises: true, sessionID: 0x1234_5678),
+                try AppleClipboardMessage.send(archive: archive, sessionID: 0),
+            ]
+
+            for (stage, message) in messages.enumerated() {
+                if stage == departureStage {
+                    applicationIsActive = false
+                    service.setSessionWindow(windowID, isKey: false)
+                }
+                let handled = await exchange.receive(message)
+                XCTAssertTrue(handled)
+            }
+
+            let requests = await recorder.requests
+            XCTAssertEqual(requests, [
+                ClipboardRequestRecord(promises: true, sessionID: 0x1234_5678),
+                ClipboardRequestRecord(promises: false, sessionID: 0),
+            ], "Departure before stage \(departureStage)")
+            XCTAssertEqual(pasteboard.data(forType: .png), image, "Departure before stage \(departureStage)")
+
+            applicationIsActive = true
+            service.setSessionWindow(windowID, isKey: true)
+            applicationIsActive = false
+            service.setSessionWindow(windowID, isKey: false)
+            let textMessages = [
+                remoteClipboardNotification(subtype: 2),
+                try AppleClipboardMessage.send(archive: .text("after image"), promises: true, sessionID: 0x1234_5678),
+                try AppleClipboardMessage.send(archive: .text("after image"), sessionID: 0),
+            ]
+            for message in textMessages {
+                let handled = await exchange.receive(message)
+                XCTAssertTrue(handled)
+            }
+            XCTAssertEqual(pasteboard.string(forType: .string), "after image")
+            XCTAssertNil(pasteboard.data(forType: .png))
+        }
+    }
+
+    func testAutomaticClipboardResponseDoesNotReplaceNewLocalCopy() async throws {
+        for localCopyStage in 0...2 {
+            let pasteboard = makePasteboard()
+            let service = AppleClipboardService(pasteboard: pasteboard, isApplicationActive: { true })
+            service.start()
+            defer { service.close() }
+            let windowID = UUID()
+            service.setSessionWindow(windowID, isKey: true)
+            let recorder = ClipboardExchangeRecorder()
+            let exchange = makeExchange(service: service, recorder: recorder)
+            let messages = [
+                remoteClipboardNotification(subtype: 2),
+                try AppleClipboardMessage.send(archive: .text("stale remote"), promises: true, sessionID: 0x1234_5678),
+                try AppleClipboardMessage.send(archive: .text("stale remote"), sessionID: 0),
+            ]
+
+            for (stage, message) in messages.enumerated() {
+                if stage == localCopyStage {
+                    service.setSessionWindow(windowID, isKey: false)
+                    pasteboard.clearContents()
+                    pasteboard.setString("new local copy", forType: .string)
+                }
+                let handled = await exchange.receive(message)
+                XCTAssertTrue(handled)
+            }
+
+            XCTAssertEqual(pasteboard.string(forType: .string), "new local copy")
+        }
+    }
+
     func testManualGetRegistersSessionBeforeSendingAndAcceptsMatchingResponse() async throws {
         let pasteboard = makePasteboard()
         let service = AppleClipboardService(
