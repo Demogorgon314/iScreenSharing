@@ -58,6 +58,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Mobile/AppleVideoCanvasLayout.swift,
+				Mobile/Assets.xcassets,
 				Mobile/Info.plist,
 				Mobile/iScreenSharingMobileApp.swift,
 				Mobile/MobileClipboardService.swift,
@@ -635,6 +636,7 @@
 		E1000000000000000000000D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = MobileAppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = GX4T5HF5N9;
@@ -658,6 +660,7 @@
 		E1000000000000000000000E /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = MobileAppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = GX4T5HF5N9;

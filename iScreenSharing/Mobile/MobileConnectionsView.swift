@@ -8,9 +8,9 @@ struct MobileConnectionsView: View {
     @State private var showsNewConnection = false
     @State private var editingConnection: SavedConnection?
     @State private var searchText = ""
+    @State private var isSearching = false
     @State private var connectionToDelete: SavedConnection?
     @State private var selectedTab = HomeTab.recents
-    @FocusState private var searchFocused: HomeTab?
 
     private enum HomeTab: String {
         case recents = "Recents"
@@ -19,33 +19,19 @@ struct MobileConnectionsView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            TabView(selection: $selectedTab) {
-                pageWithSearch(for: .recents) { connectionList }
-                    .tabItem { Label("Recents", systemImage: "clock.fill") }
-                    .tag(HomeTab.recents)
-                pageWithSearch(for: .network) { networkPage }
-                    .tabItem { Label("Network", systemImage: "network") }
-                    .tag(HomeTab.network)
-                pageWithSearch(for: .tailscale) { ContentUnavailableView(
-                    "Tailscale", systemImage: "network.badge.shield.half.filled",
-                    description: Text("Tailscale connections are not available on iOS yet.")
-                ) }
-                .tabItem { Label("Tailscale", systemImage: "network.badge.shield.half.filled") }
-                .tag(HomeTab.tailscale)
-            }
-            .navigationTitle(selectedTab.rawValue)
-            .navigationBarTitleDisplayMode(.large)
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("New Connection", systemImage: "plus") {
-                        showsNewConnection = true
-                    }
-                }
-            }
-            .navigationDestination(for: ConnectionEndpoint.self) { endpoint in
-                MobileConnectionPlaceholderView(endpoint: endpoint, store: store)
-            }
+        TabView(selection: $selectedTab) {
+            pageWithSearch(for: .recents) { connectionList }
+                .tabItem { Label("Recents", systemImage: "clock.fill") }
+                .tag(HomeTab.recents)
+            pageWithSearch(for: .network) { networkPage }
+                .tabItem { Label("Network", systemImage: "network") }
+                .tag(HomeTab.network)
+            pageWithSearch(for: .tailscale) { ContentUnavailableView(
+                "Tailscale", systemImage: "network.badge.shield.half.filled",
+                description: Text("Tailscale connections are not available on iOS yet.")
+            ) }
+            .tabItem { Label("Tailscale", systemImage: "network.badge.shield.half.filled") }
+            .tag(HomeTab.tailscale)
         }
         .sheet(isPresented: $showsNewConnection) {
             MobileNewConnectionView(store: store) { endpoint in
@@ -53,8 +39,8 @@ struct MobileConnectionsView: View {
                 path.append(endpoint)
             }
         }
-        .onChange(of: selectedTab) { _, _ in searchFocused = nil }
-        .onChange(of: path) { _, _ in searchFocused = nil }
+        .onChange(of: selectedTab) { _, _ in endSearch() }
+        .onChange(of: path) { _, _ in endSearch() }
         .sheet(item: $editingConnection) { connection in
             MobileNewConnectionView(store: store, connection: connection) { endpoint in
                 editingConnection = nil
@@ -86,41 +72,46 @@ struct MobileConnectionsView: View {
     }
 
     private func pageWithSearch<Content: View>(for tab: HomeTab, @ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            searchBar(for: tab)
-            content()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
+        NavigationStack(path: Binding(
+            get: { selectedTab == tab ? path : [] },
+            set: { if selectedTab == tab { path = $0 } }
+        )) {
+            Group {
+                if isSearching && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView(
+                        "Search Connections", systemImage: "magnifyingglass",
+                        description: Text("Enter a name or address to find a Mac.")
+                    )
+                } else {
+                    content()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .navigationTitle(tab.rawValue)
+            .navigationBarTitleDisplayMode(.large)
+            .searchable(text: $searchText, isPresented: Binding(
+                get: { selectedTab == tab && isSearching },
+                set: { if selectedTab == tab { isSearching = $0 } }
+            ), placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("New Connection", systemImage: "plus") {
+                        showsNewConnection = true
+                    }
+                }
+            }
+            .navigationDestination(for: ConnectionEndpoint.self) { endpoint in
+                MobileConnectionPlaceholderView(endpoint: endpoint, store: store)
+                    .toolbar(.hidden, for: .tabBar)
+            }
         }
     }
 
-    private func searchBar(for tab: HomeTab) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            TextField("Search", text: $searchText)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.search)
-                .focused($searchFocused, equals: tab)
-                .onSubmit { searchFocused = nil }
-                .accessibilityLabel("Search by name or address")
-            if !searchText.isEmpty {
-                Button { searchText = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 32, minHeight: 44)
-                }
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 44)
-        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 22))
-        .padding(.horizontal, 20)
-        .padding(.bottom, 12)
-        .background(Color(uiColor: .systemBackground))
+    private func endSearch() {
+        searchText = ""
+        isSearching = false
     }
 
     private var connectionList: some View {
