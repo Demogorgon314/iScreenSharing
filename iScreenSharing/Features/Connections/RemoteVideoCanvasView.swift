@@ -155,6 +155,10 @@ final class RemoteVideoCanvasNSView: NSView {
         subsystem: "com.wangkai.iShareScreen",
         category: "VideoPerformance"
     )
+    private static let inputLogger = Logger(
+        subsystem: "com.wangkai.iShareScreen",
+        category: "KeyboardInput"
+    )
     private struct ActiveModifier {
         let symbol: UInt32
         let keyboardType: UInt16
@@ -682,6 +686,20 @@ final class RemoteVideoCanvasNSView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         guard let input, let modifier = AppleKeySymbol.modifier(for: event.keyCode) else { return }
+        // Global shortcuts can consume one modifier's release while forwarding
+        // another's. Its flags still describe all modifier families. Preserve
+        // per-key handling below for left/right keys in a family that is held.
+        let releasedModifiers = activeModifiers.filter { keyCode, _ in
+            guard keyCode != event.keyCode,
+                  let other = AppleKeySymbol.modifier(for: keyCode) else { return false }
+            return !event.modifierFlags.contains(other.flag)
+        }
+        if !releasedModifiers.isEmpty {
+            Self.inputLogger.notice(
+                "Queueing missing modifier releases: keyCodes=\(releasedModifiers.keys.sorted().description, privacy: .public) flagsChangedKeyCode=\(event.keyCode)"
+            )
+            releaseModifiers(releasedModifiers)
+        }
         let keyboardType = Self.keyboardType(for: event)
         let symbol: UInt32
         let isDown: Bool
@@ -787,8 +805,11 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func releaseActiveModifiers() {
-        let modifiers = activeModifiers
-        activeModifiers.removeAll()
+        releaseModifiers(activeModifiers)
+    }
+
+    private func releaseModifiers(_ modifiers: [UInt16: ActiveModifier]) {
+        for keyCode in modifiers.keys { activeModifiers.removeValue(forKey: keyCode) }
         guard let input, !modifiers.isEmpty else { return }
         // A window can lose key status while retaining its first responder.
         // Release through the same queue as the corresponding key-down events.

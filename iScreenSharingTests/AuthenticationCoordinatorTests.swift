@@ -36,6 +36,8 @@ final class AuthenticationCoordinatorTests: XCTestCase {
         let sessions = SessionManager()
         let viewportStore = SessionViewportStore(defaults: defaults)
         viewportStore.save(CGSize(width: 1280, height: 720), for: endpoint)
+        let preferences = SessionFeaturePreferences(defaults: defaults)
+        preferences.setUsesDynamicResolution(true)
         let displaySizes = DisplaySizeRecorder()
         var authenticatedEndpoint: ConnectionEndpoint?
         let coordinator = AuthenticationCoordinator(
@@ -43,11 +45,13 @@ final class AuthenticationCoordinatorTests: XCTestCase {
             sessionActivator: makeSessionActivator(
                 authenticator: authenticator,
                 connectionStore: connections,
+                preferences: preferences,
                 controlChannelNegotiator: MockControlChannelNegotiator(recorder: displaySizes)
             ),
             credentialStore: credentials,
             connectionStore: connections,
             viewportStore: viewportStore,
+            sessionFeaturePreferences: preferences,
             sessionManager: sessions,
             onAuthenticated: { authenticatedEndpoint = $0 }
         )

@@ -259,6 +259,127 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
         try await assertLosingKeyWindowReleasesShift(keyCode: 56, symbol: 0xffe1, suspendedSendNumber: 1)
     }
 
+    func testOptionReleaseRecoversShiftReleaseConsumedByGlobalShortcut() async throws {
+        try await assertModifierEvents(
+            [(56, .shift), (58, [.shift, .option]), (58, [])],
+            expected: [(56, true), (58, true), (56, false), (58, false)]
+        )
+    }
+
+    func testShiftReleaseRecoversOptionReleaseConsumedByGlobalShortcut() async throws {
+        try await assertModifierEvents(
+            [(56, .shift), (58, [.shift, .option]), (56, [])],
+            expected: [(56, true), (58, true), (58, false), (56, false)]
+        )
+    }
+
+    func testRecoveredModifierReleaseWaitsForBlockedKeyDown() async throws {
+        try await assertModifierEvents(
+            [(56, .shift), (58, [.shift, .option]), (58, [])],
+            expected: [(56, true), (58, true), (56, false), (58, false)],
+            blocksFirstSend: true
+        )
+    }
+
+    func testOtherModifierChangesPreserveShiftWhileItIsStillHeld() async throws {
+        try await assertModifierEvents(
+            [(56, .shift), (58, [.shift, .option]), (58, .shift), (56, [])],
+            expected: [(56, true), (58, true), (58, false), (56, false)]
+        )
+    }
+
+    func testReleasingOneShiftPreservesTheOtherShift() async throws {
+        try await assertModifierEvents(
+            [(56, .shift), (60, .shift), (56, .shift), (60, [])],
+            expected: [(56, true), (60, true), (56, false), (60, false)]
+        )
+    }
+
+    private func assertModifierEvents(
+        _ events: [(keyCode: UInt16, flags: NSEvent.ModifierFlags)],
+        expected transitions: [(keyCode: UInt16, isDown: Bool)],
+        blocksFirstSend: Bool = false
+    ) async throws {
+        let keys = try AppleRecordKeys(
+            key: Data(repeating: 0x11, count: 16),
+            initializationVector: Data(repeating: 0x22, count: 16)
+        )
+        let followingKeySent = expectation(description: "Modifier releases precede the following key")
+        let transport = DragInputTransport(suspendedSendNumber: blocksFirstSend ? 1 : 0) { count in
+            if count == transitions.count + 1 { followingKeySent.fulfill() }
+        }
+        defer { transport.resumeSuspendedSend() }
+        let session = try makeSession(transport: transport)
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let canvas = AppleCanvas(width: 100, height: 100, tileCount: 1)
+        let input = AppleInputController(session: session, canvas: canvas, microseconds: { 123 })
+        let view = RemoteVideoCanvasNSView(
+            canvas: canvas, frames: AppleVideoFrameStore(), input: input, cursors: nil,
+            displayScale: AppleVideoDisplayScale(), synchronizesPresentation: true,
+            sourceRect: nil, inputMapping: nil, inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: .borderless, backing: .buffered, defer: true
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { window.contentView = nil }
+        XCTAssertTrue(window.makeFirstResponder(view))
+        var keyboardTypes = [UInt16: UInt16]()
+        for (index, event) in events.enumerated() {
+            // Moving the window between screens need not resign its first
+            // responder. Loop 1.4.2 can consume the first trigger-key release.
+            if index == 2 {
+                NotificationCenter.default.post(name: NSWindow.didChangeScreenNotification, object: window)
+                XCTAssertTrue(window.firstResponder === view)
+            }
+            let flagsChanged = try XCTUnwrap(NSEvent.keyEvent(
+                with: .flagsChanged, location: .zero, modifierFlags: event.flags,
+                timestamp: TimeInterval(index), windowNumber: window.windowNumber, context: nil,
+                characters: "", charactersIgnoringModifiers: "", isARepeat: false,
+                keyCode: event.keyCode
+            ))
+            keyboardTypes[event.keyCode] = UInt16(clamping:
+                flagsChanged.cgEvent?.getIntegerValueField(.keyboardEventKeyboardType) ?? 0
+            )
+            view.flagsChanged(with: flagsChanged)
+            if blocksFirstSend, index == 0 {
+                await transport.waitUntilSendIsSuspended()
+            }
+        }
+        let escape = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 10,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false, keyCode: 53
+        ))
+        view.keyDown(with: escape)
+        if blocksFirstSend {
+            XCTAssertEqual(transport.sentMessages.count, 1)
+            transport.resumeSuspendedSend()
+        }
+        await fulfillment(of: [followingKeySent], timeout: 2)
+
+        let symbols: [UInt16: UInt32] = [56: 0xffe1, 60: 0xffe2, 58: 0xffe9]
+        let expectedLayer = AppleEncryptedRecordLayer(keys: keys)
+        var expectedMessages = try transitions.enumerated().map { index, transition in
+            try expectedLayer.encrypt(try expectedLayer.encryptKeyEvent(
+                isDown: transition.isDown, keySymbol: try XCTUnwrap(symbols[transition.keyCode]),
+                timestampDelta: index == 0 ? 123 : 0,
+                keyboardType: try XCTUnwrap(keyboardTypes[transition.keyCode]), keyCode: transition.keyCode
+            ))
+        }
+        expectedMessages.append(try expectedLayer.encrypt(try expectedLayer.encryptKeyEvent(
+            isDown: true, keySymbol: 0xff1b, timestampDelta: 0,
+            keyboardType: UInt16(clamping:
+                escape.cgEvent?.getIntegerValueField(.keyboardEventKeyboardType) ?? 0
+            ), keyCode: 53
+        )))
+        XCTAssertEqual(transport.sentMessages, expectedMessages)
+    }
+
     private func assertLosingKeyWindowReleasesShift(
         keyCode: UInt16,
         symbol: UInt32,
