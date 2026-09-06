@@ -9,11 +9,33 @@ struct MobileConnectionsView: View {
     @State private var editingConnection: SavedConnection?
     @State private var searchText = ""
     @State private var connectionToDelete: SavedConnection?
+    @State private var selectedTab = HomeTab.recents
+    @FocusState private var searchFocused: HomeTab?
+
+    private enum HomeTab: String {
+        case recents = "Recents"
+        case network = "Network"
+        case tailscale = "Tailscale"
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
-            connectionList
-            .navigationTitle("Connections")
+            TabView(selection: $selectedTab) {
+                pageWithSearch(for: .recents) { connectionList }
+                    .tabItem { Label("Recents", systemImage: "clock.fill") }
+                    .tag(HomeTab.recents)
+                pageWithSearch(for: .network) { networkPage }
+                    .tabItem { Label("Network", systemImage: "network") }
+                    .tag(HomeTab.network)
+                pageWithSearch(for: .tailscale) { ContentUnavailableView(
+                    "Tailscale", systemImage: "network.badge.shield.half.filled",
+                    description: Text("Tailscale connections are not available on iOS yet.")
+                ) }
+                .tabItem { Label("Tailscale", systemImage: "network.badge.shield.half.filled") }
+                .tag(HomeTab.tailscale)
+            }
+            .navigationTitle(selectedTab.rawValue)
+            .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button("New Connection", systemImage: "plus") {
@@ -31,6 +53,8 @@ struct MobileConnectionsView: View {
                 path.append(endpoint)
             }
         }
+        .onChange(of: selectedTab) { _, _ in searchFocused = nil }
+        .onChange(of: path) { _, _ in searchFocused = nil }
         .sheet(item: $editingConnection) { connection in
             MobileNewConnectionView(store: store, connection: connection) { endpoint in
                 editingConnection = nil
@@ -61,27 +85,76 @@ struct MobileConnectionsView: View {
         }
     }
 
-    private var connectionList: some View {
-        List {
-            if !filteredConnections.isEmpty {
-                Section {
-                    ForEach(filteredConnections) { connection in
-                        connectionRow(connection.endpoint, name: connection.name, saved: connection)
-                    }
-                } header: {
-                    Text("Saved Connections")
-                } footer: {
-                    Text("Tap to connect. Touch and hold for connection options.")
-                }
-            }
-            Section("Nearby") { nearbyConnections }
+    private func pageWithSearch<Content: View>(for tab: HomeTab, @ViewBuilder content: () -> Content) -> some View {
+        VStack(spacing: 0) {
+            searchBar(for: tab)
+            content()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
         }
-        .listStyle(.insetGrouped)
-        .searchable(text: $searchText, prompt: "Name or address")
     }
 
-    private var filteredConnections: [SavedConnection] {
-        store.connections.filter { matchesSearch(name: $0.name, endpoint: $0.endpoint) }
+    private func searchBar(for tab: HomeTab) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Search", text: $searchText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($searchFocused, equals: tab)
+                .onSubmit { searchFocused = nil }
+                .accessibilityLabel("Search by name or address")
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 32, minHeight: 44)
+                }
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 44)
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 22))
+        .padding(.horizontal, 20)
+        .padding(.bottom, 12)
+        .background(Color(uiColor: .systemBackground))
+    }
+
+    private var connectionList: some View {
+        List {
+            if !sections.recent.isEmpty {
+                Section {
+                    ForEach(sections.recent) { connection in
+                        connectionRow(connection.endpoint, name: connection.name, saved: store.connection(for: connection.endpoint))
+                    }
+                }
+            }
+            if !sections.saved.isEmpty {
+                Section("Saved") {
+                    ForEach(sections.saved) { connection in
+                        connectionRow(connection.endpoint, name: connection.name, saved: connection)
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .overlay {
+            if sections.recent.isEmpty, sections.saved.isEmpty {
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView.search(text: searchText)
+                } else {
+                    ContentUnavailableView("No Recents", systemImage: "clock.fill",
+                        description: Text("Recently connected Macs will appear here. Find a Mac in Network or add a connection with +."))
+                }
+            }
+        }
+    }
+
+    private var sections: MobileConnectionSections {
+        MobileConnectionSections(saved: store.connections, recent: store.recentConnections, query: searchText)
     }
 
     private func matchesSearch(name: String, endpoint: ConnectionEndpoint) -> Bool {
@@ -127,7 +200,7 @@ struct MobileConnectionsView: View {
     }
 
     @ViewBuilder
-    private var nearbyConnections: some View {
+    private var networkPage: some View {
         switch discovery.state {
         case .searching:
             HStack(spacing: 12) {
@@ -146,16 +219,17 @@ struct MobileConnectionsView: View {
             }
         case .results(let services):
             let visible = services.filter {
-                store.connection(for: $0.endpoint) == nil
-                    && matchesSearch(name: $0.endpoint.displayName, endpoint: $0.endpoint)
+                matchesSearch(name: store.connection(for: $0.endpoint)?.name ?? $0.endpoint.displayName, endpoint: $0.endpoint)
             }
             if visible.isEmpty {
-                Text(searchText.isEmpty ? "Nearby Macs are already in Saved Connections." : "No matching nearby Macs.")
-                    .foregroundStyle(.secondary)
+                ContentUnavailableView.search(text: searchText)
             } else {
-                ForEach(visible, id: \.endpoint) { service in
-                    connectionRow(service.endpoint, name: service.endpoint.displayName, discovered: service)
+                List(visible, id: \.endpoint) { service in
+                    let saved = store.connection(for: service.endpoint)
+                    connectionRow(service.endpoint, name: saved?.name ?? service.endpoint.displayName,
+                                  saved: saved, discovered: service)
                 }
+                .listStyle(.plain)
             }
         case .failed(let message):
             ContentUnavailableView(
