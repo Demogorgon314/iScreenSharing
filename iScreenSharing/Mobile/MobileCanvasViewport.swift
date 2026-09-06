@@ -5,8 +5,20 @@ import Foundation
 struct MobileCanvasViewport {
     private(set) var scale: CGFloat = 1
     private var offset = CGPoint.zero
+    var topContentInset: CGFloat = 0
 
-    mutating func reset() { self = Self() }
+    init(topContentInset: CGFloat = 0) {
+        self.topContentInset = topContentInset
+    }
+
+    mutating func reset() { self = Self(topContentInset: topContentInset) }
+
+    /// Fit avoids the overlaid navigation controls; zoom can use the area
+    /// behind them without changing the base scale or pointer mapping.
+    func fittingBounds(in bounds: CGRect) -> CGRect {
+        let inset = topContentInset.isFinite ? min(max(0, topContentInset), max(0, bounds.height - 1)) : 0
+        return CGRect(x: bounds.minX, y: bounds.minY + inset, width: bounds.width, height: bounds.height - inset)
+    }
 
     func frame(base: CGRect, bounds: CGRect) -> CGRect {
         guard !base.isEmpty, !bounds.isEmpty else { return .zero }
@@ -15,7 +27,19 @@ struct MobileCanvasViewport {
             ? bounds.midX - size.width / 2
             : min(bounds.minX, max(bounds.maxX - size.width, base.minX + offset.x))
         let y: CGFloat
-        if size.height <= bounds.height {
+        if topContentInset > 0 {
+            if scale == 1 {
+                y = base.minY
+            } else {
+                // Permit panning beneath the toolbar, but also allow the top
+                // desktop edge to be brought back below it for interaction.
+                let fitBounds = fittingBounds(in: bounds)
+                let upper = fitBounds.height > fitBounds.width ? fitBounds.minY
+                    : max(fitBounds.minY, fitBounds.midY - size.height / 2)
+                y = min(upper,
+                        max(min(bounds.minY, bounds.maxY - size.height), base.minY + offset.y))
+            }
+        } else if size.height <= bounds.height {
             y = bounds.height > bounds.width ? bounds.minY : bounds.midY - size.height / 2
         } else {
             y = min(bounds.minY, max(bounds.maxY - size.height, base.minY + offset.y))
@@ -63,7 +87,8 @@ struct MobileCanvasViewport {
             x: previous.minX + (basePoint.x - base.minX) * scale,
             y: previous.minY + (basePoint.y - base.minY) * scale
         )
-        let safe = bounds.insetBy(dx: min(24, bounds.width / 4), dy: min(24, bounds.height / 4))
+        let unobscured = fittingBounds(in: bounds)
+        let safe = unobscured.insetBy(dx: min(24, unobscured.width / 4), dy: min(24, unobscured.height / 4))
         func correction(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
             if value < minimum { return minimum - value }
             if value > maximum { return maximum - value }
@@ -71,7 +96,8 @@ struct MobileCanvasViewport {
         }
         let translation = CGPoint(
             x: previous.width > bounds.width ? correction(point.x, minimum: safe.minX, maximum: safe.maxX) : 0,
-            y: previous.height > bounds.height ? correction(point.y, minimum: safe.minY, maximum: safe.maxY) : 0
+            y: previous.height > bounds.height || topContentInset > 0
+                ? correction(point.y, minimum: safe.minY, maximum: safe.maxY) : 0
         )
         pan(by: translation, base: base, bounds: bounds)
         return frame(base: base, bounds: bounds) != previous

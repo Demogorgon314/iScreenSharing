@@ -167,7 +167,10 @@ final class MobileVideoCanvasUIView: UIView, UIGestureRecognizerDelegate {
     override func layoutSubviews() {
         super.layoutSubviews()
         let available = availableCanvasBounds
+        let topInset = max(0, safeAreaInsets.top - available.minY)
         let geometryChanged = contentBounds != available || interactionBoundsSize != bounds.size
+            || viewport.topContentInset != topInset
+        viewport.topContentInset = topInset
         if interactionBoundsSize != nil,
            interactionBoundsSize != bounds.size || (geometryChanged && dragInputTask != nil) {
             cancelInteractions(discardQueuedInput: false)
@@ -513,7 +516,7 @@ final class MobileVideoCanvasUIView: UIView, UIGestureRecognizerDelegate {
         let point = pointerState.move(
             by: viewport.unscaledTranslation(recognizer.translation(in: self)),
             canvas: stream.canvas,
-            bounds: canvasBounds
+            bounds: viewport.fittingBounds(in: canvasBounds)
         )
         recognizer.setTranslation(.zero, in: self)
         followMovedPointer(point)
@@ -536,7 +539,7 @@ final class MobileVideoCanvasUIView: UIView, UIGestureRecognizerDelegate {
             let point = pointerState.move(
                 by: viewport.unscaledTranslation(CGPoint(x: location.x - previous.x, y: location.y - previous.y)),
                 canvas: stream.canvas,
-                bounds: canvasBounds
+                bounds: viewport.fittingBounds(in: canvasBounds)
             )
             followMovedPointer(point)
             scheduleDragPath(from: previousPoint, to: point)
@@ -547,7 +550,7 @@ final class MobileVideoCanvasUIView: UIView, UIGestureRecognizerDelegate {
                 let finalPoint = pointerState.move(
                     by: viewport.unscaledTranslation(CGPoint(x: location.x - previous.x, y: location.y - previous.y)),
                     canvas: stream.canvas,
-                    bounds: canvasBounds
+                    bounds: viewport.fittingBounds(in: canvasBounds)
                 )
                 followMovedPointer(finalPoint)
                 scheduleDragPath(from: previousPoint, to: finalPoint)
@@ -626,7 +629,7 @@ final class MobileVideoCanvasUIView: UIView, UIGestureRecognizerDelegate {
         guard let point = pointerState.setAbsolute(
             localPoint: viewport.unproject(location, base: fittedCanvasFrame, bounds: canvasBounds),
             canvas: stream.canvas,
-            bounds: canvasBounds
+            bounds: viewport.fittingBounds(in: canvasBounds)
         ) else { return }
         updateCursorPosition(point)
         sendPointer(buttons: 0, point: point)
@@ -1067,12 +1070,12 @@ final class MobileVideoCanvasUIView: UIView, UIGestureRecognizerDelegate {
     }
 
     private var fittedCanvasFrame: CGRect {
-        AppleVideoCanvasLayout.fullCanvas(canvas: stream.canvas, bounds: canvasBounds).container
+        AppleVideoCanvasLayout.fullCanvas(canvas: stream.canvas, bounds: viewport.fittingBounds(in: canvasBounds)).container
     }
 
     private func followMovedPointer(_ point: MobileRemotePointerState.Point) {
         if let basePoint = AppleVideoCanvasLayout.localPoint(
-            remoteX: point.x, remoteY: point.y, canvas: stream.canvas, bounds: canvasBounds
+            remoteX: point.x, remoteY: point.y, canvas: stream.canvas, bounds: viewport.fittingBounds(in: canvasBounds)
         ), viewport.reveal(basePoint: basePoint, base: fittedCanvasFrame, bounds: canvasBounds) {
             updateLayout()
             displayScheduler.markNeedsPresentation()

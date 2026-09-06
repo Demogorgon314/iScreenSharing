@@ -187,12 +187,15 @@ private struct MobileConnectionPlaceholderView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.black)
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea(.container, edges: [.top, .bottom])
                 .overlay(alignment: .topLeading) {
                     if showsVideoPerformanceOverlay {
-                        MobileVideoPerformanceOverlay(performance: stream.performance)
-                            .padding(8)
-                            .allowsHitTesting(false)
+                        GeometryReader { geometry in
+                            MobileVideoPerformanceOverlay(performance: stream.performance)
+                                .padding(.top, geometry.safeAreaInsets.top + 8)
+                                .padding(.horizontal, geometry.safeAreaInsets.leading + 8)
+                        }
+                        .allowsHitTesting(false)
                     }
                 }
             } else {
@@ -202,6 +205,7 @@ private struct MobileConnectionPlaceholderView: View {
         .ignoresSafeArea(.keyboard, edges: controller.state == .connected ? .bottom : [])
         .navigationTitle(endpoint.displayName)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(controller.state == .connected ? .hidden : .automatic, for: .navigationBar)
         .toolbar {
             if controller.state == .connected {
                 ToolbarItemGroup(placement: .primaryAction) {

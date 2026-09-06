@@ -11,12 +11,13 @@ enum AppleVideoCanvasLayout {
         guard canvas.width > 0, canvas.height > 0, !bounds.isEmpty else {
             return Tile(container: .zero, content: .zero)
         }
-        let size = fittedSize(canvas: canvas, bounds: bounds)
-        let originY = bounds.height > bounds.width
-            ? bounds.minY
-            : bounds.midY - size.height / 2
+        let fitBounds = viewport.fittingBounds(in: bounds)
+        let size = fittedSize(canvas: canvas, bounds: fitBounds)
+        let originY = fitBounds.height > fitBounds.width
+            ? fitBounds.minY
+            : fitBounds.midY - size.height / 2
         let container = CGRect(
-            x: bounds.midX - size.width / 2,
+            x: fitBounds.midX - size.width / 2,
             y: originY,
             width: size.width,
             height: size.height

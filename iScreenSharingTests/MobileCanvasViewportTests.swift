@@ -46,6 +46,45 @@ final class MobileCanvasViewportTests: XCTestCase {
         XCTAssertEqual(viewport.frame(base: smallerBase, bounds: smaller), CGRect(x: -200, y: 0, width: 400, height: 225))
     }
 
+    func testOverlayFitZoomPointerRevealAndResetShareOneCoordinateSpace() {
+        let bounds = CGRect(x: 0, y: 0, width: 414, height: 896)
+        var viewport = MobileCanvasViewport(topContentInset: 102)
+        let base = CGRect(x: 0, y: 102, width: 414, height: 233)
+        XCTAssertEqual(viewport.frame(base: base, bounds: bounds), base)
+        let anchor = CGPoint(x: 207, y: 210)
+        let original = viewport.unproject(anchor, base: base, bounds: bounds)
+        viewport.zoom(by: 2, around: anchor, translation: .zero, base: base, bounds: bounds)
+        XCTAssertLessThan(viewport.frame(base: base, bounds: bounds).minY, 102)
+        let projected = viewport.unproject(anchor, base: base, bounds: bounds)
+        XCTAssertEqual(projected.x, original.x, accuracy: 0.001)
+        // Clamp can stop anchor preservation at the screen boundary.
+        XCTAssertGreaterThanOrEqual(viewport.frame(base: base, bounds: bounds).minY, bounds.minY)
+        viewport.reveal(basePoint: base.origin, base: base, bounds: bounds)
+        XCTAssertEqual(viewport.frame(base: base, bounds: bounds).minY, 102)
+        viewport.reset()
+        XCTAssertEqual(viewport.frame(base: base, bounds: bounds), base)
+        XCTAssertEqual(viewport.topContentInset, 102)
+    }
+
+    func testOverlayInsetAdaptsToKeyboardAndRotationWithoutLosingZoom() {
+        var viewport = MobileCanvasViewport(topContentInset: 102)
+        let portrait = CGRect(x: 0, y: 0, width: 414, height: 896)
+        let base = CGRect(x: 0, y: 102, width: 414, height: 233)
+        viewport.zoom(by: 3, around: base.origin, translation: .zero, base: base, bounds: portrait)
+        for height: CGFloat in [456, 896, 456, 896] {
+            let available = CGRect(x: 0, y: 0, width: 414, height: height)
+            viewport.constrain(base: base, bounds: available)
+            XCTAssertEqual(viewport.fittingBounds(in: available).height, height - 102)
+            XCTAssertEqual(viewport.scale, 3)
+        }
+        viewport.topContentInset = 44
+        let landscape = CGRect(x: 0, y: 0, width: 896, height: 414)
+        XCTAssertEqual(viewport.fittingBounds(in: landscape), CGRect(x: 0, y: 44, width: 896, height: 370))
+        viewport.reset()
+        XCTAssertEqual(viewport.scale, 1)
+        XCTAssertEqual(viewport.topContentInset, 44)
+    }
+
     func testZoomLimitsAndInvalidInputDoNotCorruptGeometry() {
         var viewport = MobileCanvasViewport()
         viewport.zoom(by: 100, around: .zero, translation: .zero, base: bounds, bounds: bounds)
