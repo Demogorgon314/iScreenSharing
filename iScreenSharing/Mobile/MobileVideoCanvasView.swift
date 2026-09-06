@@ -52,7 +52,7 @@ private final class MobileVideoDisplayLinkTarget: NSObject, CAMetalDisplayLinkDe
 }
 
 @MainActor
-final class MobileVideoCanvasUIView: UIView, UIKeyInput {
+final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
     private struct ScheduledDragPoint {
         let point: MobileRemotePointerState.Point
         let sendAt: TimeInterval
@@ -75,6 +75,8 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         coalescesDueBatches: true
     )
     private var pointerState = MobileRemotePointerState()
+    private var viewport = MobileCanvasViewport()
+    private let fitCanvasButton = UIButton(type: .system)
     private var dragPreviousLocation: CGPoint?
     private var dragInputTask: Task<Void, Never>?
     private var scheduledDragPoints = [ScheduledDragPoint]()
@@ -97,6 +99,8 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
     override var inputAccessoryView: UIView? { shortcutBar }
 
     override var canBecomeFirstResponder: Bool { true }
+    // Three-finger movement belongs to the viewport, not local text undo/redo.
+    override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
     var hasText: Bool { true }
 
     init(stream: AppleVideoStream, input: AppleInputController?, cursors: AppleCursorStore?) {
@@ -114,6 +118,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         }
         super.init(frame: .zero)
         backgroundColor = .black
+        clipsToBounds = true
         isMultipleTouchEnabled = true
         if let metalLayer { layer.addSublayer(metalLayer) }
         cursorLayer.isHidden = true
@@ -122,6 +127,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         installGestures()
         observeCursor()
         configureInteractionStatus()
+        configureViewportControls()
         NotificationCenter.default.addObserver(
             self, selector: #selector(applicationWillResignActive),
             name: UIApplication.willResignActiveNotification, object: nil
@@ -143,6 +149,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
             cancelInteractions()
         }
         interactionBoundsSize = bounds.size
+        viewport.constrain(base: fittedCanvasFrame, bounds: bounds)
         guard let metalLayer else { return }
         metalLayer.frame = bounds
         metalLayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
@@ -172,6 +179,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         if self.stream !== stream {
             cancelInteractions()
             self.stream = stream
+            viewport.constrain(base: fittedCanvasFrame, bounds: bounds)
             displayScheduler.reset()
             updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
             setNeedsLayout()
@@ -390,21 +398,21 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         // the recognizer can claim the movement.
         drag.minimumPressDuration = 0
         drag.allowableMovement = 18
-        let scroll = UIPanGestureRecognizer(target: self, action: #selector(didScroll(_:)))
-        scroll.minimumNumberOfTouches = 2
-        scroll.maximumNumberOfTouches = 2
+        let twoFinger = MobileTwoFingerGestureRecognizer(target: self, action: #selector(didUseTwoFingers(_:)))
+        let panViewport = UIPanGestureRecognizer(target: self, action: #selector(didPanViewport(_:)))
+        panViewport.minimumNumberOfTouches = 3
+        panViewport.maximumNumberOfTouches = 3
         let rightClick = UITapGestureRecognizer(
             target: self,
             action: #selector(didRightClick(_:))
         )
         rightClick.numberOfTouchesRequired = 2
         move.require(toFail: drag)
-        scroll.require(toFail: rightClick)
-        addGestureRecognizer(tap)
-        addGestureRecognizer(move)
-        addGestureRecognizer(drag)
-        addGestureRecognizer(scroll)
-        addGestureRecognizer(rightClick)
+        rightClick.require(toFail: twoFinger)
+        for recognizer in [tap, move, drag, twoFinger, panViewport, rightClick] {
+            recognizer.delegate = self
+            addGestureRecognizer(recognizer)
+        }
         if #available(iOS 13.4, *) {
             addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(didHover(_:))))
         }
@@ -424,12 +432,12 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         guard acceptsInput, dragInputTask == nil,
               [.began, .changed, .ended].contains(recognizer.state) else { return }
         let point = pointerState.move(
-            by: recognizer.translation(in: self),
+            by: viewport.unscaledTranslation(recognizer.translation(in: self)),
             canvas: stream.canvas,
             bounds: bounds
         )
         recognizer.setTranslation(.zero, in: self)
-        updateCursorPosition(point)
+        followMovedPointer(point)
         sendPointer(buttons: 0, point: point)
     }
 
@@ -447,22 +455,22 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
             dragPreviousLocation = location
             let previousPoint = pointerState.currentPoint(canvas: stream.canvas)
             let point = pointerState.move(
-                by: CGPoint(x: location.x - previous.x, y: location.y - previous.y),
+                by: viewport.unscaledTranslation(CGPoint(x: location.x - previous.x, y: location.y - previous.y)),
                 canvas: stream.canvas,
                 bounds: bounds
             )
-            updateCursorPosition(point)
+            followMovedPointer(point)
             scheduleDragPath(from: previousPoint, to: point)
         case .ended:
             guard dragInputTask != nil else { return }
             if let previous = dragPreviousLocation {
                 let previousPoint = pointerState.currentPoint(canvas: stream.canvas)
                 let finalPoint = pointerState.move(
-                    by: CGPoint(x: location.x - previous.x, y: location.y - previous.y),
+                    by: viewport.unscaledTranslation(CGPoint(x: location.x - previous.x, y: location.y - previous.y)),
                     canvas: stream.canvas,
                     bounds: bounds
                 )
-                updateCursorPosition(finalPoint)
+                followMovedPointer(finalPoint)
                 scheduleDragPath(from: previousPoint, to: finalPoint)
             }
             dragPreviousLocation = nil
@@ -475,19 +483,31 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         }
     }
 
-    @objc private func didScroll(_ recognizer: UIPanGestureRecognizer) {
+    @objc private func didUseTwoFingers(_ recognizer: MobileTwoFingerGestureRecognizer) {
         guard acceptsInput else { return }
-        if recognizer.state == .began { cancelInteractions() }
+        if recognizer.state == .began || recognizer.recognizedOnEnd { cancelInteractions() }
         if recognizer.state == .cancelled || recognizer.state == .failed {
             scrollState.reset()
             return
         }
         guard [.began, .changed, .ended].contains(recognizer.state) else { return }
-        let point = pointerState.currentPoint(canvas: stream.canvas)
-        let translation = recognizer.translation(in: self)
-        recognizer.setTranslation(.zero, in: self)
-        let movement = scrollState.consume(translation: translation)
+        guard let movement = recognizer.movement else { return }
+        switch movement.mode {
+        case .zooming:
+            viewport.zoom(
+                by: movement.scale, around: movement.anchor, translation: movement.translation,
+                base: fittedCanvasFrame, bounds: bounds
+            )
+            refreshViewport()
+        case .scrolling:
+            sendScroll(translation: movement.translation)
+        }
         if recognizer.state == .ended { scrollState.reset() }
+    }
+
+    private func sendScroll(translation: CGPoint) {
+        let point = pointerState.currentPoint(canvas: stream.canvas)
+        let movement = scrollState.consume(translation: translation)
         guard let movement else { return }
         let precise = supportsPreciseScrolling
         enqueueInput { input in
@@ -524,7 +544,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         guard acceptsInput, dragInputTask == nil else { return }
         let location = recognizer.location(in: self)
         guard let point = pointerState.setAbsolute(
-            localPoint: location,
+            localPoint: viewport.unproject(location, base: fittedCanvasFrame, bounds: bounds),
             canvas: stream.canvas,
             bounds: bounds
         ) else { return }
@@ -557,7 +577,8 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
                   remoteX: point.x,
                   remoteY: point.y,
                   canvas: stream.canvas,
-                  bounds: bounds
+                  bounds: bounds,
+                  viewport: viewport
               ) else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -947,10 +968,76 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         guard let metalLayer else { return }
         let canvas = stream.canvas
         metalLayer.update(
-            layouts: AppleVideoCanvasLayout.tiles(canvas: canvas, bounds: bounds),
-            fullCanvasLayout: AppleVideoCanvasLayout.fullCanvas(canvas: canvas, bounds: bounds),
+            layouts: AppleVideoCanvasLayout.tiles(canvas: canvas, bounds: bounds, viewport: viewport),
+            fullCanvasLayout: AppleVideoCanvasLayout.fullCanvas(canvas: canvas, bounds: bounds, viewport: viewport),
             canvasSize: CGSize(width: canvas.width, height: canvas.height),
             bounds: bounds
         )
+    }
+
+    private var fittedCanvasFrame: CGRect {
+        AppleVideoCanvasLayout.fullCanvas(canvas: stream.canvas, bounds: bounds).container
+    }
+
+    private func followMovedPointer(_ point: MobileRemotePointerState.Point) {
+        if let basePoint = AppleVideoCanvasLayout.localPoint(
+            remoteX: point.x, remoteY: point.y, canvas: stream.canvas, bounds: bounds
+        ), viewport.reveal(basePoint: basePoint, base: fittedCanvasFrame, bounds: bounds) {
+            updateLayout()
+            displayScheduler.markNeedsPresentation()
+        }
+        updateCursorPosition(point)
+    }
+
+    private func refreshViewport() {
+        updateLayout()
+        updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
+        displayScheduler.markNeedsPresentation()
+        fitCanvasButton.isHidden = viewport.scale == 1
+        fitCanvasButton.setTitle("\(Int((viewport.scale * 100).rounded()))% · Fit", for: .normal)
+        fitCanvasButton.accessibilityValue = "\(Int((viewport.scale * 100).rounded())) percent"
+    }
+
+    @objc private func fitCanvas() {
+        cancelInteractions()
+        viewport.reset()
+        refreshViewport()
+    }
+
+    @objc private func didPanViewport(_ recognizer: UIPanGestureRecognizer) {
+        guard acceptsInput else { return }
+        if recognizer.state == .began { cancelInteractions() }
+        guard [.began, .changed, .ended].contains(recognizer.state) else { return }
+        viewport.pan(by: recognizer.translation(in: self), base: fittedCanvasFrame, bounds: bounds)
+        recognizer.setTranslation(.zero, in: self)
+        refreshViewport()
+    }
+
+    private func configureViewportControls() {
+        fitCanvasButton.translatesAutoresizingMaskIntoConstraints = false
+        fitCanvasButton.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        fitCanvasButton.tintColor = .white
+        fitCanvasButton.titleLabel?.font = .preferredFont(forTextStyle: .callout)
+        fitCanvasButton.layer.cornerRadius = 8
+        fitCanvasButton.isHidden = true
+        fitCanvasButton.accessibilityLabel = "Fit remote screen"
+        fitCanvasButton.accessibilityHint = "Reset zoom. Use three fingers to move the zoomed screen."
+        fitCanvasButton.addTarget(self, action: #selector(fitCanvas), for: .touchUpInside)
+        addSubview(fitCanvasButton)
+        NSLayoutConstraint.activate([
+            fitCanvasButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            fitCanvasButton.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            fitCanvasButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
+            fitCanvasButton.heightAnchor.constraint(equalToConstant: 44),
+        ])
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        var touchedView = touch.view
+        while let view = touchedView, view !== self {
+            if view is UIControl { return false }
+            touchedView = view.superview
+        }
+        return true
     }
 }

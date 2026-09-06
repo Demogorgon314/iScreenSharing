@@ -109,4 +109,28 @@ final class MobileVideoCanvasLayoutTests: XCTestCase {
         XCTAssertEqual(first.minY, 0, accuracy: 0.001)
         XCTAssertEqual(fourth.maxY, 1200, accuracy: 0.001)
     }
+
+    func testZoomedTilesRemainContiguousAndCursorMapsBackToSameRemotePoint() throws {
+        let canvas = AppleCanvas(width: 1600, height: 1200, tileCount: 4)
+        let bounds = CGRect(x: 0, y: 0, width: 400, height: 300)
+        var viewport = MobileCanvasViewport()
+        viewport.zoom(by: 2, around: CGPoint(x: 200, y: 150), translation: .zero, base: bounds, bounds: bounds)
+        let full = AppleVideoCanvasLayout.fullCanvas(canvas: canvas, bounds: bounds, viewport: viewport)
+        let tiles = AppleVideoCanvasLayout.tiles(canvas: canvas, bounds: bounds, viewport: viewport)
+        XCTAssertEqual(tiles.count, 4)
+        XCTAssertEqual(tiles.first?.container.minY, full.container.minY)
+        XCTAssertEqual(tiles.last?.container.maxY, full.container.maxY)
+        for index in 1..<tiles.count {
+            XCTAssertEqual(tiles[index - 1].container.maxY, tiles[index].container.minY)
+            XCTAssertEqual(tiles[index].container.width, full.container.width)
+        }
+        let local = try XCTUnwrap(AppleVideoCanvasLayout.localPoint(
+            remoteX: 900, remoteY: 700, canvas: canvas, bounds: bounds, viewport: viewport
+        ))
+        let remote = AppleVideoCanvasLayout.remotePoint(
+            location: viewport.unproject(local, base: bounds, bounds: bounds), canvas: canvas, bounds: bounds
+        )
+        XCTAssertEqual(remote?.x, 900)
+        XCTAssertEqual(remote?.y, 700)
+    }
 }

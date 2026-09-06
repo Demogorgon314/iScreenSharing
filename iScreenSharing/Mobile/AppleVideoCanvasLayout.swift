@@ -7,7 +7,7 @@ enum AppleVideoCanvasLayout {
         let content: CGRect
     }
 
-    static func fullCanvas(canvas: AppleCanvas, bounds: CGRect) -> Tile {
+    static func fullCanvas(canvas: AppleCanvas, bounds: CGRect, viewport: MobileCanvasViewport = .init()) -> Tile {
         guard canvas.width > 0, canvas.height > 0, !bounds.isEmpty else {
             return Tile(container: .zero, content: .zero)
         }
@@ -21,15 +21,13 @@ enum AppleVideoCanvasLayout {
             width: size.width,
             height: size.height
         )
-        return Tile(
-            container: container,
-            content: CGRect(origin: .zero, size: size)
-        )
+        let visible = viewport.frame(base: container, bounds: bounds)
+        return Tile(container: visible, content: CGRect(origin: .zero, size: visible.size))
     }
 
-    static func tiles(canvas: AppleCanvas, bounds: CGRect) -> [Tile] {
+    static func tiles(canvas: AppleCanvas, bounds: CGRect, viewport: MobileCanvasViewport = .init()) -> [Tile] {
         guard canvas.tileCount > 0 else { return [] }
-        let full = fullCanvas(canvas: canvas, bounds: bounds)
+        let full = fullCanvas(canvas: canvas, bounds: bounds, viewport: viewport)
         guard !full.container.isEmpty else { return [] }
         let slotHeight = CGFloat(canvas.height) / CGFloat(canvas.tileCount)
         let outputSlotHeight = full.container.height / CGFloat(canvas.tileCount)
@@ -73,9 +71,10 @@ enum AppleVideoCanvasLayout {
         remoteX: Int,
         remoteY: Int,
         canvas: AppleCanvas,
-        bounds: CGRect
+        bounds: CGRect,
+        viewport: MobileCanvasViewport = .init()
     ) -> CGPoint? {
-        let layout = fullCanvas(canvas: canvas, bounds: bounds).container
+        let layout = fullCanvas(canvas: canvas, bounds: bounds, viewport: viewport).container
         guard !layout.isEmpty, canvas.width > 0, canvas.height > 0 else { return nil }
         let x = min(canvas.width - 1, max(0, remoteX))
         let y = min(canvas.height - 1, max(0, remoteY))
