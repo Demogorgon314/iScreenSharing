@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MobileConnectionsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var discovery = NetworkDiscoveryModel()
     @State private var path = [ConnectionEndpoint]()
     @State private var showsNewConnection = false
@@ -26,7 +27,10 @@ struct MobileConnectionsView: View {
                 path.append(endpoint)
             }
         }
-        .task { await discovery.browse() }
+        .task(id: scenePhase == .active) {
+            guard scenePhase == .active else { return }
+            await discovery.browse()
+        }
     }
 
     @ViewBuilder
