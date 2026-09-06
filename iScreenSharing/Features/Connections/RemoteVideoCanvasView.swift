@@ -155,15 +155,6 @@ final class RemoteVideoCanvasNSView: NSView {
         subsystem: "com.wangkai.iShareScreen",
         category: "VideoPerformance"
     )
-    private static let inputLogger = Logger(
-        subsystem: "com.wangkai.iShareScreen",
-        category: "KeyboardInput"
-    )
-    private struct ActiveModifier {
-        let symbol: UInt32
-        let keyboardType: UInt16
-    }
-
     private struct LocalFileDrag {
         enum Outcome {
             case active
@@ -249,8 +240,7 @@ final class RemoteVideoCanvasNSView: NSView {
     private var reportedWindowIsKey = false
     private var buttonMask: UInt8 = 0
     private var lastRemotePoint: (x: Int, y: Int)?
-    private var activeModifiers = [UInt16: ActiveModifier]()
-    private var inputTask: Task<Void, Never>?
+    private let keyboardSource = UUID()
     private var fileDragMoveTask: Task<Void, Never>?
     private var pendingFileDragMove: (x: Int, y: Int)?
     private var fileDragTask: Task<Void, Never>?
@@ -345,12 +335,16 @@ final class RemoteVideoCanvasNSView: NSView {
 
     deinit {
         displayLink?.invalidate()
-        inputTask?.cancel()
         fileDragTask?.cancel()
         reportWindowIsKey(false)
         removeWindowObservers()
         if let observer { frames.removeObserver(observer) }
         if let cursorObserver { cursors?.removeObserver(cursorObserver) }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if window != nil, window !== newWindow { releaseKeyboard() }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func viewDidMoveToWindow() {
@@ -375,7 +369,7 @@ final class RemoteVideoCanvasNSView: NSView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.releaseActiveModifiers()
+                self?.releaseKeyboard()
                 self?.reportWindowIsKey(false)
             }
         }
@@ -452,6 +446,8 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     func updateInput(_ input: AppleInputController?) {
+        guard self.input !== input else { return }
+        releaseKeyboard()
         self.input = input
     }
 
@@ -468,6 +464,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     fileprivate func prepareForDismantle() {
+        releaseKeyboard()
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
@@ -685,45 +682,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
-        guard let input, let modifier = AppleKeySymbol.modifier(for: event.keyCode) else { return }
-        // Global shortcuts can consume one modifier's release while forwarding
-        // another's. Its flags still describe all modifier families. Preserve
-        // per-key handling below for left/right keys in a family that is held.
-        let releasedModifiers = activeModifiers.filter { keyCode, _ in
-            guard keyCode != event.keyCode,
-                  let other = AppleKeySymbol.modifier(for: keyCode) else { return false }
-            return !event.modifierFlags.contains(other.flag)
-        }
-        if !releasedModifiers.isEmpty {
-            Self.inputLogger.notice(
-                "Queueing missing modifier releases: keyCodes=\(releasedModifiers.keys.sorted().description, privacy: .public) flagsChangedKeyCode=\(event.keyCode)"
-            )
-            releaseModifiers(releasedModifiers)
-        }
-        let keyboardType = Self.keyboardType(for: event)
-        let symbol: UInt32
-        let isDown: Bool
-        if let active = activeModifiers.removeValue(forKey: event.keyCode) {
-            symbol = active.symbol
-            isDown = false
-        } else if event.modifierFlags.contains(modifier.flag) {
-            symbol = modifier.symbol
-            activeModifiers[event.keyCode] = ActiveModifier(
-                symbol: symbol,
-                keyboardType: keyboardType
-            )
-            isDown = true
-        } else {
-            return
-        }
-        enqueueInput {
-            await input.key(
-                isDown: isDown,
-                symbol: symbol,
-                keyCode: event.keyCode,
-                keyboardType: keyboardType
-            )
-        }
+        sendKeyboardEvent(event)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -735,94 +694,25 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        guard let input else { return }
-        let keyboardType = Self.keyboardType(for: event)
-        if let symbol = AppleKeySymbol.special[event.keyCode] {
-            enqueueInput {
-                await input.key(
-                    isDown: true,
-                    symbol: symbol,
-                    keyCode: event.keyCode,
-                    keyboardType: keyboardType
-                )
-            }
-            return
-        }
-        let hasCommandModifier = !event.modifierFlags.intersection([.command, .control, .option]).isEmpty
-        let characters = hasCommandModifier ? event.charactersIgnoringModifiers : event.characters
-        guard let symbols = characters?.unicodeScalars.map(\.value), !symbols.isEmpty else { return }
-        enqueueInput {
-            for symbol in symbols {
-                await input.key(
-                    isDown: true,
-                    symbol: symbol,
-                    keyCode: event.keyCode,
-                    keyboardType: keyboardType
-                )
-                if !hasCommandModifier {
-                    await input.key(
-                        isDown: false,
-                        symbol: symbol,
-                        keyCode: event.keyCode,
-                        keyboardType: keyboardType
-                    )
-                }
-            }
-        }
+        sendKeyboardEvent(event)
     }
 
     override func keyUp(with event: NSEvent) {
-        guard let input else { return }
-        let keyboardType = Self.keyboardType(for: event)
-        if let symbol = AppleKeySymbol.special[event.keyCode] {
-            enqueueInput {
-                await input.key(
-                    isDown: false,
-                    symbol: symbol,
-                    keyCode: event.keyCode,
-                    keyboardType: keyboardType
-                )
-            }
-            return
-        }
-        guard !event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
-              let symbols = event.charactersIgnoringModifiers?.unicodeScalars.map(\.value) else { return }
-        enqueueInput {
-            for symbol in symbols {
-                await input.key(
-                    isDown: false,
-                    symbol: symbol,
-                    keyCode: event.keyCode,
-                    keyboardType: keyboardType
-                )
-            }
-        }
+        sendKeyboardEvent(event)
     }
 
     override func resignFirstResponder() -> Bool {
-        releaseActiveModifiers()
+        releaseKeyboard()
         return super.resignFirstResponder()
     }
 
-    private func releaseActiveModifiers() {
-        releaseModifiers(activeModifiers)
+    private func sendKeyboardEvent(_ event: NSEvent) {
+        guard let input, let keyboardEvent = AppleKeyboardInputEvent(event) else { return }
+        input.receiveKeyboard(keyboardEvent, from: keyboardSource)
     }
 
-    private func releaseModifiers(_ modifiers: [UInt16: ActiveModifier]) {
-        for keyCode in modifiers.keys { activeModifiers.removeValue(forKey: keyCode) }
-        guard let input, !modifiers.isEmpty else { return }
-        // A window can lose key status while retaining its first responder.
-        // Release through the same queue as the corresponding key-down events.
-        enqueueInput {
-            for (keyCode, modifier) in modifiers {
-                await input.key(
-                    isDown: false,
-                    symbol: modifier.symbol,
-                    keyCode: keyCode,
-                    keyboardType: modifier.keyboardType
-                )
-            }
-        }
+    private func releaseKeyboard() {
+        input?.releaseKeyboard(from: keyboardSource)
     }
 
     private func sendPointer(_ event: NSEvent) {
@@ -868,9 +758,7 @@ final class RemoteVideoCanvasNSView: NSView {
             pendingFileDragMove = point
             return
         }
-        let previous = inputTask
-        let task = Task { @MainActor [weak self] in
-            _ = await previous?.value
+        let task = input.enqueueInput { [weak self] in
             guard let self else { return }
             defer { fileDragMoveTask = nil }
             guard !Task.isCancelled else {
@@ -894,7 +782,6 @@ final class RemoteVideoCanvasNSView: NSView {
             }
         }
         fileDragMoveTask = task
-        inputTask = task
     }
 
     private func draggedFileURLs(from sender: any NSDraggingInfo) -> [URL]? {
@@ -1027,12 +914,7 @@ final class RemoteVideoCanvasNSView: NSView {
     }
 
     private func enqueueInput(_ operation: @escaping @MainActor @Sendable () async -> Void) {
-        let previous = inputTask
-        inputTask = Task { @MainActor in
-            _ = await previous?.value
-            guard !Task.isCancelled else { return }
-            await operation()
-        }
+        input?.enqueueInput(operation)
     }
 
     private func remotePoint(for event: NSEvent) -> (x: Int, y: Int)? {
@@ -1301,13 +1183,6 @@ final class RemoteVideoCanvasNSView: NSView {
             image: cursorImage,
             hotSpot: NSPoint(x: image.hotspotX, y: image.hotspotY)
         )
-    }
-
-    private static func keyboardType(for event: NSEvent) -> UInt16 {
-        guard let value = event.cgEvent?.getIntegerValueField(.keyboardEventKeyboardType) else {
-            return 0
-        }
-        return UInt16(clamping: value)
     }
 
     private static func scrollWheelEvent(from event: NSEvent) -> AppleScrollWheelEvent? {
@@ -1587,31 +1462,5 @@ enum AppleVideoCanvasLayout {
             bounds.height / sourceSize.height
         )
         return CGSize(width: scale, height: scale)
-    }
-}
-
-private enum AppleKeySymbol {
-    static let special: [UInt16: UInt32] = [
-        53: 0xff1b, 48: 0xff09, 51: 0xff08, 36: 0xff0d, 117: 0xffff,
-        114: 0xff63, 115: 0xff50, 119: 0xff57, 116: 0xff55, 121: 0xff56,
-        123: 0xff51, 126: 0xff52, 124: 0xff53, 125: 0xff54,
-        122: 0xffbe, 120: 0xffbf, 99: 0xffc0, 118: 0xffc1,
-        96: 0xffc2, 97: 0xffc3, 98: 0xffc4, 100: 0xffc5,
-        101: 0xffc6, 109: 0xffc7, 103: 0xffc8, 111: 0xffc9,
-    ]
-
-    static func modifier(for keyCode: UInt16) -> (flag: NSEvent.ModifierFlags, symbol: UInt32)? {
-        switch keyCode {
-        case 56: (.shift, 0xffe1)
-        case 60: (.shift, 0xffe2)
-        case 59: (.control, 0xffe3)
-        case 62: (.control, 0xffe4)
-        case 58: (.option, 0xffe9)
-        case 61: (.option, 0xffea)
-        case 55: (.command, 0xffeb)
-        case 54: (.command, 0xffec)
-        case 57: (.capsLock, 0xffe5)
-        default: nil
-        }
     }
 }

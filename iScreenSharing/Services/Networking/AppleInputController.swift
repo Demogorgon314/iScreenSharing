@@ -47,6 +47,11 @@ actor AppleInputController {
     private var isControlling = true
     private(set) var sentEventCount = 0
 
+    // AppKit submits synchronously on MainActor so every canvas shares arrival
+    // order. Protocol encoding and transport work remain isolated to this actor.
+    @MainActor private var inputTask: Task<Void, Never>?
+    private var keyboard = AppleKeyboardState()
+
     init(
         session: RFBAuthenticatedSession,
         canvas: AppleCanvas,
@@ -57,6 +62,50 @@ actor AppleInputController {
         self.session = session
         self.canvas = canvas
         self.microseconds = microseconds
+    }
+
+    @MainActor
+    @discardableResult
+    func enqueueInput(_ operation: @escaping @MainActor @Sendable () async -> Void) -> Task<Void, Never> {
+        let previous = inputTask
+        let task = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            await operation()
+        }
+        inputTask = task
+        return task
+    }
+
+    @MainActor
+    func receiveKeyboard(_ event: AppleKeyboardInputEvent, from source: UUID) {
+        enqueueInput { await self.processKeyboard(event, from: source) }
+    }
+
+    @MainActor
+    func releaseKeyboard(from source: UUID) {
+        enqueueInput { await self.processKeyboardRelease(from: source) }
+    }
+
+    private func processKeyboard(_ event: AppleKeyboardInputEvent, from source: UUID) async {
+        guard isControlling, !isClosed, let session,
+              session.sharingType == .standard || session.recordLayer != nil else { return }
+        await sendKeyboard(keyboard.receive(event, from: source))
+    }
+
+    private func processKeyboardRelease(from source: UUID) async {
+        await sendKeyboard(keyboard.release(from: source))
+    }
+
+    private func sendKeyboard(_ strokes: [AppleKeyboardStroke]) async {
+        for stroke in strokes {
+            for symbol in stroke.key.symbols {
+                await key(
+                    isDown: stroke.isDown, symbol: symbol,
+                    keyCode: stroke.key.keyCode, keyboardType: stroke.key.keyboardType
+                )
+            }
+        }
     }
 
     func pointer(

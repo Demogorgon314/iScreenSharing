@@ -124,6 +124,13 @@ timers, asynchronous decoder output, and display presentation have separate
 scheduling boundaries. Decode and rendering work therefore do not run on the
 socket-drain queue.
 
+Canvas input enters one MainActor submission sequence per session. AppKit
+adapters convert keyboard events to values; `AppleInputController` owns held-key
+pairing, modifier reconciliation, and source-specific releases on its actor.
+Focus loss and canvas removal release that canvas's held keys through the same
+sequence as new input from other canvases. The existing encrypted writer still
+owns record encryption and transport ordering.
+
 ## Private framework note
 
 For a negotiated four-tile stream, the app dynamically loads these private

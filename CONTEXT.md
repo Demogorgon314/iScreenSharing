@@ -27,3 +27,7 @@ _Avoid_: Enhanced mode, proprietary VNC
 **Session Route**:
 The selected networking path for one session. It opens the control transport and, for High-Performance Mode, lazily creates media through the same Direct or Tailscale Adapter and selected remote peer.
 _Avoid_: Transport factory, connection type
+
+**Session Input**:
+The Authenticated Session's input module. AppKit adapters submit input in MainActor order across all canvases; the input actor owns keyboard pairing and modifier reconciliation and sends through the existing ordered writer. Each canvas identifies its keyboard source so focus loss or removal can release that source's held keys. Tracked keys describe locally processed input, not remote acknowledgment.
+_Avoid_: Per-window keyboard state, remote-applied key state

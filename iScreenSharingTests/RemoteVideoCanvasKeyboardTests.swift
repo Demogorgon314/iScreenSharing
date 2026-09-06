@@ -295,6 +295,161 @@ final class RemoteVideoCanvasKeyboardTests: XCTestCase {
         )
     }
 
+    func testCommandKeyReleaseUsesItsDownEvenAfterCommandIsReleased() async throws {
+        let keys = try AppleRecordKeys(
+            key: Data(repeating: 0x11, count: 16),
+            initializationVector: Data(repeating: 0x22, count: 16)
+        )
+        let allSent = expectation(description: "Command and letter both released")
+        let transport = DragInputTransport(suspendedSendNumber: 0) { count in
+            if count == 5 { allSent.fulfill() }
+        }
+        let session = try makeSession(transport: transport)
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let input = AppleInputController(
+            session: session, canvas: AppleCanvas(width: 100, height: 100, tileCount: 1),
+            microseconds: { 123 }
+        )
+        let view = makeKeyboardCanvas(input: input)
+        let commandDown = try keyboardEvent(.flagsChanged, keyCode: 55, flags: .command)
+        view.flagsChanged(with: commandDown)
+        view.keyDown(with: try keyboardEvent(.keyDown, keyCode: 0, flags: .command, characters: "a"))
+        view.flagsChanged(with: try keyboardEvent(.flagsChanged, keyCode: 55))
+        view.keyUp(with: try keyboardEvent(.keyUp, keyCode: 0, characters: "a"))
+        view.keyDown(with: try keyboardEvent(.keyDown, keyCode: 53, characters: "\u{1b}"))
+        await fulfillment(of: [allSent], timeout: 2)
+
+        XCTAssertEqual(transport.sentMessages, try encryptedKeys(
+            [(55, 0xffeb, true), (0, 97, true), (55, 0xffeb, false),
+             (0, 97, false), (53, 0xff1b, true)],
+            keys: keys, keyboardType: keyboardType(of: commandDown)
+        ))
+    }
+
+    func testFocusHandoffReleasesOldShiftBeforeNewCanvasInputWhenSendIsBlocked() async throws {
+        let keys = try AppleRecordKeys(
+            key: Data(repeating: 0x11, count: 16),
+            initializationVector: Data(repeating: 0x22, count: 16)
+        )
+        let allSent = expectation(description: "Both canvases finish input")
+        let transport = DragInputTransport(suspendedSendNumber: 1) { count in
+            if count == 3 { allSent.fulfill() }
+        }
+        defer { transport.resumeSuspendedSend() }
+        let session = try makeSession(transport: transport)
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let secondInputEncoded = expectation(description: "Second input reached the shared controller")
+        let clock = KeyboardTestClock(onSecondRead: { secondInputEncoded.fulfill() })
+        let input = AppleInputController(
+            session: session, canvas: AppleCanvas(width: 100, height: 100, tileCount: 1),
+            microseconds: { clock.read() }
+        )
+        let first = makeKeyboardCanvas(input: input)
+        let second = makeKeyboardCanvas(input: input)
+        let shiftDown = try keyboardEvent(.flagsChanged, keyCode: 56, flags: .shift)
+        first.flagsChanged(with: shiftDown)
+        await transport.waitUntilSendIsSuspended()
+        _ = first.resignFirstResponder()
+        second.keyDown(with: try keyboardEvent(.keyDown, keyCode: 53, characters: "\u{1b}"))
+
+        // On the old per-View queues, the new canvas can enter the controller
+        // while the old canvas's release is still waiting for its down to finish.
+        // A session queue keeps both later events behind that first send.
+        secondInputEncoded.isInverted = true
+        await fulfillment(of: [secondInputEncoded], timeout: 0.1)
+        clock.stopObserving()
+        transport.resumeSuspendedSend()
+        await fulfillment(of: [allSent], timeout: 2)
+        XCTAssertEqual(transport.sentMessages, try encryptedKeys(
+            [(56, 0xffe1, true), (56, 0xffe1, false), (53, 0xff1b, true)],
+            keys: keys, keyboardType: keyboardType(of: shiftDown)
+        ))
+    }
+
+    private func makeKeyboardCanvas(input: AppleInputController) -> RemoteVideoCanvasNSView {
+        RemoteVideoCanvasNSView(
+            canvas: AppleCanvas(width: 100, height: 100, tileCount: 1),
+            frames: AppleVideoFrameStore(), input: input, cursors: nil,
+            displayScale: AppleVideoDisplayScale(), synchronizesPresentation: true,
+            sourceRect: nil, inputMapping: nil, inputCoordinatesAreDisplayLocal: false,
+            inputDisplayID: nil
+        )
+    }
+
+    func testRemovingCanvasInputReleasesHeldKeysThroughOriginalController() async throws {
+        try await assertCanvasRemovalReleasesKeys(detachesWindow: false)
+    }
+
+    func testDetachingCanvasReleasesHeldKeys() async throws {
+        try await assertCanvasRemovalReleasesKeys(detachesWindow: true)
+    }
+
+    private func assertCanvasRemovalReleasesKeys(detachesWindow: Bool) async throws {
+        let keys = try AppleRecordKeys(
+            key: Data(repeating: 0x11, count: 16), initializationVector: Data(repeating: 0x22, count: 16)
+        )
+        let transport = DragInputTransport(suspendedSendNumber: 0)
+        let session = try makeSession(transport: transport)
+        session.install(recordLayer: AppleEncryptedRecordLayer(keys: keys))
+        let input = AppleInputController(
+            session: session, canvas: AppleCanvas(width: 100, height: 100, tileCount: 1),
+            microseconds: { 123 }
+        )
+        let view = makeKeyboardCanvas(input: input)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: .borderless, backing: .buffered, defer: true
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { window.contentView = nil }
+        let commandDown = try keyboardEvent(.flagsChanged, keyCode: 55, flags: .command)
+        view.flagsChanged(with: commandDown)
+        view.keyDown(with: try keyboardEvent(.keyDown, keyCode: 0, flags: .command, characters: "a"))
+        if detachesWindow {
+            window.contentView = nil
+        } else {
+            view.updateInput(nil)
+        }
+        await input.enqueueInput {}.value
+
+        XCTAssertEqual(transport.sentMessages, try encryptedKeys(
+            [(55, 0xffeb, true), (0, 97, true), (0, 97, false), (55, 0xffeb, false)],
+            keys: keys, keyboardType: keyboardType(of: commandDown)
+        ))
+    }
+
+    private func keyboardEvent(
+        _ type: NSEvent.EventType,
+        keyCode: UInt16,
+        flags: NSEvent.ModifierFlags = [],
+        characters: String = ""
+    ) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.keyEvent(
+            with: type, location: .zero, modifierFlags: flags, timestamp: 0,
+            windowNumber: 0, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: keyCode
+        ))
+    }
+
+    private func keyboardType(of event: NSEvent) -> UInt16 {
+        UInt16(clamping: event.cgEvent?.getIntegerValueField(.keyboardEventKeyboardType) ?? 0)
+    }
+
+    private func encryptedKeys(
+        _ events: [(UInt16, UInt32, Bool)],
+        keys: AppleRecordKeys,
+        keyboardType: UInt16
+    ) throws -> [Data] {
+        let layer = AppleEncryptedRecordLayer(keys: keys)
+        return try events.enumerated().map { index, event in
+            try layer.encrypt(try layer.encryptKeyEvent(
+                isDown: event.2, keySymbol: event.1, timestampDelta: index == 0 ? 123 : 0,
+                keyboardType: keyboardType, keyCode: event.0
+            ))
+        }
+    }
+
     private func assertModifierEvents(
         _ events: [(keyCode: UInt16, flags: NSEvent.ModifierFlags)],
         expected transitions: [(keyCode: UInt16, isDown: Bool)],
@@ -930,5 +1085,29 @@ private actor ControlledFileTransferSend {
     func resume() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private final class KeyboardTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var isObserving = true
+    private let onSecondRead: @Sendable () -> Void
+
+    init(onSecondRead: @escaping @Sendable () -> Void) {
+        self.onSecondRead = onSecondRead
+    }
+
+    func read() -> UInt64 {
+        let isSecond = lock.withLock {
+            count += 1
+            return count == 2 && isObserving
+        }
+        if isSecond { onSecondRead() }
+        return 123
+    }
+
+    func stopObserving() {
+        lock.withLock { isObserving = false }
     }
 }
