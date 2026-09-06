@@ -332,7 +332,19 @@ actor AppleInputController {
         keyboardEventSubtype = usesSameInputSource ? 3 : 1
     }
 
-    func setControlling(_ controlling: Bool) {
+    // The mode request and its local input gate form one operation in the
+    // session input sequence. A failed write must not commit the new mode.
+    func setControlling(_ controlling: Bool) async throws {
+        guard !isClosed, let session else { throw RFBNetworkError.connectionClosed }
+        guard controlling != isControlling else { return }
+        let message = AppleRFBMessages.controlMode(observing: !controlling)
+        switch session.sharingType {
+        case .standard:
+            try await session.sendStandard(message)
+        case .highPerformance:
+            try await session.sendEncrypted(message)
+        }
+        guard !isClosed else { throw RFBNetworkError.connectionClosed }
         isControlling = controlling
     }
 

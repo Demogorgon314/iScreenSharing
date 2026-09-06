@@ -70,15 +70,19 @@ final class AppleSessionKeyboardTests: XCTestCase {
     func testRejectedKeyDownDoesNotLeavePressToReleaseAfterControlReturns() async throws {
         let harness = try makeHarness()
         let source = UUID()
-        await harness.input.setControlling(false)
+        try await harness.input.setControlling(false)
         harness.input.receiveKeyboard(.keyDown(key(0, [97]), releaseImmediately: false), from: source)
         await harness.input.enqueueInput {}.value
-        await harness.input.setControlling(true)
+        try await harness.input.setControlling(true)
         harness.input.receiveKeyboard(.keyUp(keyCode: 0), from: source)
         harness.input.releaseKeyboard(from: source)
         await harness.input.enqueueInput {}.value
 
-        XCTAssertTrue(harness.transport.sentMessages.isEmpty)
+        let encoder = AppleEncryptedRecordLayer(keys: harness.keys)
+        XCTAssertEqual(harness.transport.sentMessages, try [
+            encoder.encrypt(Data([0x0a, 0, 0, 0])),
+            encoder.encrypt(Data([0x0a, 0, 0, 1])),
+        ])
     }
 
     func testClosedInputRejectsQueuedKeyboardEventsAndCleanupWrites() async throws {

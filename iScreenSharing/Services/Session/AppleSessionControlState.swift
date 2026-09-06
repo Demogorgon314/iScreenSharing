@@ -1,6 +1,5 @@
 import Combine
 import Foundation
-import enum ScreenSharingProtocol.AppleRFBMessages
 
 @MainActor
 final class AppleSessionControlState: ObservableObject {
@@ -15,22 +14,13 @@ final class AppleSessionControlState: ObservableObject {
     }
 
     func toggleMode() {
-        guard !isChangingMode, let session else { return }
+        guard !isChangingMode, let session, let input = session.inputController else { return }
         let newValue = !isObserving
         isChangingMode = true
-        Task { [weak self, weak session] in
+        input.enqueueInput { [weak self, weak session] in
             guard let self, let session else { return }
             do {
-                let message = AppleRFBMessages.controlMode(observing: newValue)
-                switch session.sharingType {
-                case .standard:
-                    try await session.sendStandard(message)
-                case .highPerformance:
-                    try await session.sendEncrypted(
-                        message
-                    )
-                }
-                await session.inputController?.setControlling(!newValue)
+                try await input.setControlling(!newValue)
                 await session.fileTransferService?.setControlling(!newValue)
                 guard !Task.isCancelled else { return }
                 isObserving = newValue
