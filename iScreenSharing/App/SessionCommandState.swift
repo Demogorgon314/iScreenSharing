@@ -262,7 +262,7 @@ final class SessionCommandState: ObservableObject {
 
     func perform(_ command: AppleRemoteSystemCommand) {
         guard canPerform(command), let input = session?.inputController else { return }
-        Task { await input.perform(command) }
+        input.perform(command)
     }
 
     private func observeSessionModels() {

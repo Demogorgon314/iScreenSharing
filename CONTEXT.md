@@ -29,5 +29,5 @@ The selected networking path for one session. It opens the control transport and
 _Avoid_: Transport factory, connection type
 
 **Session Input**:
-The Authenticated Session's input module. AppKit adapters submit input in MainActor order across all canvases; the input actor owns keyboard pairing and modifier reconciliation and sends through the existing ordered writer. Each canvas identifies its keyboard source so focus loss or removal can release that source's held keys. Control/observe requests use the same submission sequence, with local input admission changing only after the mode write succeeds. Tracked keys and completed writes do not imply remote acknowledgment.
+The Authenticated Session's input module. AppKit adapters submit input in MainActor order across all canvases; the input actor owns keyboard pairing and modifier reconciliation and sends through the existing ordered writer. Each canvas identifies its keyboard source so focus loss or removal can release that source's held keys. Remote system commands and control/observe requests use the same submission sequence, with local input admission changing only after the mode write succeeds. Tracked keys and completed writes do not imply remote acknowledgment.
 _Avoid_: Per-window keyboard state, remote-applied key state

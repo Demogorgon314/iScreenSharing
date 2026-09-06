@@ -318,7 +318,12 @@ actor AppleInputController {
         }
     }
 
-    func perform(_ command: AppleRemoteSystemCommand) async {
+    @MainActor
+    func perform(_ command: AppleRemoteSystemCommand) {
+        enqueueInput { await self.processRemoteCommand(command) }
+    }
+
+    private func processRemoteCommand(_ command: AppleRemoteSystemCommand) async {
         guard isControlling else { return }
         await key(
             isDown: true,

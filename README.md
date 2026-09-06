@@ -128,10 +128,11 @@ Canvas input enters one MainActor submission sequence per session. AppKit
 adapters convert keyboard events to values; `AppleInputController` owns held-key
 pairing, modifier reconciliation, and source-specific releases on its actor.
 Focus loss and canvas removal release that canvas's held keys through the same
-sequence as new input from other canvases. Control/observe requests join that
-sequence too: earlier canvas input finishes first, and the input gate changes
-only after the mode request is sent successfully. The existing encrypted writer
-still owns record encryption and transport ordering.
+sequence as new input from other canvases. Remote system commands and
+control/observe requests join that sequence too: earlier canvas input finishes
+first, and the input gate changes only after the mode request is sent
+successfully. System commands retain their one-shot wire behavior. The existing
+encrypted writer still owns record encryption and transport ordering.
 
 ## Private framework note
 

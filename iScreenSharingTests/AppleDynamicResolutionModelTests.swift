@@ -112,11 +112,14 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
 
     @MainActor
     func testDebouncesRequestAndCanCancelPendingWork() async throws {
+        let requested = expectation(description: "Debounced resolution requested")
         let recorder = DynamicResolutionMessageRecorder()
         let controller = AppleDynamicResolutionController(
             initialCanvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
             mediaConfiguration: Data([0x1c, 0, 0, 0]),
-            sendMessage: { message in await recorder.append(message) },
+            sendMessage: { message in
+                if await recorder.append(message) == 1 { requested.fulfill() }
+            },
             applyCanvas: { _ in },
             prepareMediaRestart: { }
         )
@@ -124,7 +127,7 @@ final class AppleDynamicResolutionModelTests: XCTestCase {
         model.isEnabled = true
         model.schedule(viewport: CGSize(width: 1000, height: 700), controller: controller)
 
-        try await Task.sleep(for: .milliseconds(650))
+        await fulfillment(of: [requested], timeout: 2)
         let sentCount = await recorder.count()
         XCTAssertEqual(sentCount, 1)
 
