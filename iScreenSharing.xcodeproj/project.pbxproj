@@ -106,6 +106,7 @@
 				Services/FileTransfer/AppleFileCopyOutputPipe.swift,
 				Services/FileTransfer/AppleSwiftFileCopySender.swift,
 				Services/Input/AppleKeyboardInputSourceService.swift,
+				Services/Input/AppleKeyboardEventAdapter.swift,
 				Services/Media/AppleVCPDecompressionSession.swift,
 				Services/Networking/EmbeddedTailscaleRuntime.swift,
 				Services/Networking/TailscaleMediaReceiver.swift,

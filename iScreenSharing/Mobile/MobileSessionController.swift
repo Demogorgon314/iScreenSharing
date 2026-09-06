@@ -117,8 +117,9 @@ final class MobileSessionController: ObservableObject {
             let cursors = AppleCursorStore()
             session.install(cursorStore: cursors)
 
-            try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
-            session.setVideoDecoderMode(.videoToolboxSynchronized)
+            try videoStreamStarter.startVideo(
+                for: session, negotiation: negotiation, decoderMode: .videoToolboxSynchronized
+            )
             guard let stream = session.videoStream as? AppleVideoStream else {
                 throw AppleVideoStreamError.missingMediaReceiver
             }
