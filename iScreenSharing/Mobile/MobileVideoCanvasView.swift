@@ -7,14 +7,18 @@ struct MobileVideoCanvasView: UIViewRepresentable {
     let input: AppleInputController?
     let cursors: AppleCursorStore?
     @Binding var requestsKeyboard: Bool
+    var showsMetalPerformanceHUD = false
 
     func makeUIView(context: Context) -> MobileVideoCanvasUIView {
-        MobileVideoCanvasUIView(stream: stream, input: input, cursors: cursors)
+        let view = MobileVideoCanvasUIView(stream: stream, input: input, cursors: cursors)
+        view.setShowsMetalPerformanceHUD(showsMetalPerformanceHUD)
+        return view
     }
 
     func updateUIView(_ view: MobileVideoCanvasUIView, context: Context) {
         view.update(stream: stream, input: input, cursors: cursors)
         view.setKeyboardVisible(requestsKeyboard)
+        view.setShowsMetalPerformanceHUD(showsMetalPerformanceHUD)
     }
 
     static func dismantleUIView(_ view: MobileVideoCanvasUIView, coordinator: ()) {
@@ -137,6 +141,11 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
             updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
             setNeedsLayout()
         }
+    }
+
+    func setShowsMetalPerformanceHUD(_ enabled: Bool) {
+        guard metalLayer?.showsDeveloperHUD != enabled else { return }
+        metalLayer?.showsDeveloperHUD = enabled
     }
 
     func close() {

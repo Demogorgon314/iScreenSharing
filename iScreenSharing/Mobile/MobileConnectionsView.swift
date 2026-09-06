@@ -116,8 +116,44 @@ private struct MobileNewConnectionView: View {
     }
 }
 
+private struct MobileVideoPerformanceOverlay: View {
+    @ObservedObject var performance: AppleVideoPerformanceMonitor
+
+    var body: some View {
+        let stats = performance.snapshot
+        VStack(alignment: .leading, spacing: 3) {
+            Text(String(format: "Display  %.1f fps", stats.displayedFramesPerSecond))
+            Text(String(
+                format: "Decode   %.1f fps / %.2f ms",
+                stats.decodedFramesPerSecond,
+                stats.averageDecodeMilliseconds
+            ))
+            Text(String(
+                format: "Frame    %.2f ms / P95 %.2f ms",
+                stats.averageDisplayFrameMilliseconds,
+                stats.p95DisplayFrameMilliseconds
+            ))
+            Text(String(
+                format: "Network  %.1f Mb/s / loss %.2f%%",
+                stats.networkMegabitsPerSecond,
+                stats.receiverReportLossPercentage
+            ))
+        }
+        .font(.system(.caption2, design: .monospaced))
+        .foregroundStyle(.white)
+        .padding(8)
+        .background(.black.opacity(0.74), in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Video performance statistics")
+    }
+}
+
 private struct MobileConnectionPlaceholderView: View {
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(SessionFeaturePreferences.showsVideoPerformanceOverlayKey)
+    private var showsVideoPerformanceOverlay = false
+    @AppStorage(SessionFeaturePreferences.showsMetalPerformanceHUDKey)
+    private var showsMetalPerformanceHUD = false
     let endpoint: ConnectionEndpoint
 
     @StateObject private var controller: MobileSessionController
@@ -145,9 +181,17 @@ private struct MobileConnectionPlaceholderView: View {
                     stream: stream,
                     input: session.inputController,
                     cursors: session.cursorStore,
-                    requestsKeyboard: $requestsKeyboard
+                    requestsKeyboard: $requestsKeyboard,
+                    showsMetalPerformanceHUD: showsMetalPerformanceHUD
                 )
                 .ignoresSafeArea(edges: .bottom)
+                .overlay(alignment: .topLeading) {
+                    if showsVideoPerformanceOverlay {
+                        MobileVideoPerformanceOverlay(performance: stream.performance)
+                            .padding(8)
+                            .allowsHitTesting(false)
+                    }
+                }
             } else {
                 loginForm
             }
@@ -157,6 +201,12 @@ private struct MobileConnectionPlaceholderView: View {
         .toolbar {
             if controller.state == .connected {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Menu {
+                        Toggle("Video Performance", isOn: $showsVideoPerformanceOverlay)
+                        Toggle("Metal HUD", isOn: $showsMetalPerformanceHUD)
+                    } label: {
+                        Label("Performance", systemImage: "waveform.path.ecg.rectangle")
+                    }
                     Button {
                         requestsKeyboard.toggle()
                     } label: {

@@ -4,6 +4,17 @@ import XCTest
 
 final class MobileVideoPresentationTests: XCTestCase {
     @MainActor
+    func testMobileMetalHUDCanBeEnabledAndDisabledWithoutReplacingLayer() throws {
+        let context = try XCTUnwrap(AppleNV24MetalContext())
+        let layer = AppleNV24MetalLayer(context: context)
+        XCTAssertEqual(layer.developerHUDProperties?["mode"] as? String, "disabled")
+        layer.showsDeveloperHUD = true
+        XCTAssertEqual(layer.developerHUDProperties?["mode"] as? String, "default")
+        layer.showsDeveloperHUD = false
+        XCTAssertEqual(layer.developerHUDProperties?["mode"] as? String, "disabled")
+    }
+
+    @MainActor
     func testMobileFrameStorePreservesConsecutiveLogicalFrames() async throws {
         let store = AppleVideoFrameStore(preservesLogicalFrameBatches: true)
         let first = try makeDecodedFrame(sequence: 1)

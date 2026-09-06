@@ -490,12 +490,10 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     private func configureDeveloperHUD() {
-#if os(macOS)
         let mode = showsDeveloperHUD ? "default" : "disabled"
         developerHUDProperties = [
             "mode": mode
         ]
-#endif
     }
 
     private func encode(into commandBuffer: MTLCommandBuffer, drawable: CAMetalDrawable) -> Bool {
