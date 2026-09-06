@@ -52,6 +52,13 @@ struct MobileConnectionsView: View {
             guard scenePhase == .active else { return }
             await discovery.browse()
         }
+        .onChange(of: discovery.state) { _, state in
+            if case .results(let services) = state {
+                for service in services {
+                    if let info = service.deviceInfo { store.updateDeviceInfo(info, for: service.endpoint) }
+                }
+            }
+        }
     }
 
     private var connectionList: some View {
@@ -89,7 +96,7 @@ struct MobileConnectionsView: View {
     ) -> some View {
         NavigationLink(value: endpoint) {
             HStack(spacing: 14) {
-                Image(systemName: "desktopcomputer")
+                Image(systemName: MobileMacIcon.symbol(for: (saved?.deviceInfo ?? discovered?.deviceInfo)?.modelIdentifier))
                     .font(.title2)
                     .foregroundStyle(.tint)
                     .frame(width: 36)
@@ -394,7 +401,12 @@ private struct MobileConnectionPlaceholderView: View {
             }
         }
         .onChange(of: controller.state) { _, state in
-            if state == .connected { store.record(endpoint, preferredUsername: username) }
+            if state == .connected {
+                store.record(endpoint, preferredUsername: username, deviceInfo: controller.deviceInfo)
+            }
+        }
+        .onChange(of: controller.deviceInfo) { _, info in
+            if let info { store.updateDeviceInfo(info, for: endpoint) }
         }
         .onChange(of: scenePhase) { _, phase in
             controller.setActive(phase == .active)

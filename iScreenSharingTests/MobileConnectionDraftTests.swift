@@ -1,8 +1,20 @@
 import XCTest
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 @testable import iScreenSharing
 
 @MainActor
 final class MobileConnectionDraftTests: XCTestCase {
+    func testSavingDiscoveredMacRetainsItsModelForOfflineIcon() throws {
+        let suite = "MobileConnectionDraftTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let info = AppleRemoteDeviceInfo(modelIdentifier: "Mac16,10")
+        let endpoint = ConnectionEndpoint(bonjourService: try BonjourServiceEndpoint(name: "Office Mac"))
+        let draft = MobileConnectionDraft(connection: SavedConnection(endpoint: endpoint, deviceInfo: info))
+        _ = try draft.save(in: ConnectionStore(defaults: defaults))
+        XCTAssertEqual(ConnectionStore(defaults: defaults).connection(for: endpoint)?.deviceInfo, info)
+    }
+
     func testSaveRestoresConfigurationWithoutRecordingAConnection() throws {
         let suite = "MobileConnectionDraftTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

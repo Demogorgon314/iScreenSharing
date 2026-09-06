@@ -3,6 +3,7 @@ import Combine
 import Foundation
 import enum ScreenSharingProtocol.AppleRFBMessages
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
+import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 
 @MainActor
 final class MobileSessionController: ObservableObject {
@@ -17,6 +18,7 @@ final class MobileSessionController: ObservableObject {
     @Published private(set) var session: RFBAuthenticatedSession?
     @Published private(set) var selectedResolutionPreset: MobileResolutionPreset?
     @Published private(set) var resolutionErrorMessage: String?
+    @Published private(set) var deviceInfo: AppleRemoteDeviceInfo?
 
     let endpoint: ConnectionEndpoint
 
@@ -152,6 +154,12 @@ final class MobileSessionController: ObservableObject {
                     await dynamicResolutionController.receiveMediaCanvas(canvas)
                 },
                 receiveCursorUpdate: { update in cursors.apply(update) },
+                receiveDeviceInfo: { [weak self, weak session] info in
+                    await MainActor.run { [weak self, weak session] in
+                        guard let self, let session, self.session === session else { return }
+                        self.deviceInfo = info
+                    }
+                },
                 didFail: { [weak self, weak session] message in
                     self?.connectionDidFail(message, session: session)
                 }
