@@ -25,6 +25,7 @@ final class MobileSessionController: ObservableObject {
     private let mediaNegotiator: any AppleMediaNegotiating
     private let videoStreamStarter: any AppleVideoStreamStarting
     private let credentialStore: any CredentialStoring
+    private let resolutionPreferences: MobileResolutionPreferences
     private var isActive = true
     private var streamStateObserver: AnyCancellable?
     private var connectionTask: Task<Void, Never>?
@@ -37,7 +38,8 @@ final class MobileSessionController: ObservableObject {
         controlChannelNegotiator: any AppleControlChannelNegotiating = AppleControlChannelNegotiator(),
         mediaNegotiator: any AppleMediaNegotiating = AppleMediaNegotiator(),
         videoStreamStarter: any AppleVideoStreamStarting = AppleVideoStreamStarter(),
-        credentialStore: any CredentialStoring = KeychainCredentialStore()
+        credentialStore: any CredentialStoring = KeychainCredentialStore(),
+        resolutionPreferences: MobileResolutionPreferences = MobileResolutionPreferences()
     ) {
         self.endpoint = endpoint
         self.authenticator = authenticator
@@ -45,6 +47,7 @@ final class MobileSessionController: ObservableObject {
         self.mediaNegotiator = mediaNegotiator
         self.videoStreamStarter = videoStreamStarter
         self.credentialStore = credentialStore
+        self.resolutionPreferences = resolutionPreferences
     }
 
     func savedCredentials() async -> ScreenSharingCredentials? {
@@ -81,8 +84,8 @@ final class MobileSessionController: ObservableObject {
                 sharingType: .highPerformance
             )
             connectingSession = session
-            let requestedSize = viewportSize
-                .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
+            let requestedPreset = resolutionPreferences.preset(for: endpoint)
+            let requestedSize = requestedPreset.size(for: viewportSize ?? .zero)
                 ?? AppleDynamicResolutionSize(width: 1440, height: 900)
             _ = try await controlChannelNegotiator.enableEncryption(
                 for: session,
@@ -157,6 +160,7 @@ final class MobileSessionController: ObservableObject {
             clipboard.setActive(isActive)
             try Task.checkCancellation()
             guard self.session === session else { return }
+            selectedResolutionPreset = requestedPreset
             state = .connected
             connectionTask = nil
             controlMessages.start()
@@ -202,10 +206,9 @@ final class MobileSessionController: ObservableObject {
     }
 
     func requestResolution(_ preset: MobileResolutionPreset) {
-        guard let viewportSize,
-              let session,
+        guard let session,
               let controller = session.dynamicResolutionController,
-              let size = preset.size(for: viewportSize) else { return }
+              let size = preset.size(for: viewportSize ?? .zero) else { return }
         resolutionTask?.cancel()
         resolutionTask = Task { [weak self, weak session] in
             do {
@@ -213,11 +216,13 @@ final class MobileSessionController: ObservableObject {
                 try Task.checkCancellation()
                 guard let self, let session, self.session === session else { return }
                 selectedResolutionPreset = preset
+                resolutionPreferences.save(preset, for: endpoint)
                 resolutionErrorMessage = nil
                 resolutionTask = nil
             } catch is CancellationError {
                 return
             } catch {
+                guard !Task.isCancelled else { return }
                 guard let self, let session, self.session === session else { return }
                 resolutionErrorMessage = error.localizedDescription
                 resolutionTask = nil

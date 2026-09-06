@@ -1,4 +1,5 @@
 import CoreGraphics
+import Foundation
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
 enum MobileResolutionPreset: String, CaseIterable, Identifiable {
@@ -29,5 +30,27 @@ enum MobileResolutionPreset: String, CaseIterable, Identifiable {
         case .fullHD:
             .fixed1080p
         }
+    }
+}
+
+struct MobileResolutionPreferences {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func preset(for endpoint: ConnectionEndpoint) -> MobileResolutionPreset {
+        guard let value = defaults.string(forKey: key(for: endpoint)),
+              let preset = MobileResolutionPreset(rawValue: value) else { return .fitScreen }
+        return preset
+    }
+
+    func save(_ preset: MobileResolutionPreset, for endpoint: ConnectionEndpoint) {
+        defaults.set(preset.rawValue, forKey: key(for: endpoint))
+    }
+
+    private func key(for endpoint: ConnectionEndpoint) -> String {
+        "MobileResolutionPreset.\(endpoint.url.absoluteString)"
     }
 }

@@ -2,8 +2,6 @@ import CoreGraphics
 import struct ScreenSharingProtocol.AppleCanvas
 
 struct MobileRemotePointerState {
-    private static let relativeMovementScale: CGFloat = 4
-
     struct Point: Equatable {
         let x: Int
         let y: Int
@@ -26,10 +24,17 @@ struct MobileRemotePointerState {
         bounds: CGRect
     ) -> Point {
         let current = currentPoint(canvas: canvas)
-        guard !bounds.isEmpty else { return current }
-
-        fractionalX += localTranslation.x * Self.relativeMovementScale
-        fractionalY += localTranslation.y * Self.relativeMovementScale
+        guard !bounds.isEmpty, bounds.width.isFinite, bounds.height.isFinite,
+              canvas.width > 0, canvas.height > 0,
+              localTranslation.x.isFinite, localTranslation.y.isFinite else { return current }
+        // Convert view points through the same aspect-fit scale as the canvas.
+        // A fixed remote-pixel gain changes perceived speed after a resize.
+        let displayScale = min(
+            bounds.width / CGFloat(canvas.width),
+            bounds.height / CGFloat(canvas.height)
+        )
+        fractionalX += localTranslation.x / displayScale
+        fractionalY += localTranslation.y / displayScale
         let deltaX = Int(fractionalX.rounded(.towardZero))
         let deltaY = Int(fractionalY.rounded(.towardZero))
         fractionalX -= CGFloat(deltaX)

@@ -54,7 +54,7 @@ final class MobileRemotePointerStateTests: XCTestCase {
         )
     }
 
-    func testRelativeMovementDoesNotDependOnRemoteResolution() {
+    func testRelativeMovementPreservesDisplayedDistanceAcrossResolutions() {
         var first = MobileRemotePointerState()
         var second = MobileRemotePointerState()
 
@@ -71,8 +71,8 @@ final class MobileRemotePointerStateTests: XCTestCase {
 
         XCTAssertEqual(lowResolution.x - 800, 40)
         XCTAssertEqual(lowResolution.y - 600, -20)
-        XCTAssertEqual(highResolution.x - 1_600, 40)
-        XCTAssertEqual(highResolution.y - 1_200, -20)
+        XCTAssertEqual(highResolution.x - 1_600, 80)
+        XCTAssertEqual(highResolution.y - 1_200, -40)
     }
 
     func testDragPathSplitsLargeMovementIntoBoundedSteps() throws {

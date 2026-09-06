@@ -182,7 +182,8 @@ private struct MobileConnectionPlaceholderView: View {
                     input: session.inputController,
                     cursors: session.cursorStore,
                     requestsKeyboard: $requestsKeyboard,
-                    showsMetalPerformanceHUD: showsMetalPerformanceHUD
+                    showsMetalPerformanceHUD: showsMetalPerformanceHUD,
+                    supportsPreciseScrolling: session.serverInfo.supportsServerCommand(23)
                 )
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .topLeading) {
