@@ -3,10 +3,10 @@ import XCTest
 @testable import iScreenSharingMobile
 
 final class MobileResolutionPresetTests: XCTestCase {
-    func testFitScreenUsesEvenViewportDimensions() {
+    func testFitScreenUsesNativeBoundsWithoutEvenAlignment() {
         XCTAssertEqual(
             MobileResolutionPreset.fitScreen.size(for: CGSize(width: 413.9, height: 759.9)),
-            AppleDynamicResolutionSize(width: 412, height: 758)
+            AppleDynamicResolutionSize(width: 800, height: 759)
         )
     }
 

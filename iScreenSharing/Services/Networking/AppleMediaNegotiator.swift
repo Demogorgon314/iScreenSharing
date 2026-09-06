@@ -155,7 +155,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         }
         timing?.record(.mediaConfigurationSendStarted)
         try await session.sendEncrypted(configuration)
-        session.connectionTiming?.record(.mediaConfigurationSent, since: .init(.mediaStarted))
+        session.connectionTiming?.record(.mediaConfigurationSent, since: .init(.mediaConfigurationSendStarted))
 
         var retryCount = 0
         var negotiatedCanvases = [AppleCanvas]()

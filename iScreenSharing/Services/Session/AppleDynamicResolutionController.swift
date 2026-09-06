@@ -18,7 +18,11 @@ actor AppleDynamicResolutionController {
     private var mediaRestartPending = false
     private var mediaRestartPrepared = false
     private var hasReceivedInitialLayout = false
-    private var combinedDisplaySelectionPending = false
+    private struct PendingRequest {
+        let id = UUID()
+        var combinedDisplays: Bool
+    }
+    private var pendingRequests = [PendingRequest]()
 
     init(
         initialCanvas: AppleCanvas,
@@ -56,28 +60,29 @@ actor AppleDynamicResolutionController {
             backingScale: backingScale,
             hdr: hdr
         )
-        combinedDisplaySelectionPending = displaySizes.count > 1
+        try Task.checkCancellation()
+        let request = PendingRequest(combinedDisplays: displaySizes.count > 1)
         // The host resets its media sender for every accepted display
         // configuration, even when the resulting canvas dimensions are
         // unchanged. The following layout response is the synchronization
         // point where the receive generation and media offer are replayed.
-        mediaRestartPending = true
-        mediaRestartPrepared = false
+        pendingRequests.append(request)
         do {
             try await sendMessage(configuration)
         } catch {
-            combinedDisplaySelectionPending = false
-            mediaRestartPending = false
-            mediaRestartPrepared = false
+            pendingRequests.removeAll { $0.id == request.id }
             throw error
         }
     }
 
     func receive(_ layout: AppleDisplayLayout) async throws {
         let receivedCanvas = layout.canvas(tileCount: canvas.tileCount)
-        if combinedDisplaySelectionPending, layout.displays.count > 1 {
+        let request = pendingRequests.first
+        if request?.combinedDisplays == true, layout.displays.count > 1 {
             try await sendMessage(AppleRFBMessages.selectCombinedDisplays)
-            combinedDisplaySelectionPending = false
+            if let index = pendingRequests.firstIndex(where: { $0.id == request?.id }) {
+                pendingRequests[index].combinedDisplays = false
+            }
         }
         try await sendMessage(AppleRFBMessages.framebufferUpdateRequest())
         guard hasReceivedInitialLayout else {
@@ -91,12 +96,13 @@ actor AppleDynamicResolutionController {
             mediaRestartPending = true
             mediaRestartPrepared = false
         }
-        guard mediaRestartPending else { return }
+        guard mediaRestartPending || request != nil else { return }
         if !mediaRestartPrepared {
             await prepareMediaRestart()
             mediaRestartPrepared = true
         }
         try await sendMessage(mediaConfiguration)
+        if let request { pendingRequests.removeAll { $0.id == request.id } }
         mediaRestartPending = false
         mediaRestartPrepared = false
     }

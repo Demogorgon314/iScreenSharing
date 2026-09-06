@@ -10,6 +10,80 @@ import XCTest
 final class AppleDynamicResolutionControllerTests: XCTestCase {
     private let mediaConfiguration = Data([0x1c, 0, 0, 0])
 
+    func testOverlappingRequestsEachRestartForUnchangedLayout() async throws {
+        let recorder = MessageRecorder()
+        let restarts = MediaRestartRecorder()
+        let controller = makeController(recorder: recorder, restarts: restarts)
+        let layout = makeLayout(width: 1920, height: 1080)
+        try await controller.receive(layout)
+        try await controller.request(width: 1280, height: 720)
+        try await controller.request(width: 1280, height: 720)
+        try await controller.receive(layout)
+        try await controller.receive(layout)
+        let count = await restarts.count
+        XCTAssertEqual(count, 2)
+        try await controller.receive(layout)
+        let finalCount = await restarts.count
+        XCTAssertEqual(finalCount, 2)
+    }
+
+    func testFailedSecondRequestDoesNotDiscardFirstPendingRestart() async throws {
+        let sender = FailingSecondConfigurationSender()
+        let restarts = MediaRestartRecorder()
+        let controller = AppleDynamicResolutionController(
+            initialCanvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            mediaConfiguration: mediaConfiguration,
+            sendMessage: { try await sender.send($0) }, applyCanvas: { _ in },
+            prepareMediaRestart: { await restarts.record() }
+        )
+        let layout = makeLayout(width: 1920, height: 1080)
+        try await controller.receive(layout)
+        try await controller.request(width: 1280, height: 720)
+        do {
+            try await controller.request(width: 1440, height: 900)
+            XCTFail("Expected send failure")
+        } catch {}
+        try await controller.receive(layout)
+        try await controller.receive(layout)
+        let count = await restarts.count
+        XCTAssertEqual(count, 1)
+    }
+
+    func testMediaAnswerDoesNotDiscardAnUnansweredDisplayRequest() async throws {
+        let recorder = MessageRecorder()
+        let restarts = MediaRestartRecorder()
+        let controller = makeController(recorder: recorder, restarts: restarts)
+        try await controller.receive(makeLayout(width: 1920, height: 1080))
+        try await controller.request(width: 1440, height: 900)
+        await controller.receiveMediaCanvas(AppleCanvas(width: 2880, height: 1800, tileCount: 4))
+        try await controller.receive(makeLayout(width: 2880, height: 1800))
+        let count = await restarts.count
+        XCTAssertEqual(count, 1)
+    }
+
+    func testMediaRetryDoesNotRepeatSuccessfulCombinedDisplaySelection() async throws {
+        let sender = FailingMediaSender()
+        let controller = AppleDynamicResolutionController(
+            initialCanvas: AppleCanvas(width: 1920, height: 1080, tileCount: 4),
+            mediaConfiguration: mediaConfiguration, sendMessage: { try await sender.send($0) },
+            applyCanvas: { _ in }, prepareMediaRestart: {}
+        )
+        try await controller.receive(makeLayout(width: 1920, height: 1080))
+        try await controller.request(displaySizes: [.fixed1080p, .fixed1080p])
+        let layout = makeLayout(width: 3840, height: 1080, displays: [
+            AppleDisplayRect(displayID: 1, x: 0, y: 0, width: 1920, height: 1080),
+            AppleDisplayRect(displayID: 2, x: 1920, y: 0, width: 1920, height: 1080),
+        ])
+        do {
+            try await controller.receive(layout)
+            XCTFail("Expected first media send to fail")
+        } catch {}
+        try await controller.receive(layout)
+        let selections = await sender.combinedSelections
+        XCTAssertEqual(selections, 1)
+    }
+
+
     func testRequestsOnlyNativeDisplayConfiguration() async throws {
         let recorder = MessageRecorder()
         let controller = makeController(recorder: recorder)
@@ -252,8 +326,10 @@ private actor MediaRestartRecorder {
 
 private actor FailingMediaSender {
     private(set) var mediaAttempts = 0
+    private(set) var combinedSelections = 0
 
     func send(_ message: Data) throws {
+        if message == AppleRFBMessages.selectCombinedDisplays { combinedSelections += 1 }
         guard message.first == 0x1c else { return }
         mediaAttempts += 1
         if mediaAttempts == 1 { throw Failure.expected }
@@ -261,5 +337,14 @@ private actor FailingMediaSender {
 
     enum Failure: Error {
         case expected
+    }
+}
+
+private actor FailingSecondConfigurationSender {
+    private var requests = 0
+    func send(_ message: Data) throws {
+        guard message.first == 0x1d else { return }
+        requests += 1
+        if requests == 2 { throw FailingMediaSender.Failure.expected }
     }
 }

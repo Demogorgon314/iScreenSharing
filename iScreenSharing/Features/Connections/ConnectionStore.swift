@@ -209,6 +209,9 @@ final class ConnectionStore: ObservableObject {
         guard !name.isEmpty else { throw ConnectionStoreError.emptyName }
 
         connections[index].name = name
+        if connections[index].endpoint != endpoint {
+            connections[index].deviceInfo = nil
+        }
         connections[index].endpoint = endpoint
         connections[index].preferredUsername = preferredUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         connections[index].sharingType = sharingType

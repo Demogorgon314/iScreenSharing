@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<!-- Enable HUD support; each video layer controls visibility via its saved toggle. -->
-	<key>MetalHUDEnabled</key>
+	<key>MetalHudEnabled</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>

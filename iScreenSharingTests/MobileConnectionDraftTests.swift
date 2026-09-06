@@ -4,6 +4,25 @@ import struct ScreenSharingProtocol.AppleRemoteDeviceInfo
 
 @MainActor
 final class MobileConnectionDraftTests: XCTestCase {
+    func testEditingEndpointClearsHardwareMetadataButRenamingPreservesIt() throws {
+        let suite = "MobileConnectionDraftTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ConnectionStore(defaults: defaults)
+        let endpoint = try ConnectionEndpoint("first.local")
+        let info = AppleRemoteDeviceInfo(modelIdentifier: "Mac16,10")
+        let original = try MobileConnectionDraft(connection: SavedConnection(endpoint: endpoint, deviceInfo: info)).save(in: store)
+        var draft = MobileConnectionDraft(connection: original)
+        draft.name = "Renamed"
+        let renamed = try draft.save(in: store, editing: original)
+        XCTAssertEqual(renamed.deviceInfo, info)
+        draft.address = "second.local"
+        let moved = try draft.save(in: store, editing: renamed)
+        XCTAssertEqual(moved.id, original.id)
+        XCTAssertNil(moved.deviceInfo)
+        XCTAssertNil(ConnectionStore(defaults: defaults).connection(for: moved.endpoint)?.deviceInfo)
+    }
+
     func testSavingDiscoveredMacRetainsItsModelForOfflineIcon() throws {
         let suite = "MobileConnectionDraftTests.\(UUID())"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

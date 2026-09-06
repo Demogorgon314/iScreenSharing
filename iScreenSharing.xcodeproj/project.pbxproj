@@ -58,6 +58,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Mobile/AppleVideoCanvasLayout.swift,
+				Mobile/MobileAudioSessionLifecycle.swift,
 				Mobile/Assets.xcassets,
 				Mobile/Info.plist,
 				Mobile/iScreenSharingMobileApp.swift,

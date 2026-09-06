@@ -31,8 +31,11 @@ final class MobileSessionController: ObservableObject {
     private var isActive = true
     private var streamStateObserver: AnyCancellable?
     private var connectionTask: Task<Void, Never>?
+    private var connectionAttempt: UUID?
     private var resolutionTask: Task<Void, Never>?
+    private var pendingResolutionPreset: MobileResolutionPreset?
     private var viewportSize: CGSize?
+    private let audioSession = MobileAudioSessionLifecycle()
 
     init(
         endpoint: ConnectionEndpoint,
@@ -64,25 +67,32 @@ final class MobileSessionController: ObservableObject {
         return credentials
     }
 
-    func connect(username: String, password: String, rememberPassword: Bool = false) {
-        guard state != .connecting else { return }
+    @discardableResult
+    func connect(username: String, password: String, rememberPassword: Bool = false) -> Task<Void, Never>? {
+        guard state != .connecting, state != .connected else { return nil }
+        let attempt = UUID()
+        connectionAttempt = attempt
         state = .connecting
         connectionTask = Task { [weak self] in
             await self?.establishSession(
                 username: username,
                 password: password,
-                rememberPassword: rememberPassword
+                rememberPassword: rememberPassword,
+                attempt: attempt
             )
         }
+        return connectionTask
     }
 
     private func establishSession(
         username: String,
         password: String,
-        rememberPassword: Bool
+        rememberPassword: Bool,
+        attempt: UUID
     ) async {
         var connectingSession: RFBAuthenticatedSession?
         do {
+            try checkAttempt(attempt)
             let credentials = try ScreenSharingCredentials(username: username, password: password)
             let session = try await authenticator.connect(
                 to: endpoint,
@@ -90,6 +100,7 @@ final class MobileSessionController: ObservableObject {
                 sharingType: .highPerformance
             )
             connectingSession = session
+            try checkAttempt(attempt)
             let requestedPreset = resolutionPreferences.preset(for: endpoint)
             let requestedSize = requestedPreset.size(for: viewportSize ?? .zero)
                 ?? AppleDynamicResolutionSize(width: 1440, height: 900)
@@ -97,7 +108,9 @@ final class MobileSessionController: ObservableObject {
                 for: session,
                 displaySizes: [requestedSize]
             )
+            try checkAttempt(attempt)
             let negotiation = try await mediaNegotiator.negotiate(session, displayCount: 1)
+            try checkAttempt(attempt)
             let input = AppleInputController(session: session, canvas: negotiation.canvas)
             session.install(inputController: input)
 
@@ -168,6 +181,7 @@ final class MobileSessionController: ObservableObject {
             session.install(controlMessageService: controlMessages, clipboardService: clipboard)
             session.install(controlState: AppleSessionControlState(session: session))
             try await session.sendEncrypted(AppleRFBMessages.controlMode(observing: false))
+            try checkAttempt(attempt)
             configureAudio(for: session, negotiation: negotiation)
             clipboard.start()
             clipboard.setActive(isActive)
@@ -178,14 +192,20 @@ final class MobileSessionController: ObservableObject {
             connectionTask = nil
             controlMessages.start()
             persist(credentials, remember: rememberPassword)
+            if requestedPreset == .fitScreen,
+               let size = requestedPreset.size(for: viewportSize ?? .zero), size != requestedSize {
+                requestResolution(.fitScreen, debounce: true)
+            }
         } catch is CancellationError {
             connectingSession?.close()
+            guard connectionAttempt == attempt else { return }
             if session === connectingSession { session = nil }
             deactivateAudioSession()
             state = .idle
             connectionTask = nil
         } catch {
             connectingSession?.close()
+            guard connectionAttempt == attempt else { return }
             if session === connectingSession { session = nil }
             deactivateAudioSession()
             state = .failed(error.localizedDescription)
@@ -194,10 +214,12 @@ final class MobileSessionController: ObservableObject {
     }
 
     func disconnect() {
+        connectionAttempt = nil
         connectionTask?.cancel()
         connectionTask = nil
         resolutionTask?.cancel()
         resolutionTask = nil
+        pendingResolutionPreset = nil
         streamStateObserver = nil
         (session?.clipboardService as? MobileClipboardService)?.setActive(false)
         session?.close()
@@ -208,6 +230,11 @@ final class MobileSessionController: ObservableObject {
         deactivateAudioSession()
     }
 
+    private func checkAttempt(_ attempt: UUID) throws {
+        try Task.checkCancellation()
+        guard connectionAttempt == attempt else { throw CancellationError() }
+    }
+
     func setActive(_ active: Bool) {
         isActive = active
         (session?.clipboardService as? MobileClipboardService)?.setActive(active)
@@ -215,16 +242,28 @@ final class MobileSessionController: ObservableObject {
 
     func updateViewport(_ size: CGSize) {
         guard size.width > 0, size.height > 0, viewportSize != size else { return }
+        let oldSize = MobileResolutionPreset.fitScreen.size(for: viewportSize ?? .zero)
         viewportSize = size
+        if state == .connected, (pendingResolutionPreset ?? selectedResolutionPreset) == .fitScreen,
+           MobileResolutionPreset.fitScreen.size(for: size) != oldSize {
+            requestResolution(.fitScreen, debounce: true)
+        }
     }
 
     func requestResolution(_ preset: MobileResolutionPreset) {
+        requestResolution(preset, debounce: false)
+    }
+
+    private func requestResolution(_ preset: MobileResolutionPreset, debounce: Bool) {
         guard let session,
               let controller = session.dynamicResolutionController,
               let size = preset.size(for: viewportSize ?? .zero) else { return }
         resolutionTask?.cancel()
+        pendingResolutionPreset = preset
         resolutionTask = Task { [weak self, weak session] in
             do {
+                if debounce { try await Task.sleep(for: .milliseconds(200)) }
+                try Task.checkCancellation()
                 try await controller.request(displaySizes: [size])
                 try Task.checkCancellation()
                 guard let self, let session, self.session === session else { return }
@@ -232,6 +271,7 @@ final class MobileSessionController: ObservableObject {
                 resolutionPreferences.save(preset, for: endpoint)
                 resolutionErrorMessage = nil
                 resolutionTask = nil
+                pendingResolutionPreset = nil
             } catch is CancellationError {
                 return
             } catch {
@@ -239,6 +279,7 @@ final class MobileSessionController: ObservableObject {
                 guard let self, let session, self.session === session else { return }
                 resolutionErrorMessage = error.localizedDescription
                 resolutionTask = nil
+                pendingResolutionPreset = nil
             }
         }
     }
@@ -256,8 +297,12 @@ final class MobileSessionController: ObservableObject {
 
     private func connectionDidFail(_ message: String, session failedSession: RFBAuthenticatedSession?) {
         guard let failedSession, session === failedSession else { return }
+        connectionAttempt = nil
+        connectionTask?.cancel()
+        connectionTask = nil
         resolutionTask?.cancel()
         resolutionTask = nil
+        pendingResolutionPreset = nil
         streamStateObserver = nil
         failedSession.close()
         session = nil
@@ -273,13 +318,13 @@ final class MobileSessionController: ObservableObject {
     ) {
         guard let receiver = session.mediaReceiver else { return }
         do {
-            let audioSession = AVAudioSession.sharedInstance()
-            try audioSession.setCategory(.playback, mode: .default)
-            try audioSession.setActive(true)
             let audio = try AppleAudioStream(receiver: receiver, negotiation: negotiation)
             session.install(audioStream: audio)
+            try audioSession.start(availability: audio.$isAvailable.eraseToAnyPublisher())
             audio.start()
         } catch {
+            session.audioStream?.close()
+            audioSession.stop()
             // Video and control remain usable when audio is unavailable.
         }
     }
@@ -297,9 +342,6 @@ final class MobileSessionController: ObservableObject {
     }
 
     private func deactivateAudioSession() {
-        try? AVAudioSession.sharedInstance().setActive(
-            false,
-            options: .notifyOthersOnDeactivation
-        )
+        audioSession.stop()
     }
 }

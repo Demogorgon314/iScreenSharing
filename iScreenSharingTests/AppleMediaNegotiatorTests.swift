@@ -9,6 +9,18 @@ import XCTest
 @testable import iScreenSharing
 
 final class AppleMediaNegotiatorTests: XCTestCase {
+    func testConfigurationSendTimingExcludesEarlierStartupWrites() async throws {
+        let timings = StartupTimingRecorder()
+        let transport = NegotiationTimingTransport(
+            chunks: try encryptedChunks([Self.canvasAnswer]),
+            didSend: { timings.advance(by: 0.2) }
+        )
+        let session = try makeSession(transport: transport, trace: timings.makeTrace())
+        defer { session.close() }
+        _ = try await AppleMediaNegotiator().negotiate(session)
+        XCTAssertEqual(try XCTUnwrap(timings.entry(.mediaConfigurationSent)?.durationMilliseconds), 200, accuracy: 0.001)
+    }
+
     func testStartupTimingSeparatesMediaReadsParsingAndFinalizationWithoutChangingWireOrder() async throws {
         let timings = StartupTimingRecorder()
         let trace = timings.makeTrace()
@@ -226,16 +238,21 @@ private final class NegotiationTimingTransport: RFBTransport, @unchecked Sendabl
     private var chunks: [Data]
     private var records = [Data]()
     private let didRead: @Sendable () -> Void
+    private let didSend: @Sendable () -> Void
 
-    init(chunks: [Data], didRead: @escaping @Sendable () -> Void = { }) {
+    init(chunks: [Data], didRead: @escaping @Sendable () -> Void = { }, didSend: @escaping @Sendable () -> Void = { }) {
         self.chunks = chunks
         self.didRead = didRead
+        self.didSend = didSend
     }
 
     var sentRecords: [Data] { lock.withLock { records } }
     func start(timeout: Duration) async throws { }
     func cancel() { }
-    func send(_ data: Data) async throws { lock.withLock { records.append(data) } }
+    func send(_ data: Data) async throws {
+        lock.withLock { records.append(data) }
+        didSend()
+    }
     func receiveExactly(_ length: Int) async throws -> Data {
         let data = try lock.withLock {
             guard let data = chunks.first, data.count == length else {
