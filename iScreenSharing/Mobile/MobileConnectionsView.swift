@@ -185,6 +185,8 @@ private struct MobileConnectionPlaceholderView: View {
                     showsMetalPerformanceHUD: showsMetalPerformanceHUD,
                     supportsPreciseScrolling: session.serverInfo.supportsServerCommand(23)
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .topLeading) {
                     if showsVideoPerformanceOverlay {
@@ -197,6 +199,7 @@ private struct MobileConnectionPlaceholderView: View {
                 loginForm
             }
         }
+        .ignoresSafeArea(.keyboard, edges: controller.state == .connected ? .bottom : [])
         .navigationTitle(endpoint.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

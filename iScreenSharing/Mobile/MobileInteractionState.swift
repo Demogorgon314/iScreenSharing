@@ -75,6 +75,18 @@ struct MobileKeyboardState {
     }
 
     mutating func reset() { modifiers.removeAll() }
+
+    mutating func consume(text: String) -> [Event] {
+        text.replacingOccurrences(of: "\r\n", with: "\n").unicodeScalars.flatMap { scalar in
+            let symbol: UInt32
+            switch scalar.value {
+            case 0x09: symbol = 0xff09
+            case 0x0a, 0x0d: symbol = 0xff0d
+            default: symbol = scalar.value <= 0xff ? scalar.value : 0x0100_0000 | scalar.value
+            }
+            return consume(symbol: symbol)
+        }
+    }
 }
 
 struct MobileScrollState {

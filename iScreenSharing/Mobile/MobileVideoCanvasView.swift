@@ -29,6 +29,14 @@ struct MobileVideoCanvasView: UIViewRepresentable {
     static func dismantleUIView(_ view: MobileVideoCanvasUIView, coordinator: ()) {
         view.close()
     }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: MobileVideoCanvasUIView, context: Context) -> CGSize? {
+        // The canvas fills its host; the text input's keyboard-guide constraints
+        // must not become the representable's intrinsic/fitting size.
+        guard let width = proposal.width, let height = proposal.height,
+              width.isFinite, height.isFinite else { return nil }
+        return CGSize(width: width, height: height)
+    }
 }
 
 @MainActor
@@ -52,7 +60,7 @@ private final class MobileVideoDisplayLinkTarget: NSObject, CAMetalDisplayLinkDe
 }
 
 @MainActor
-final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDelegate {
+final class MobileVideoCanvasUIView: UIView, UIGestureRecognizerDelegate {
     private struct ScheduledDragPoint {
         let point: MobileRemotePointerState.Point
         let sendAt: TimeInterval
@@ -76,7 +84,16 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     )
     private var pointerState = MobileRemotePointerState()
     private var viewport = MobileCanvasViewport()
+    private let textInput = MobileRemoteTextInputView()
+    private var contentBounds = CGRect.zero
+    private var keyboardScreenFrame: CGRect?
+    private var requestedKeyboardVisible = false
+    private var keyboardUpdateScheduled = false
+    private var isClosed = false
+    private var isComposingText = false
     private let fitCanvasButton = UIButton(type: .system)
+    private var fitButtonTrailingConstraint: NSLayoutConstraint?
+    private var fitButtonBottomConstraint: NSLayoutConstraint?
     private var dragPreviousLocation: CGPoint?
     private var dragInputTask: Task<Void, Never>?
     private var scheduledDragPoints = [ScheduledDragPoint]()
@@ -96,12 +113,9 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     var supportsPreciseScrolling = false
     var dismissKeyboard: (() -> Void)?
 
-    override var inputAccessoryView: UIView? { shortcutBar }
-
     override var canBecomeFirstResponder: Bool { true }
     // Three-finger movement belongs to the viewport, not local text undo/redo.
     override var editingInteractionConfiguration: UIEditingInteractionConfiguration { .none }
-    var hasText: Bool { true }
 
     init(stream: AppleVideoStream, input: AppleInputController?, cursors: AppleCursorStore?) {
         self.stream = stream
@@ -128,6 +142,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         observeCursor()
         configureInteractionStatus()
         configureViewportControls()
+        configureTextInput()
         NotificationCenter.default.addObserver(
             self, selector: #selector(applicationWillResignActive),
             name: UIApplication.willResignActiveNotification, object: nil
@@ -135,6 +150,12 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         NotificationCenter.default.addObserver(
             self, selector: #selector(applicationDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil
+        )
+        for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameDidChange(_:)), name: name, object: nil)
+        }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(keyboardWillHide), name: UIResponder.keyboardWillHideNotification, object: nil
         )
     }
 
@@ -145,13 +166,25 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        if let interactionBoundsSize, interactionBoundsSize != bounds.size {
-            cancelInteractions()
+        let available = availableCanvasBounds
+        let geometryChanged = contentBounds != available || interactionBoundsSize != bounds.size
+        if interactionBoundsSize != nil,
+           interactionBoundsSize != bounds.size || (geometryChanged && dragInputTask != nil) {
+            cancelInteractions(discardQueuedInput: false)
         }
         interactionBoundsSize = bounds.size
-        viewport.constrain(base: fittedCanvasFrame, bounds: bounds)
+        contentBounds = available
+        let controlBounds = canvasBounds.intersection(safeAreaLayoutGuide.layoutFrame)
+        if !controlBounds.isNull, !controlBounds.isEmpty {
+            fitButtonTrailingConstraint?.constant = controlBounds.maxX - bounds.minX - 12
+            fitButtonBottomConstraint?.constant = controlBounds.maxY - bounds.minY - 12
+        }
+        viewport.constrain(base: fittedCanvasFrame, bounds: canvasBounds)
+        if geometryChanged {
+            followMovedPointer(pointerState.currentPoint(canvas: stream.canvas))
+        }
         guard let metalLayer else { return }
-        metalLayer.frame = bounds
+        metalLayer.frame = canvasBounds
         metalLayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
         updateLayout()
         updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
@@ -160,8 +193,12 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { cancelInteractions() }
+        if window == nil {
+            textInput.discardPendingText()
+            cancelInteractions()
+        }
         configureDisplayLink()
+        if window != nil { setKeyboardVisible(requestedKeyboardVisible) }
     }
 
     func update(
@@ -169,7 +206,10 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         input: AppleInputController?,
         cursors: AppleCursorStore?
     ) {
-        if self.input !== input { cancelInteractions() }
+        if self.input !== input {
+            textInput.discardPendingText()
+            cancelInteractions()
+        }
         self.input = input
         if self.cursors !== cursors {
             if let cursorObserver { self.cursors?.removeObserver(cursorObserver) }
@@ -179,7 +219,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         if self.stream !== stream {
             cancelInteractions()
             self.stream = stream
-            viewport.constrain(base: fittedCanvasFrame, bounds: bounds)
+            viewport.constrain(base: fittedCanvasFrame, bounds: canvasBounds)
             displayScheduler.reset()
             updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
             setNeedsLayout()
@@ -192,6 +232,9 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     }
 
     func close() {
+        isClosed = true
+        textInput.acceptsInput = false
+        textInput.resignFirstResponder()
         cancelInteractions()
         acceptsInput = false
         NotificationCenter.default.removeObserver(self)
@@ -206,25 +249,44 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     }
 
     func setKeyboardVisible(_ visible: Bool) {
-        if visible, !isFirstResponder {
-            cancelInteractions()
+        requestedKeyboardVisible = visible
+        guard !isClosed, !keyboardUpdateScheduled else { return }
+        keyboardUpdateScheduled = true
+        // updateUIView runs inside SwiftUI's layout transaction. Changing the
+        // first responder there synchronously reenters keyboard safe-area
+        // layout, leaving the host at its keyboard-reduced height after hide.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.keyboardUpdateScheduled = false
+            guard !self.isClosed else { return }
+            self.applyKeyboardVisibility(self.requestedKeyboardVisible)
+        }
+    }
+
+    private func applyKeyboardVisibility(_ visible: Bool) {
+        if visible, !textInput.isFirstResponder, window != nil {
+            cancelInteractions(discardQueuedInput: false)
+            textInput.acceptsInput = acceptsInput
+            textInput.becomeFirstResponder()
+            setNeedsLayout()
+        } else if !visible, textInput.isFirstResponder {
+            textInput.acceptsInput = false
+            keyboardScreenFrame = nil
+            cancelInteractions(discardQueuedInput: false)
+            textInput.resignFirstResponder()
             becomeFirstResponder()
-        } else if !visible, isFirstResponder {
-            cancelInteractions()
-            resignFirstResponder()
+            setNeedsLayout()
         }
     }
 
     func insertText(_ text: String) {
-        for scalar in text.unicodeScalars {
-            let symbol: UInt32
-            switch scalar.value {
-            case 0x09: symbol = 0xff09
-            case 0x0a, 0x0d: symbol = 0xff0d
-            default:
-                symbol = scalar.value <= 0xff ? scalar.value : 0x0100_0000 | scalar.value
+        guard acceptsInput else { return }
+        let events = keyboardState.consume(text: text)
+        updateKeyboardFeedback()
+        enqueueInput { input in
+            for event in events {
+                await input.key(isDown: event.isDown, symbol: event.symbol)
             }
-            sendKey(symbol: symbol)
         }
     }
 
@@ -233,6 +295,14 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard !textInput.isFirstResponder else {
+            super.pressesBegan(presses, with: event)
+            return
+        }
+        remotePressesBegan(presses, with: event)
+    }
+
+    private func remotePressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         guard acceptsInput else { return }
         var handled = false
         for press in presses {
@@ -252,6 +322,14 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     }
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard !textInput.isFirstResponder else {
+            super.pressesEnded(presses, with: event)
+            return
+        }
+        remotePressesEnded(presses, with: event)
+    }
+
+    private func remotePressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         var handled = false
         for press in presses {
             guard let key = press.key,
@@ -420,6 +498,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
 
     @objc private func didTap(_ recognizer: UITapGestureRecognizer) {
         guard acceptsInput else { return }
+        textInput.discardPendingText()
         let point = pointerState.currentPoint(canvas: stream.canvas)
         enqueueInput { [weak self] input in
             self?.lastSentPointerPoint = point
@@ -434,7 +513,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         let point = pointerState.move(
             by: viewport.unscaledTranslation(recognizer.translation(in: self)),
             canvas: stream.canvas,
-            bounds: bounds
+            bounds: canvasBounds
         )
         recognizer.setTranslation(.zero, in: self)
         followMovedPointer(point)
@@ -457,7 +536,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
             let point = pointerState.move(
                 by: viewport.unscaledTranslation(CGPoint(x: location.x - previous.x, y: location.y - previous.y)),
                 canvas: stream.canvas,
-                bounds: bounds
+                bounds: canvasBounds
             )
             followMovedPointer(point)
             scheduleDragPath(from: previousPoint, to: point)
@@ -468,7 +547,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
                 let finalPoint = pointerState.move(
                     by: viewport.unscaledTranslation(CGPoint(x: location.x - previous.x, y: location.y - previous.y)),
                     canvas: stream.canvas,
-                    bounds: bounds
+                    bounds: canvasBounds
                 )
                 followMovedPointer(finalPoint)
                 scheduleDragPath(from: previousPoint, to: finalPoint)
@@ -496,7 +575,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         case .zooming:
             viewport.zoom(
                 by: movement.scale, around: movement.anchor, translation: movement.translation,
-                base: fittedCanvasFrame, bounds: bounds
+                base: fittedCanvasFrame, bounds: canvasBounds
             )
             refreshViewport()
         case .scrolling:
@@ -526,6 +605,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
 
     @objc private func didRightClick(_ recognizer: UITapGestureRecognizer) {
         guard acceptsInput else { return }
+        textInput.discardPendingText()
         if dragInputTask != nil { cancelInteractions() }
         let point = pointerState.currentPoint(canvas: stream.canvas)
         enqueueInput { [weak self] input in
@@ -544,9 +624,9 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         guard acceptsInput, dragInputTask == nil else { return }
         let location = recognizer.location(in: self)
         guard let point = pointerState.setAbsolute(
-            localPoint: viewport.unproject(location, base: fittedCanvasFrame, bounds: bounds),
+            localPoint: viewport.unproject(location, base: fittedCanvasFrame, bounds: canvasBounds),
             canvas: stream.canvas,
-            bounds: bounds
+            bounds: canvasBounds
         ) else { return }
         updateCursorPosition(point)
         sendPointer(buttons: 0, point: point)
@@ -577,7 +657,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
                   remoteX: point.x,
                   remoteY: point.y,
                   canvas: stream.canvas,
-                  bounds: bounds,
+                  bounds: canvasBounds,
                   viewport: viewport
               ) else { return }
         CATransaction.begin()
@@ -586,7 +666,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
             x: localPoint.x - cursorHotspot.x + cursorLayer.bounds.width / 2,
             y: localPoint.y - cursorHotspot.y + cursorLayer.bounds.height / 2
         )
-        cursorLayer.isHidden = false
+        cursorLayer.isHidden = !canvasBounds.contains(localPoint)
         CATransaction.commit()
     }
 
@@ -625,6 +705,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     }
 
     private func startDragInput(at point: MobileRemotePointerState.Point) {
+        textInput.discardPendingText()
         cancelInteractions()
         let generation = dragGeneration
         interactionStatus.text = "  Left button held  "
@@ -741,14 +822,16 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
 
     @objc private func applicationWillResignActive() {
         acceptsInput = false
+        textInput.acceptsInput = false
         cancelInteractions()
     }
 
     @objc private func applicationDidBecomeActive() {
         acceptsInput = true
+        textInput.acceptsInput = true
     }
 
-    private func cancelInteractions() {
+    private func cancelInteractions(discardQueuedInput: Bool = true) {
         let releasesPointer = dragInputTask != nil
         dragGeneration &+= 1
         dragInputTask?.cancel()
@@ -764,7 +847,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         physicalKeys.removeAll()
         let point = lastSentPointerPoint ?? pointerState.currentPoint(canvas: stream.canvas)
         let input = input
-        inputQueue.cancelPending {
+        let release: @MainActor @Sendable () async -> Void = {
             guard let input else { return }
             if releasesPointer {
                 await input.pointer(buttons: 0, x: point.x, y: point.y, clickCount: 1)
@@ -772,6 +855,13 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
             for (code, symbol) in keys {
                 await input.key(isDown: false, symbol: symbol, keyCode: code)
             }
+        }
+        if discardQueuedInput {
+            inputQueue.cancelPending(releasing: release)
+        } else {
+            // Keyboard/rotation layout changes stop a drag, but must not drop
+            // already-confirmed text waiting for the ordered input writer.
+            inputQueue.enqueue(release)
         }
     }
 
@@ -917,6 +1007,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
 
     private func sendKey(symbol: UInt32, explicitModifiers: Set<MobileKeyboardModifier>? = nil) {
         guard acceptsInput else { return }
+        textInput.discardPendingText()
         let events = keyboardState.consume(symbol: symbol, explicitModifiers: explicitModifiers)
         updateKeyboardFeedback()
         enqueueInput { input in
@@ -968,21 +1059,21 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         guard let metalLayer else { return }
         let canvas = stream.canvas
         metalLayer.update(
-            layouts: AppleVideoCanvasLayout.tiles(canvas: canvas, bounds: bounds, viewport: viewport),
-            fullCanvasLayout: AppleVideoCanvasLayout.fullCanvas(canvas: canvas, bounds: bounds, viewport: viewport),
+            layouts: AppleVideoCanvasLayout.tiles(canvas: canvas, bounds: canvasBounds, viewport: viewport),
+            fullCanvasLayout: AppleVideoCanvasLayout.fullCanvas(canvas: canvas, bounds: canvasBounds, viewport: viewport),
             canvasSize: CGSize(width: canvas.width, height: canvas.height),
-            bounds: bounds
+            bounds: canvasBounds
         )
     }
 
     private var fittedCanvasFrame: CGRect {
-        AppleVideoCanvasLayout.fullCanvas(canvas: stream.canvas, bounds: bounds).container
+        AppleVideoCanvasLayout.fullCanvas(canvas: stream.canvas, bounds: canvasBounds).container
     }
 
     private func followMovedPointer(_ point: MobileRemotePointerState.Point) {
         if let basePoint = AppleVideoCanvasLayout.localPoint(
-            remoteX: point.x, remoteY: point.y, canvas: stream.canvas, bounds: bounds
-        ), viewport.reveal(basePoint: basePoint, base: fittedCanvasFrame, bounds: bounds) {
+            remoteX: point.x, remoteY: point.y, canvas: stream.canvas, bounds: canvasBounds
+        ), viewport.reveal(basePoint: basePoint, base: fittedCanvasFrame, bounds: canvasBounds) {
             updateLayout()
             displayScheduler.markNeedsPresentation()
         }
@@ -1008,7 +1099,7 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         guard acceptsInput else { return }
         if recognizer.state == .began { cancelInteractions() }
         guard [.began, .changed, .ended].contains(recognizer.state) else { return }
-        viewport.pan(by: recognizer.translation(in: self), base: fittedCanvasFrame, bounds: bounds)
+        viewport.pan(by: recognizer.translation(in: self), base: fittedCanvasFrame, bounds: canvasBounds)
         recognizer.setTranslation(.zero, in: self)
         refreshViewport()
     }
@@ -1024,9 +1115,13 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
         fitCanvasButton.accessibilityHint = "Reset zoom. Use three fingers to move the zoomed screen."
         fitCanvasButton.addTarget(self, action: #selector(fitCanvas), for: .touchUpInside)
         addSubview(fitCanvasButton)
+        let trailing = fitCanvasButton.trailingAnchor.constraint(equalTo: leadingAnchor, constant: -12)
+        let bottom = fitCanvasButton.bottomAnchor.constraint(equalTo: topAnchor, constant: -12)
+        fitButtonTrailingConstraint = trailing
+        fitButtonBottomConstraint = bottom
         NSLayoutConstraint.activate([
-            fitCanvasButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            fitCanvasButton.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            trailing,
+            bottom,
             fitCanvasButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 100),
             fitCanvasButton.heightAnchor.constraint(equalToConstant: 44),
         ])
@@ -1035,9 +1130,67 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput, UIGestureRecognizerDele
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         var touchedView = touch.view
         while let view = touchedView, view !== self {
-            if view is UIControl { return false }
+            if view is UIControl || view is UITextView { return false }
             touchedView = view.superview
         }
         return true
+    }
+
+    private var canvasBounds: CGRect { contentBounds.isEmpty ? bounds : contentBounds }
+
+    private var availableCanvasBounds: CGRect {
+        guard textInput.isFirstResponder, let keyboardScreenFrame, let window else { return bounds }
+        var occlusion = convert(keyboardScreenFrame, from: window.screen.coordinateSpace)
+        if isComposingText {
+            occlusion.origin.y -= 38
+            occlusion.size.height += 38
+        }
+        return MobileKeyboardViewport.availableBounds(in: bounds, avoiding: occlusion)
+    }
+
+    @objc private func keyboardFrameDidChange(_ notification: Notification) {
+        guard textInput.isFirstResponder,
+              let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        keyboardScreenFrame = frame
+        setNeedsLayout()
+    }
+
+    @objc private func keyboardWillHide() {
+        keyboardScreenFrame = nil
+        setNeedsLayout()
+    }
+
+    private func configureTextInput() {
+        keyboardLayoutGuide.followsUndockedKeyboard = true
+        textInput.translatesAutoresizingMaskIntoConstraints = false
+        textInput.inputAccessoryView = shortcutBar
+        textInput.onCommit = { [weak self] in self?.insertText($0) }
+        textInput.onDelete = { [weak self] in self?.deleteBackward() }
+        textInput.onCompositionChange = { [weak self] composing in
+            guard let self, self.isComposingText != composing else { return }
+            self.isComposingText = composing
+            self.setNeedsLayout()
+        }
+        textInput.onDidResign = { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.textInput.isFirstResponder else { return }
+                self.keyboardScreenFrame = nil
+                self.dismissKeyboard?()
+                self.setNeedsLayout()
+            }
+        }
+        textInput.onRemotePressesBegan = { [weak self] in self?.remotePressesBegan($0, with: $1) }
+        textInput.onRemotePressesEnded = { [weak self] in self?.remotePressesEnded($0, with: $1) }
+        textInput.onRemotePressesCancelled = { [weak self] in self?.pressesCancelled($0, with: $1) }
+        addSubview(textInput)
+        let trailing = textInput.trailingAnchor.constraint(equalTo: keyboardLayoutGuide.trailingAnchor, constant: -8)
+        trailing.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            textInput.leadingAnchor.constraint(equalTo: keyboardLayoutGuide.leadingAnchor, constant: 8),
+            trailing,
+            textInput.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
+            textInput.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor, constant: -6),
+            textInput.heightAnchor.constraint(equalToConstant: 32),
+        ])
     }
 }
