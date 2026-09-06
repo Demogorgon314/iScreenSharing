@@ -235,11 +235,6 @@ private struct MobileConnectionPlaceholderView: View {
                     } label: {
                         Label("Resolution", systemImage: "display")
                     }
-                    Button(role: .destructive) {
-                        controller.disconnect()
-                    } label: {
-                        Label("Disconnect", systemImage: "xmark.circle")
-                    }
                 }
             }
         }
