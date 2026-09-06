@@ -116,7 +116,10 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         framebuffer = try Self.makeFramebuffer(width: canvas.width, height: canvas.height)
         framebufferPool = try Self.makePixelBufferPool(width: canvas.width, height: canvas.height)
         initialCoverage = StandardRFBRegionCoverage(width: canvas.width, height: canvas.height)
-        super.init(canvas: canvas, displayIndex: 0, tileCount: 1)
+        super.init(
+            canvas: canvas, displayIndex: 0, tileCount: 1,
+            connectionTiming: session.connectionTiming
+        )
         Self.logger.info(
             "Configured Standard stream quality=\(quality.rawValue, privacy: .public) size=\(canvas.width)x\(canvas.height)"
         )
@@ -189,6 +192,7 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
     }
 
     override func start() {
+        connectionTiming?.record(.videoStarted, index: displayIndex)
         guard let session else { return }
         framebufferStateLock.withStandardStreamLock {
             publicationEpoch &+= 1
@@ -798,6 +802,10 @@ final class StandardRFBVideoStream: SessionVideoStream, @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         performance.recordDecodedFrame()
         frames.publish(pixelBuffer, at: AppleVideoFrameStore.fullCanvasIndex, decodedAt: now)
+        connectionTiming?.record(
+            .firstFramePublished, index: displayIndex,
+            since: .init(.videoStarted, index: displayIndex)
+        )
         firstFrame.succeed()
         publishState(.streaming)
     }

@@ -49,7 +49,10 @@ vendor extension.
   permissions, resource forks, and supported extended attributes, with a shared
   four-transfer FIFO.
   The feature is offered only when the host advertises both required commands
-- AAC-ELD remote audio with persistent mute state
+- AAC-ELD remote audio with per-session mute state. Decoder and audio-engine
+  preparation run on the audio queue without delaying session-window creation;
+  mute changes during preparation apply when playback becomes ready. Audio
+  preparation failure leaves video and input usable.
 - Bonjour discovery, Apple device metadata, native device icons, saved
   connections, groups, recent items, and Keychain credentials
 - An embedded userspace Tailscale node with browser login, peer discovery,
@@ -123,6 +126,16 @@ Completed access units then move to a playback/decode queue, while rate-control
 timers, asynchronous decoder output, and display presentation have separate
 scheduling boundaries. Decode and rendering work therefore do not run on the
 socket-drain queue.
+
+During initial high-performance startup, decoder preparation overlaps the
+existing 300 ms source-observation window, after its packet-count baseline is
+captured. The saved decoder mode is supplied before video delivery starts,
+so preparation uses the chosen backend before any session window is created.
+The pipeline admits no access units until source selection completes.
+Activation rechecks parameter sets; a mode or tile-count change discards an
+incompatible prepared decoder, and media restart or close releases it. Failed
+speculative preparation retries on the normal activation path. Source ranking,
+the observation window, and restart selection policies remain unchanged.
 
 Canvas input enters one MainActor submission sequence per session. AppKit
 adapters convert keyboard events to values; `AppleInputController` owns held-key
@@ -238,6 +251,53 @@ Do not put real credentials in source files or committed schemes.
 
 The following environment variables are intended for local development:
 
+- `ISHARESCREEN_CONNECTION_DIAGNOSTICS=1`: emit one `[CONNECTION-TIMING]`
+  event per startup milestone under the `ConnectionTiming` log category. Each
+  sign-in submission gets a random connection ID; logs contain no endpoint,
+  credentials, keys, or media contents. Collection starts at `signIn`, excluding
+  the preceding automatic Keychain lookup and user input. `elapsed_ms` is time
+  since that submission; `duration_ms` measures only the explicitly named
+  `since` anchor, so concurrent audio/video/window work is not conflated.
+  `audioReady` marks completed background audio preparation and can follow
+  `activationReady`, window creation, or the first displayed video frame.
+  `index` identifies a zero-based display for video/window events or a TCP
+  attempt (media retries start at 1). Resolution's `count` is the address count;
+  `selectionThreshold` reports the received packet count when its gate opens.
+  Handshake events separate banner receipt, client version send completion,
+  security count receipt, and security list receipt. Media response events use
+  a zero-based encrypted-record `index` shared across the initial layout wait
+  and answer loop. Each read separates header receipt, ciphertext body receipt,
+  decryption, delivery to the negotiator, canvas parsing, and answer
+  classification. Their `count` values are ciphertext bytes, decrypted message
+  bytes, and parsed canvas count respectively; no response contents are logged.
+  Read durations include async resumption and are not wire-arrival timestamps.
+  `mediaNegotiationFinished` precedes return to activation; its gap to
+  `mediaReady` includes return and MainActor scheduling. Detailed read events
+  stop after 64 responses and emit `mediaReadLimitReached` once; negotiation and
+  aggregate completion timing continue. Steady-state control reads do not
+  collect these details.
+  `parameterSetsReady` is the playback queue's first observation of complete
+  parameter sets. `decoderPreparationStarted`/`decoderPreparationReady` measure
+  speculative decoder creation inside the source-observation window;
+  `decoderPreparationFailed` marks an unsuccessful attempt and
+  `decoderPreparationReused` confirms reuse at activation. `decoderStarted` to
+  `decoderReady` measures the remaining setup after source selection, including
+  any required creation or format replacement. The first prepared decoder may
+  be discarded before activation, so preparation alone does not imply reuse.
+  `windowOrdered` marks the AppKit order/show call returning,
+  not physical visibility; `firstPresented` uses Metal's positive
+  `presentedTime`, not GPU completion or callback delivery time. Public decoder
+  mode can initially display a subset of tiles, so this measures the first
+  displayed video drawable rather than full-canvas coverage. The trace survives
+  media restarts without resetting startup milestones and ends on activation
+  failure, cancellation, or session close. Standard mode records the shared connection,
+  first framebuffer publication, and presentation stages; HP-only stages are
+  absent. Tailscale currently records aggregate route opening, without the
+  direct adapter's DNS/TCP breakdown. Compare repeated runs with the same
+  host, resolution, display count, decoder, diagnostics, and app build type;
+  keep fresh app launches and reconnects separate. Sort by `elapsed_ms` within
+  each ID when callbacks emit out of order. To collect these events:
+  `log stream --level info --predicate 'subsystem == "com.wangkai.iShareScreen" AND category == "ConnectionTiming"'`
 - `ISHARESCREEN_DISABLE_VCP=1`: force the public VideoToolbox fallback
 - `ISHARESCREEN_RCTL_MODE=estimated|fixed-lan|disabled`: use the native-style
   estimate (the default), force a diagnostic 60.001 Mbps report, or suppress

@@ -30,11 +30,23 @@ final class SessionRouteTests: XCTestCase {
     }
 
     func testAuthenticationReportsUnsupportedAppleRSAAndClosesRoute() async throws {
-        let transport = RecordingRouteTransport(receivePackets: [
-            Data("RFB 003.889\n".utf8),
-            Data([1]),
-            Data([30]),
-        ])
+        let timings = StartupTimingRecorder()
+        let trace = timings.makeTrace()
+        let transport = RecordingRouteTransport(
+            receivePackets: [Data("RFB 003.889\n".utf8), Data([2]), Data([30, 31])],
+            onReceive: { length in
+                switch length {
+                case 12: timings.setTime(0.440)
+                case 1: timings.setTime(0.445)
+                case 2: timings.setTime(0.446)
+                default: XCTFail("Unexpected handshake read length: \(length)")
+                }
+            },
+            onSend: { data in
+                XCTAssertEqual(data, Data("RFB 003.889\n".utf8))
+                timings.setTime(0.441)
+            }
+        )
         let route = ManagedSessionRoute(
             control: transport,
             remoteAddress: try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900),
@@ -43,15 +55,30 @@ final class SessionRouteTests: XCTestCase {
         let service = RFBAuthenticationService(routeOpener: FixedRouteOpener(route: route))
 
         do {
-            _ = try await service.connect(
-                to: ConnectionEndpoint(host: "shared-mac.local"),
-                credentials: ScreenSharingCredentials(username: "viewer", password: "secret")
-            )
+            _ = try await ConnectionStartupTrace.$current.withValue(trace) {
+                try await service.connect(
+                    to: ConnectionEndpoint(host: "shared-mac.local"),
+                    credentials: ScreenSharingCredentials(username: "viewer", password: "secret")
+                )
+            }
             XCTFail("Expected the missing Apple RSA security type to fail authentication")
         } catch let error as RFBAuthenticationError {
             XCTAssertEqual(error, .unsupportedAppleRSA)
             XCTAssertEqual(transport.cancelCount, 1)
         }
+        XCTAssertEqual(
+            try XCTUnwrap(timings.entry(.bannerReceived)?.durationMilliseconds), 440, accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(timings.entry(.clientVersionSent)?.durationMilliseconds), 1, accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(timings.entry(.securityCountReceived)?.durationMilliseconds), 4, accuracy: 0.001
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(timings.entry(.securityTypesReceived)?.durationMilliseconds), 1, accuracy: 0.001
+        )
+        XCTAssertNil(timings.entry(.authenticationReady))
     }
 
     func testAuthenticationRejectsServerNameAboveTransportLimit() {
@@ -282,15 +309,23 @@ final class SessionRouteTests: XCTestCase {
     }
 
     func testDirectAdapterUsesSuccessfulControlAddressForMedia() async throws {
+        let timings = StartupTimingRecorder()
+        let trace = timings.makeTrace()
         let firstAddress = try ResolvedRemoteAddress(numericHost: "127.0.0.1", port: 5900)
         let secondAddress = try ResolvedRemoteAddress(numericHost: "127.0.0.2", port: 5900)
-        let firstTransport = RecordingRouteTransport(startError: RouteTestError.connectionFailed)
-        let secondTransport = RecordingRouteTransport()
+        let firstTransport = RecordingRouteTransport(
+            startError: RouteTestError.connectionFailed,
+            onStart: { timings.setTime(3) }
+        )
+        let secondTransport = RecordingRouteTransport(onStart: { timings.setTime(3.125) })
         let transports = TransportSequence([firstTransport, secondTransport])
         let mediaAddress = AddressRecorder()
         let receiver = RecordingMediaReceiver()
         let adapter = DirectSessionRouteAdapter(
-            addressResolver: StubAddressResolver(addresses: [firstAddress, secondAddress]),
+            addressResolver: StubAddressResolver(
+                addresses: [firstAddress, secondAddress],
+                onResolve: { timings.setTime(1) }
+            ),
             makeTransport: { _ in transports.next() },
             makeMedia: { address, _ in
                 mediaAddress.record(address.numericHost)
@@ -298,16 +333,24 @@ final class SessionRouteTests: XCTestCase {
             }
         )
 
-        let route = try await adapter.open(
-            ConnectionEndpoint(host: "shared-mac.local"),
-            sharingType: .highPerformance
-        )
+        let route = try await ConnectionStartupTrace.$current.withValue(trace) {
+            try await adapter.open(
+                ConnectionEndpoint(host: "shared-mac.local"),
+                sharingType: .highPerformance
+            )
+        }
         _ = try await route.openHighPerformanceMedia(displayCount: 1)
 
         XCTAssertEqual(firstTransport.cancelCount, 1)
         XCTAssertEqual(secondTransport.startCount, 1)
         XCTAssertEqual(route.remoteAddress.numericHost, "127.0.0.2")
         XCTAssertEqual(mediaAddress.value, "127.0.0.2")
+        XCTAssertEqual(timings.entry(.resolutionReady)?.durationMilliseconds, 1_000)
+        XCTAssertEqual(timings.entry(.tcpFailed, index: 0)?.durationMilliseconds, 2_000)
+        XCTAssertEqual(timings.entry(.tcpReady, index: 1)?.durationMilliseconds, 125)
+        XCTAssertEqual(timings.entry(.tcpReady, index: 1)?.elapsedMilliseconds, 3_125)
+        XCTAssertFalse(timings.entries.map(\.logLine).joined().contains("shared-mac.local"))
+        XCTAssertFalse(timings.entries.map(\.logLine).joined().contains("127.0.0"))
     }
 
     func testDirectAdapterDoesNotFallbackAfterCancellation() async throws {
@@ -427,9 +470,11 @@ private enum RouteTestError: Error {
 
 private struct StubAddressResolver: RemoteAddressResolving {
     let addresses: [ResolvedRemoteAddress]
+    var onResolve: @Sendable () -> Void = { }
 
     func resolve(_ endpoint: ConnectionEndpoint) async throws -> [ResolvedRemoteAddress] {
-        addresses
+        onResolve()
+        return addresses
     }
 }
 
@@ -470,6 +515,9 @@ private final class RecordingRouteTransport: RFBTransport, @unchecked Sendable {
     private let lock = NSLock()
     private let startError: Error?
     private let onCancel: @Sendable () -> Void
+    private let onStart: @Sendable () -> Void
+    private let onReceive: @Sendable (Int) -> Void
+    private let onSend: @Sendable (Data) -> Void
     private var receivePackets: [Data]?
     private var starts = 0
     private var cancellations = 0
@@ -477,11 +525,17 @@ private final class RecordingRouteTransport: RFBTransport, @unchecked Sendable {
     init(
         startError: Error? = nil,
         receivePackets: [Data]? = nil,
+        onStart: @escaping @Sendable () -> Void = { },
+        onReceive: @escaping @Sendable (Int) -> Void = { _ in },
+        onSend: @escaping @Sendable (Data) -> Void = { _ in },
         onCancel: @escaping @Sendable () -> Void = { }
     ) {
         self.startError = startError
         self.receivePackets = receivePackets
         self.onCancel = onCancel
+        self.onStart = onStart
+        self.onReceive = onReceive
+        self.onSend = onSend
     }
 
     var startCount: Int { lock.withRouteTestLock { starts } }
@@ -492,13 +546,15 @@ private final class RecordingRouteTransport: RFBTransport, @unchecked Sendable {
 
     func start(timeout: Duration) async throws {
         lock.withRouteTestLock { starts += 1 }
+        onStart()
         if let startError { throw startError }
     }
 
-    func send(_ data: Data) async throws { }
+    func send(_ data: Data) async throws { onSend(data) }
 
     func receiveExactly(_ length: Int) async throws -> Data {
-        try lock.withRouteTestLock {
+        onReceive(length)
+        return try lock.withRouteTestLock {
             guard receivePackets != nil else { return Data(repeating: 0, count: length) }
             guard let packet = receivePackets?.first, packet.count == length else {
                 throw RouteTestError.invalidRead

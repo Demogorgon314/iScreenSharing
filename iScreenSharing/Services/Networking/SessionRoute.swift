@@ -93,12 +93,17 @@ struct DirectSessionRouteAdapter: SessionRouteAdapter {
         _ endpoint: ConnectionEndpoint,
         sharingType: ScreenSharingType
     ) async throws -> any OpenSessionRoute {
+        let timing = ConnectionStartupTrace.current
+        timing?.record(.resolutionStarted)
         let addresses = try await addressResolver.resolve(endpoint)
+        timing?.record(.resolutionReady, since: .init(.resolutionStarted), count: addresses.count)
         var lastError: Error?
-        for address in addresses {
+        for (index, address) in addresses.enumerated() {
+            timing?.record(.tcpStarted, index: index)
             let transport = makeTransport(address)
             do {
                 try await transport.start()
+                timing?.record(.tcpReady, index: index, since: .init(.tcpStarted, index: index))
                 return ManagedSessionRoute(
                     control: transport,
                     remoteAddress: address,
@@ -109,6 +114,7 @@ struct DirectSessionRouteAdapter: SessionRouteAdapter {
                 transport.cancel()
                 throw CancellationError()
             } catch {
+                timing?.record(.tcpFailed, index: index, since: .init(.tcpStarted, index: index))
                 transport.cancel()
                 lastError = error
             }

@@ -100,6 +100,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         displayCount: Int = 1
     ) async throws -> AppleMediaNegotiationResult {
         let receiver = try await session.openHighPerformanceMedia(displayCount: displayCount)
+        session.connectionTiming?.record(.mediaRouteReady, since: .init(.mediaStarted))
         session.install(mediaReceiver: receiver)
         do {
             return try await negotiate(session, receiver: receiver, displayCount: displayCount)
@@ -114,6 +115,7 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
         receiver: any AppleMediaReceiving,
         displayCount: Int
     ) async throws -> AppleMediaNegotiationResult {
+        let timing = session.connectionTiming
         let offers = try makeOffer()
         let secondaryOffers = displayCount > 1 ? try makeOffer() : nil
         let keys = try makeKeys(includeSecondaryVideo: secondaryOffers != nil)
@@ -124,19 +126,26 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
             keys: keys,
             callID: environment.uuid()
         )
+        timing?.record(.mediaOfferReady, since: .init(.mediaRouteReady))
 
         for message in Self.framebufferStartupMessages() {
             try await session.sendEncrypted(message)
         }
+        timing?.record(.mediaStartupMessagesSent, since: .init(.mediaOfferReady))
 
         var pendingMessages = [Data]()
         if displayCount > 1 {
+            timing?.record(.mediaLayoutWaitStarted)
             while !pendingMessages.contains(where: {
                 AppleFramebufferUpdate.displayLayouts(from: $0)
                     .contains(where: { $0.displays.count >= displayCount })
             }) {
-                pendingMessages.append(try await session.receiveEncrypted())
+                let responseTiming = timing?.beginMediaResponse()
+                let response = try await session.receiveEncrypted(startupTiming: responseTiming)
+                responseTiming?.record(.mediaResponseReceived, since: .mediaRecordDecrypted)
+                pendingMessages.append(response)
             }
+            timing?.record(.mediaLayoutReady, since: .init(.mediaLayoutWaitStarted))
         }
         if let displaySelection = Self.displaySelectionMessage(displayCount: displayCount) {
             // Native establishes the global screen after DisplayInfo2 is complete. The pointer
@@ -144,20 +153,29 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
             // an individual-display selection from display setup or a previous transition.
             try await session.sendEncrypted(displaySelection)
         }
+        timing?.record(.mediaConfigurationSendStarted)
         try await session.sendEncrypted(configuration)
+        session.connectionTiming?.record(.mediaConfigurationSent, since: .init(.mediaStarted))
 
         var retryCount = 0
         var negotiatedCanvases = [AppleCanvas]()
         var configuredExplicitPorts = false
         negotiationLoop: while retryCount <= Self.retryLimit {
-            let response = try await session.receiveEncrypted()
+            let responseTiming = timing?.beginMediaResponse()
+            let response = try await session.receiveEncrypted(startupTiming: responseTiming)
+            responseTiming?.record(.mediaResponseReceived, since: .mediaRecordDecrypted)
             if !configuredExplicitPorts,
                let ports = AppleMediaConfiguration.ports(from: response),
                ports.videos.count == displayCount {
                 try receiver.configureRemotePorts(ports)
                 configuredExplicitPorts = true
+                responseTiming?.record(.mediaPortsConfigured, since: .mediaResponseReceived)
             }
+            responseTiming?.record(.mediaCanvasParseStarted)
             let canvases = AppleMediaConfiguration.canvases(from: response)
+            responseTiming?.record(
+                .mediaCanvasesParsed, since: .mediaCanvasParseStarted, count: canvases.count
+            )
             if !canvases.isEmpty {
                 negotiatedCanvases.append(contentsOf: canvases)
                 let expectedCanvasCount = secondaryOffers == nil ? 1 : 2
@@ -207,17 +225,22 @@ struct AppleMediaNegotiator: AppleMediaNegotiating {
                     videos: videos
                 )
                 receiver.stopPunching()
+                timing?.record(.mediaNegotiationFinished, since: .init(.mediaConfigurationSent))
                 return result
             }
             switch AppleMediaConfiguration.answerStatus(from: response) {
             case .canvas:
+                responseTiming?.record(.mediaAnswerCanvas, since: .mediaCanvasesParsed)
                 continue
             case .unrelated:
+                responseTiming?.record(.mediaAnswerUnrelated, since: .mediaCanvasesParsed)
                 pendingMessages.append(response)
                 continue
             case .degenerate:
+                responseTiming?.record(.mediaAnswerDegenerate, since: .mediaCanvasesParsed)
                 guard retryCount < Self.retryLimit else { break negotiationLoop }
                 retryCount += 1
+                session.connectionTiming?.record(.mediaRetry, index: retryCount)
                 try await Task.sleep(for: .milliseconds(200))
                 try await session.sendEncrypted(configuration)
             }

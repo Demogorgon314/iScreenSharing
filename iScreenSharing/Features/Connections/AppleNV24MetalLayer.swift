@@ -130,6 +130,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private var canvasSize = CGSize.zero
     private var compositedCanvas: MTLTexture?
     private let inFlightGate = AppleMetalInFlightGate()
+    var connectionTiming: ConnectionStartupTrace?
+    var displayIndex: Int = 0
     var didPresentFrame: (@Sendable () -> Void)?
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
@@ -164,6 +166,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             fatalError("AppleNV24MetalLayer can only copy its own presentation layer")
         }
         context = source.context
+        connectionTiming = source.connectionTiming
+        displayIndex = source.displayIndex
         performance = source.performance
         latestFrames = source.latestFrames
         lastPresentedSequences = source.lastPresentedSequences
@@ -237,6 +241,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         canvasSize = .zero
         compositedCanvas = nil
         performance = nil
+        connectionTiming = nil
     }
 
     @discardableResult
@@ -353,8 +358,17 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         let performance = performance
         let logger = Self.logger
         let didPresentFrame = didPresentFrame
+        // Capture this session's trace now; the retained layer can be reused
+        // before Metal delivers the old drawable's callback.
+        let timing = connectionTiming
+        let displayIndex = displayIndex
         drawable.addPresentedHandler { drawable in
             guard drawable.presentedTime > 0 else { return }
+            timing?.record(
+                .firstPresented, index: displayIndex,
+                since: .init(.firstFramePublished, index: displayIndex),
+                at: drawable.presentedTime
+            )
             performance?.recordDisplay(
                 duration: drawable.presentedTime - presentationSubmittedAt,
                 presentedAt: drawable.presentedTime

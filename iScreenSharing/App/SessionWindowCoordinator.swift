@@ -364,6 +364,7 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         disconnectsSessionOnDisappear: Bool
     ) {
         guard let session = sessions.session(for: key.endpoint) else { return }
+        session.connectionTiming?.record(.windowStarted, index: key.displayIndex)
         let scalesToFitOverride = connectionStore?.connection(for: key.endpoint)?.scalesToFit
         let commandState = commandStates[key.endpoint] ?? SessionCommandState(
             endpoint: key.endpoint,
@@ -455,6 +456,10 @@ final class SessionWindowCoordinator: NSObject, NSWindowDelegate {
         } else {
             controller.showWindow(nil)
         }
+        session.connectionTiming?.record(
+            .windowOrdered, index: key.displayIndex,
+            since: .init(.windowStarted, index: key.displayIndex)
+        )
         SessionToolbarPreferences.applyStoredPreferences(
             to: window,
             defaults: toolbarPreferencesDefaults

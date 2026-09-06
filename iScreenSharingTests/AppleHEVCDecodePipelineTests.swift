@@ -641,13 +641,49 @@ final class AppleHEVCDecodePipelineTests: XCTestCase {
         pipeline.close()
     }
 
-    private func makeHarness() throws -> Harness {
+    func testPreparedDecoderIgnoresSubmissionsUntilSourcesAreCommitted() throws {
+        let harness = try makeHarness(preparesOnly: true)
+        harness.pipeline.submit([accessUnit(source: 100, timestamp: 1, order: 100)])
+        XCTAssertFalse(harness.pipeline.isActive)
+        XCTAssertTrue(harness.decoder.submissions.isEmpty)
+
+        XCTAssertFalse(harness.pipeline.activate(sourceToTile: [100: 0]))
+        XCTAssertFalse(harness.pipeline.activate(sourceToTile: [100: 0, 200: 1, 300: 2, 400: 2]))
+        XCTAssertFalse(harness.pipeline.activate(sourceToTile: [100: 0, 200: 1, 300: 2, 400: 4]))
+        XCTAssertTrue(harness.pipeline.activate(sourceToTile: [100: 0, 200: 1, 300: 2, 400: 3]))
+        XCTAssertFalse(harness.pipeline.activate(sourceToTile: [500: 0, 600: 1, 700: 2, 800: 3]))
+        harness.pipeline.submit([
+            accessUnit(source: 100, timestamp: 2, order: 10),
+            accessUnit(source: 500, timestamp: 3, order: 11),
+        ])
+
+        XCTAssertEqual(harness.decoder.submissions.map(\.order), [10])
+        XCTAssertEqual(harness.decoderFactoryCount, 1)
+        harness.pipeline.close()
+    }
+
+    func testClosingPreparedPipelineReleasesDecoderAndRejectsActivation() throws {
+        let harness = try makeHarness(preparesOnly: true)
+        harness.decoder.emitFailure(timestamp: 1)
+        harness.callbackQueue.sync {}
+        XCTAssertTrue(harness.refreshEvents.isEmpty)
+
+        harness.pipeline.close()
+        harness.decoder.emitFailure(timestamp: 2)
+        harness.callbackQueue.sync {}
+
+        XCTAssertTrue(harness.decoder.isClosed)
+        XCTAssertFalse(harness.pipeline.activate(sourceToTile: [100: 0, 200: 1, 300: 2, 400: 3]))
+        XCTAssertTrue(harness.refreshEvents.isEmpty)
+    }
+
+    private func makeHarness(preparesOnly: Bool = false) throws -> Harness {
         let callbackQueue = DispatchQueue(label: "AppleHEVCDecodePipelineTests.callback")
         let decoder = FakeDecoder()
         let callbacks = CallbackStore()
         let pipeline = try AppleHEVCDecodePipeline(
             tileCount: sources.count,
-            sourceToTile: Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
+            sourceToTile: preparesOnly ? [:] : Dictionary(uniqueKeysWithValues: sources.enumerated().map { ($1, $0) }),
             callbackQueue: callbackQueue,
             decoderFactory: { failure, frame, longTermReference in
                 callbacks.install(failureHandler: failure, frameHandler: frame)

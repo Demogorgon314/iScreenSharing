@@ -2,7 +2,11 @@ import AVFAudio
 import AudioToolbox
 import Foundation
 
-final class AppleAACELDDecoder: @unchecked Sendable {
+protocol AppleAudioDecoding: AnyObject {
+    func decode(_ accessUnit: Data) throws -> AVAudioPCMBuffer?
+}
+
+final class AppleAACELDDecoder: AppleAudioDecoding, @unchecked Sendable {
     static let sampleRate = 48_000.0
     static let channelCount: AVAudioChannelCount = 2
     static let framesPerPacket: AVAudioFrameCount = 480

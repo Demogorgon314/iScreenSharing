@@ -50,10 +50,12 @@ final class RFBAuthenticationIntegrationTests: XCTestCase {
         let clipboard = await MainActor.run { IntegrationClipboardReceiver() }
         let receiver = try XCTUnwrap(session.mediaReceiver)
         let audioPlayer = IntegrationAudioPlayer()
-        let audioStream = try AppleAudioStream(
+        let audioStream = try await AppleAudioStream(
             receiver: receiver,
             negotiation: media,
-            player: audioPlayer
+            playbackFactory: {
+                AppleAudioStream.Playback(decoder: try AppleAACELDDecoder(), player: audioPlayer)
+            }
         )
         audioStream.start()
         defer { audioStream.close() }

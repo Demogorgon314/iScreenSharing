@@ -74,6 +74,7 @@ final class AuthenticationCoordinator: ObservableObject {
 
     func signIn(username: String, password: String, rememberPassword: Bool) {
         task?.cancel()
+        let timing = ConnectionStartupTrace.makeIfEnabled()
         do {
             let savedConnection = connectionStore.connection(for: endpoint)
             let virtualDisplayCount = savedConnection?.virtualDisplayCount ?? .one
@@ -95,16 +96,18 @@ final class AuthenticationCoordinator: ObservableObject {
             state = .authenticating
             task = Task {
                 do {
-                    let session = try await sessionActivator.activate(
-                        endpoint: endpoint,
-                        credentials: credentials,
-                        configuration: SessionActivationConfiguration(
-                            sharingType: sharingType,
-                            standardQuality: standardQuality,
-                            virtualDisplayCount: virtualDisplayCount,
-                            requestedDisplaySizes: requestedDisplaySizes
+                    let session = try await ConnectionStartupTrace.$current.withValue(timing) {
+                        try await sessionActivator.activate(
+                            endpoint: endpoint,
+                            credentials: credentials,
+                            configuration: SessionActivationConfiguration(
+                                sharingType: sharingType,
+                                standardQuality: standardQuality,
+                                virtualDisplayCount: virtualDisplayCount,
+                                requestedDisplaySizes: requestedDisplaySizes
+                            )
                         )
-                    )
+                    }
                     sessionManager.install(session)
                     connectionStore.record(
                         endpoint,
@@ -115,14 +118,17 @@ final class AuthenticationCoordinator: ObservableObject {
                     state = .authenticated
                     persistCredentialsInBackground(credentials, remember: rememberPassword)
                 } catch is CancellationError {
+                    timing?.finish(.cancelled)
                     guard !Task.isCancelled else { return }
                     state = .idle
                 } catch {
+                    timing?.finish(Task.isCancelled ? .cancelled : .failed)
                     guard !Task.isCancelled else { return }
                     state = .failed(error.localizedDescription)
                 }
             }
         } catch {
+            timing?.finish(.failed)
             state = .failed(error.localizedDescription)
         }
     }

@@ -10,6 +10,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
     let sharingType: ScreenSharingType
     let masterKey: Data
     let serverInfo: RFBServerInfo
+    let connectionTiming: ConnectionStartupTrace?
     private(set) var recordLayer: AppleEncryptedRecordLayer?
     private(set) var mediaReceiver: (any AppleMediaReceiving)?
     private(set) var videoStreams = [SessionVideoStream]()
@@ -42,7 +43,8 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         sharingType: ScreenSharingType = .highPerformance,
         masterKey: Data,
         serverInfo: RFBServerInfo,
-        route: any OpenSessionRoute
+        route: any OpenSessionRoute,
+        connectionTiming: ConnectionStartupTrace? = ConnectionStartupTrace.current
     ) {
         self.endpoint = endpoint
         remoteAddress = route.remoteAddress
@@ -50,6 +52,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.masterKey = masterKey
         self.serverInfo = serverInfo
         self.route = route
+        self.connectionTiming = connectionTiming
         let transport = route.control
         encryptedWriter = AppleEncryptedRecordWriter { data in
             try await transport.send(data)
@@ -102,6 +105,7 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         self.terminationHandler = nil
         closeLock.unlock()
 
+        connectionTiming?.finish(.closed)
         controlMessageService?.close()
         audioStream?.close()
         videoStreams.forEach { $0.close() }
@@ -175,14 +179,21 @@ final class RFBAuthenticatedSession: @unchecked Sendable {
         try await encryptedWriter.send(messages, using: recordLayer)
     }
 
-    func receiveEncrypted() async throws -> Data {
+    func receiveEncrypted(
+        startupTiming: ConnectionStartupTrace.MediaResponse? = nil
+    ) async throws -> Data {
         guard let recordLayer else { throw RFBSessionError.encryptionNotEnabled }
         let header = try await receiveExactly(2)
+        startupTiming?.record(.mediaHeaderReceived, since: .mediaReadStarted)
         let length = try Int(header.uint16BE(at: 0))
         guard length > 0, length.isMultiple(of: 16) else {
             throw AppleEncryptedRecordError.invalidCiphertext
         }
-        return try recordLayer.decrypt(try await receiveExactly(length))
+        let ciphertext = try await receiveExactly(length)
+        startupTiming?.record(.mediaBodyReceived, since: .mediaHeaderReceived, count: ciphertext.count)
+        let message = try recordLayer.decrypt(ciphertext)
+        startupTiming?.record(.mediaRecordDecrypted, since: .mediaBodyReceived, count: message.count)
+        return message
     }
 
     func install(mediaReceiver: any AppleMediaReceiving) {

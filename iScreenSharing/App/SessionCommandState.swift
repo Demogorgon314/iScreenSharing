@@ -20,6 +20,7 @@ final class SessionCommandState: ObservableObject {
     @Published private(set) var supportsKeyboardInputSource: Bool
     @Published private(set) var usesSharedClipboard: Bool
     @Published private(set) var isAudioMuted: Bool
+    @Published private(set) var hasAudio: Bool
     @Published private(set) var supportedRemoteCommands: Set<AppleRemoteSystemCommand>
     @Published private(set) var standardQuality: StandardRFBQuality
     @Published private(set) var standardQualityErrorMessage: String?
@@ -88,6 +89,7 @@ final class SessionCommandState: ObservableObject {
         supportsKeyboardInputSource = keyboardInputSource?.isSupported ?? false
         usesSharedClipboard = clipboardService?.isSharingEnabled ?? false
         isAudioMuted = audioStream?.isMuted ?? false
+        hasAudio = audioStream?.isAvailable ?? false
         supportedRemoteCommands = session?.remoteSystemCapabilities?.supportedCommands ?? []
         standardVideoStream = session?.videoStream as? StandardRFBVideoStream
         standardQuality = standardVideoStream?.currentQuality ?? .high
@@ -117,8 +119,6 @@ final class SessionCommandState: ObservableObject {
     var canShareKeyboardInputSource: Bool {
         !isObserving && !isChangingMode && supportsKeyboardInputSource
     }
-
-    var hasAudio: Bool { audioStream != nil }
 
     var canChangeStandardQuality: Bool { standardVideoStream != nil }
 
@@ -209,7 +209,7 @@ final class SessionCommandState: ObservableObject {
     }
 
     func setAudioMuted(_ muted: Bool) {
-        guard let audioStream, muted != isAudioMuted else { return }
+        guard hasAudio, let audioStream, muted != isAudioMuted else { return }
         audioStream.toggleMute()
     }
 
@@ -301,6 +301,11 @@ final class SessionCommandState: ObservableObject {
         audioStream?.$isMuted
             .removeDuplicates()
             .sink { [weak self] in self?.isAudioMuted = $0 }
+            .store(in: &subscriptions)
+
+        audioStream?.$isAvailable
+            .removeDuplicates()
+            .sink { [weak self] in self?.hasAudio = $0 }
             .store(in: &subscriptions)
 
         session?.remoteSystemCapabilities?.$supportedCommands

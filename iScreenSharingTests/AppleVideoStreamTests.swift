@@ -5,6 +5,33 @@ import XCTest
 @testable import iScreenSharing
 
 final class AppleVideoStreamTests: XCTestCase {
+    func testStartupTimingRetainsFirstPacketAcrossMediaRestarts() async throws {
+        let timings = StartupTimingRecorder()
+        let receiver = VideoStreamReceiver()
+        let stream = try AppleVideoStream(
+            receiver: receiver,
+            video: AppleVideoNegotiation(
+                viewerKey: Data(0..<46), serverKey: Data(0..<46),
+                synchronizationSource: 0x5566_7788,
+                canvas: AppleCanvas(width: 8, height: 4, tileCount: 4),
+                mediaStreamIndex: 0, displayIndex: 1
+            ),
+            connectionTiming: timings.makeTrace()
+        )
+        stream.start()
+        defer { stream.close() }
+        timings.setTime(0.125)
+        try await receiver.deliver([Self.videoDatagram])
+        await stream.prepareForMediaRestart()
+        timings.setTime(1)
+        try await receiver.deliver([Self.videoDatagram])
+
+        XCTAssertEqual(timings.entry(.firstPacket, index: 1)?.elapsedMilliseconds, 125)
+        XCTAssertEqual(timings.entry(.firstPacket, index: 1)?.durationMilliseconds, 125)
+        XCTAssertEqual(timings.entries.filter { $0.event.stage == .firstPacket }.count, 1)
+        XCTAssertNil(timings.entry(.firstPacket, index: 0))
+    }
+
     func testReceiverReportsContinueAcrossConcurrentMediaRestarts() async throws {
         let receiver = VideoStreamReceiver()
         let stream = try AppleVideoStream(receiver: receiver, video: AppleVideoNegotiation(
@@ -57,7 +84,7 @@ final class AppleVideoStreamTests: XCTestCase {
     ])
 }
 
-private final class VideoStreamReceiver: AppleMediaReceiving, @unchecked Sendable {
+final class VideoStreamReceiver: AppleMediaReceiving, @unchecked Sendable {
     private let lock = NSLock()
     private var delivery: (queue: DispatchQueue, handler: AppleVideoDatagramHandler)?
     private var sentReports = [Data]()
@@ -68,14 +95,17 @@ private final class VideoStreamReceiver: AppleMediaReceiving, @unchecked Sendabl
         lock.withLock { sentReports.removeAll() }
     }
 
-    func deliver(_ datagrams: [Data]) async throws {
+    func deliver(
+        _ datagrams: [Data],
+        arrivalTime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) async throws {
         let delivery = try lock.withLock { try XCTUnwrap(self.delivery) }
         await withCheckedContinuation { continuation in
             delivery.queue.async {
                 for data in datagrams {
                     delivery.handler(AppleReceivedVideoDatagram(
                         data: data,
-                        arrivalTime: ProcessInfo.processInfo.systemUptime
+                        arrivalTime: arrivalTime
                     ))
                 }
                 continuation.resume()
