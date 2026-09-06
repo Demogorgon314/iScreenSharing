@@ -7,6 +7,45 @@ import XCTest
 
 @MainActor
 final class MobileSessionControllerTests: XCTestCase {
+    func testSavedCredentialsMustMatchConfiguredUsername() async throws {
+        let credentials = try ScreenSharingCredentials(username: "viewer", password: "test")
+        let controller = MobileSessionController(
+            endpoint: try ConnectionEndpoint("studio-mac.local"),
+            credentialStore: SignInTestCredentialStore(credentials: credentials)
+        )
+        let unspecified = await controller.savedCredentials()
+        let matching = await controller.savedCredentials(preferredUsername: " viewer ")
+        let different = await controller.savedCredentials(preferredUsername: "other-user")
+        XCTAssertEqual(unspecified, credentials)
+        XCTAssertEqual(matching, credentials)
+        XCTAssertNil(different)
+    }
+
+    func testUnavailableCredentialsFallBackToManualSignIn() async throws {
+        for fails in [false, true] {
+            let controller = MobileSessionController(
+                endpoint: try ConnectionEndpoint("studio-mac.local"),
+                credentialStore: SignInTestCredentialStore(credentials: nil, fails: fails)
+            )
+            let credentials = await controller.savedCredentials()
+            XCTAssertNil(credentials)
+            XCTAssertEqual(controller.state, .idle)
+        }
+    }
+
+    func testCancelledCredentialLookupCannotTriggerAutomaticSignIn() async throws {
+        let controller = MobileSessionController(
+            endpoint: try ConnectionEndpoint("studio-mac.local"),
+            credentialStore: SignInTestCredentialStore(credentials: try ScreenSharingCredentials(username: "viewer", password: "test"))
+        )
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await controller.savedCredentials()
+        }
+        let credentials = await task.value
+        XCTAssertNil(credentials)
+    }
+
     func testRestoredPresetIsUsedInInitialNegotiationWithoutViewport() async throws {
         let suite = "MobileSessionControllerTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -75,6 +114,18 @@ final class MobileSessionControllerTests: XCTestCase {
             await Task.yield()
         }
     }
+}
+
+private struct SignInTestCredentialStore: CredentialStoring {
+    let credentials: ScreenSharingCredentials?
+    var fails = false
+
+    func load(for endpoint: ConnectionEndpoint) throws -> ScreenSharingCredentials? {
+        if fails { throw TestError.unexpectedAuthentication }
+        return credentials
+    }
+    func save(_ credentials: ScreenSharingCredentials, for endpoint: ConnectionEndpoint) throws {}
+    func delete(for endpoint: ConnectionEndpoint) throws {}
 }
 
 private actor RecordingAuthenticator: RFBAuthenticating {

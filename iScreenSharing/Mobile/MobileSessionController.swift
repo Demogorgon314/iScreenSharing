@@ -50,12 +50,16 @@ final class MobileSessionController: ObservableObject {
         self.resolutionPreferences = resolutionPreferences
     }
 
-    func savedCredentials() async -> ScreenSharingCredentials? {
+    func savedCredentials(preferredUsername: String = "") async -> ScreenSharingCredentials? {
         let credentialStore = credentialStore
         let endpoint = endpoint
-        return await Task.detached {
+        let credentials = await Task.detached {
             try? credentialStore.load(for: endpoint)
         }.value
+        guard !Task.isCancelled, let credentials else { return nil }
+        let preferred = preferredUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard preferred.isEmpty || preferred == credentials.username else { return nil }
+        return credentials
     }
 
     func connect(username: String, password: String, rememberPassword: Bool = false) {
