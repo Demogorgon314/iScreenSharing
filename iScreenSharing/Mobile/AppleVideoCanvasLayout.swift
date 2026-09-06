@@ -1,4 +1,5 @@
 import CoreGraphics
+import struct ScreenSharingProtocol.AppleCanvas
 
 enum AppleVideoCanvasLayout {
     struct Tile: Equatable {

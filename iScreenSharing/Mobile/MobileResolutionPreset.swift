@@ -1,4 +1,5 @@
 import CoreGraphics
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
 enum MobileResolutionPreset: String, CaseIterable, Identifiable {
     case fitScreen

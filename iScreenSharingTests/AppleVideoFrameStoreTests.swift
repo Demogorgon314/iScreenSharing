@@ -195,6 +195,64 @@ final class AppleVideoFrameStoreTests: XCTestCase {
         XCTAssertEqual(receivedBatches[0][3]?.playbackHandledAt, 10)
     }
 
+    @MainActor
+    func testPreservesConsecutiveLogicalFrameBatchesUntilMainDelivery() async throws {
+        let store = AppleVideoFrameStore(preservesLogicalFrameBatches: true)
+        let firstFrame = try makePixelBuffer(width: 8, height: 8)
+        let secondFrame = try makePixelBuffer(width: 16, height: 8)
+        let published = expectation(description: "Consecutive logical frames published")
+        published.expectedFulfillmentCount = 2
+        var receivedBatches = [AppleVideoFrameStore.FrameBatch]()
+        _ = store.addObserver { frames in
+            receivedBatches.append(frames)
+            published.fulfill()
+        }
+
+        store.publish([
+            makeDecodedFrame(firstFrame, tileIndex: 0, frameSequenceNumber: 20),
+        ], playbackHandledAt: 10)
+        store.publish([
+            makeDecodedFrame(secondFrame, tileIndex: 0, frameSequenceNumber: 21),
+        ], playbackHandledAt: 11)
+
+        await fulfillment(of: [published], timeout: 1)
+        XCTAssertEqual(receivedBatches.count, 2)
+        XCTAssertTrue(receivedBatches[0][0]?.pixelBuffer === firstFrame)
+        XCTAssertTrue(receivedBatches[1][0]?.pixelBuffer === secondFrame)
+    }
+
+    func testDrainingBoundedSnapshotsRetainsSparseUpdatesAndLastCanvas() throws {
+        let store = AppleVideoFrameStore(
+            preservesLogicalFrameBatches: true,
+            logicalFrameQueueCapacity: 2,
+            deliversLogicalFrameBatchesOnDemand: true
+        )
+        let firstTile = try makePixelBuffer(width: 8, height: 8)
+        let secondTile = try makePixelBuffer(width: 8, height: 8)
+        let replacement = try makePixelBuffer(width: 16, height: 8)
+        store.publish([makeDecodedFrame(firstTile, tileIndex: 0, frameSequenceNumber: 1)], playbackHandledAt: 1)
+        store.publish([makeDecodedFrame(secondTile, tileIndex: 1, frameSequenceNumber: 2)], playbackHandledAt: 2)
+        store.publish([makeDecodedFrame(replacement, tileIndex: 1, frameSequenceNumber: 3)], playbackHandledAt: 3)
+
+        let batches = store.drainLogicalFrameBatches()
+        XCTAssertEqual(batches.count, 2)
+        XCTAssertTrue(batches[0][0]?.pixelBuffer === firstTile)
+        XCTAssertTrue(batches[0][1]?.pixelBuffer === secondTile)
+        XCTAssertTrue(batches[1][0]?.pixelBuffer === firstTile)
+        XCTAssertTrue(batches[1][1]?.pixelBuffer === replacement)
+        XCTAssertEqual(store.pendingLogicalFrameBatchCount, 0)
+        XCTAssertTrue(store.drainLogicalFrameBatches().isEmpty)
+        XCTAssertTrue(store.frame(at: 0) === firstTile)
+        XCTAssertTrue(store.frame(at: 1) === replacement)
+
+        store.publish([makeDecodedFrame(firstTile, tileIndex: 0, frameSequenceNumber: 4)], playbackHandledAt: 4)
+        XCTAssertEqual(store.drainLogicalFrameBatches().count, 1)
+        store.publish([makeDecodedFrame(firstTile, tileIndex: 0, frameSequenceNumber: 5)], playbackHandledAt: 5)
+        store.removeAllFrames()
+        XCTAssertTrue(store.drainLogicalFrameBatches().isEmpty)
+        XCTAssertNil(store.frame(at: 0))
+    }
+
     private func makeDecodedFrame(
         _ pixelBuffer: CVPixelBuffer,
         tileIndex: Int,

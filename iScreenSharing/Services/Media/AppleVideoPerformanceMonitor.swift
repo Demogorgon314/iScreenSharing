@@ -556,7 +556,7 @@ final class AppleVideoPerformanceMonitor: ObservableObject, @unchecked Sendable 
 
     private func publishSample() {
         let next = sample(at: clock())
-#if DEBUG
+#if DEBUG && os(macOS)
         let shouldLogDiagnostics = true
 #else
         let shouldLogDiagnostics = diagnosticsEnabled

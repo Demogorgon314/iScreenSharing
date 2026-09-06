@@ -24,11 +24,27 @@ final class AppleVideoFrameStore: @unchecked Sendable {
     typealias Observer = @MainActor @Sendable (FrameBatch) -> Void
 
     private let lock = NSLock()
+    private let preservesLogicalFrameBatches: Bool
+    private let logicalFrameQueueCapacity: Int
+    private let deliversLogicalFrameBatchesOnDemand: Bool
     private var frames = FrameBatch()
     private var pendingFrames = FrameBatch()
+    private var pendingLogicalFrameSnapshots = [FrameBatch]()
     private var nextSequence: UInt64 = 0
     private var deliveryScheduled = false
     private var observers = [UUID: Observer]()
+
+    init(
+        preservesLogicalFrameBatches: Bool = false,
+        logicalFrameQueueCapacity: Int = 16,
+        deliversLogicalFrameBatchesOnDemand: Bool = false
+    ) {
+        precondition(logicalFrameQueueCapacity > 0)
+        precondition(!deliversLogicalFrameBatchesOnDemand || preservesLogicalFrameBatches)
+        self.preservesLogicalFrameBatches = preservesLogicalFrameBatches
+        self.logicalFrameQueueCapacity = logicalFrameQueueCapacity
+        self.deliversLogicalFrameBatchesOnDemand = deliversLogicalFrameBatchesOnDemand
+    }
 
     @discardableResult
     func addObserver(_ observer: @escaping Observer) -> UUID {
@@ -53,10 +69,32 @@ final class AppleVideoFrameStore: @unchecked Sendable {
         lock.withFrameStoreLock { frames[tileIndex] }
     }
 
+    func dequeueLogicalFrameBatch() -> FrameBatch? {
+        lock.withFrameStoreLock {
+            guard !pendingLogicalFrameSnapshots.isEmpty else { return nil }
+            return pendingLogicalFrameSnapshots.removeFirst()
+        }
+    }
+
+    /// Transfers the bounded pending snapshots atomically. The latest stored
+    /// canvas remains available, including unchanged tiles from earlier frames.
+    func drainLogicalFrameBatches() -> [FrameBatch] {
+        lock.withFrameStoreLock {
+            let batches = pendingLogicalFrameSnapshots
+            pendingLogicalFrameSnapshots.removeAll(keepingCapacity: true)
+            return batches
+        }
+    }
+
+    var pendingLogicalFrameBatchCount: Int {
+        lock.withFrameStoreLock { pendingLogicalFrameSnapshots.count }
+    }
+
     func removeAllFrames() {
         lock.withFrameStoreLock {
             frames.removeAll(keepingCapacity: false)
             pendingFrames.removeAll(keepingCapacity: false)
+            pendingLogicalFrameSnapshots.removeAll(keepingCapacity: false)
         }
     }
 
@@ -122,7 +160,14 @@ final class AppleVideoFrameStore: @unchecked Sendable {
                     presentationTime: decodedFrame.presentationTime
                 )
             }
-            return scheduleDeliveryIfNeeded()
+            if preservesLogicalFrameBatches {
+                pendingFrames.removeAll(keepingCapacity: true)
+                if pendingLogicalFrameSnapshots.count == logicalFrameQueueCapacity {
+                    pendingLogicalFrameSnapshots.removeFirst()
+                }
+                pendingLogicalFrameSnapshots.append(frames)
+            }
+            return deliversLogicalFrameBatchesOnDemand ? false : scheduleDeliveryIfNeeded()
         }
         if shouldSchedule { scheduleDelivery() }
     }
@@ -179,13 +224,18 @@ final class AppleVideoFrameStore: @unchecked Sendable {
     @MainActor
     private func deliverPendingFrames() {
         let delivery = lock.withFrameStoreLock {
-            let snapshot = frames
-            pendingFrames.removeAll(keepingCapacity: true)
+            let snapshot: FrameBatch
+            if !pendingLogicalFrameSnapshots.isEmpty {
+                snapshot = pendingLogicalFrameSnapshots.removeFirst()
+            } else {
+                snapshot = frames
+                pendingFrames.removeAll(keepingCapacity: true)
+            }
             return (snapshot, Array(observers.values))
         }
         if !delivery.0.isEmpty { delivery.1.forEach { $0(delivery.0) } }
         let hasMoreFrames = lock.withFrameStoreLock {
-            guard !pendingFrames.isEmpty else {
+            guard !pendingLogicalFrameSnapshots.isEmpty || !pendingFrames.isEmpty else {
                 deliveryScheduled = false
                 return false
             }

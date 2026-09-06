@@ -21,12 +21,13 @@ class SessionVideoStream: ObservableObject, @unchecked Sendable {
         canvas: AppleCanvas,
         displayIndex: Int,
         tileCount: Int,
-        connectionTiming: ConnectionStartupTrace? = nil
+        connectionTiming: ConnectionStartupTrace? = nil,
+        frames: AppleVideoFrameStore = AppleVideoFrameStore()
     ) {
         self.canvas = canvas
         self.displayIndex = displayIndex
         self.connectionTiming = connectionTiming
-        frames = AppleVideoFrameStore()
+        self.frames = frames
         performance = AppleVideoPerformanceMonitor(tileCount: tileCount)
     }
 

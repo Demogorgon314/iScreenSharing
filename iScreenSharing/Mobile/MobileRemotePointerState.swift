@@ -1,6 +1,9 @@
 import CoreGraphics
+import struct ScreenSharingProtocol.AppleCanvas
 
 struct MobileRemotePointerState {
+    private static let relativeMovementScale: CGFloat = 4
+
     struct Point: Equatable {
         let x: Int
         let y: Int
@@ -23,11 +26,10 @@ struct MobileRemotePointerState {
         bounds: CGRect
     ) -> Point {
         let current = currentPoint(canvas: canvas)
-        let layout = AppleVideoCanvasLayout.fullCanvas(canvas: canvas, bounds: bounds).container
-        guard !layout.isEmpty else { return current }
+        guard !bounds.isEmpty else { return current }
 
-        fractionalX += localTranslation.x / layout.width * CGFloat(canvas.width)
-        fractionalY += localTranslation.y / layout.height * CGFloat(canvas.height)
+        fractionalX += localTranslation.x * Self.relativeMovementScale
+        fractionalY += localTranslation.y * Self.relativeMovementScale
         let deltaX = Int(fractionalX.rounded(.towardZero))
         let deltaY = Int(fractionalY.rounded(.towardZero))
         fractionalX -= CGFloat(deltaX)
@@ -46,11 +48,20 @@ struct MobileRemotePointerState {
         canvas: AppleCanvas,
         bounds: CGRect
     ) -> Point? {
+#if os(macOS)
+        guard let mapped = AppleVideoCanvasLayout.remotePoint(
+            location: localPoint,
+            canvas: canvas,
+            bounds: bounds,
+            fixedScale: nil
+        ) else { return nil }
+#else
         guard let mapped = AppleVideoCanvasLayout.remotePoint(
             location: localPoint,
             canvas: canvas,
             bounds: bounds
         ) else { return nil }
+#endif
         let next = Point(x: mapped.x, y: mapped.y)
         point = next
         fractionalX = 0
@@ -63,5 +74,29 @@ struct MobileRemotePointerState {
             x: min(max(0, canvas.width - 1), max(0, point.x)),
             y: min(max(0, canvas.height - 1), max(0, point.y))
         )
+    }
+}
+
+enum MobileRemotePointerPath {
+    static func interpolatedPoints(
+        from start: MobileRemotePointerState.Point,
+        to end: MobileRemotePointerState.Point,
+        maximumStep: Double = 8
+    ) -> [MobileRemotePointerState.Point] {
+        precondition(maximumStep > 0)
+        let distance = hypot(Double(end.x - start.x), Double(end.y - start.y))
+        guard distance > 0 else { return [] }
+        let stepCount = max(1, Int(ceil(distance / maximumStep)))
+        var points = [MobileRemotePointerState.Point]()
+        points.reserveCapacity(stepCount)
+        for step in 1...stepCount {
+            let progress = Double(step) / Double(stepCount)
+            let point = MobileRemotePointerState.Point(
+                x: start.x + Int((Double(end.x - start.x) * progress).rounded()),
+                y: start.y + Int((Double(end.y - start.y) * progress).rounded())
+            )
+            if points.last != point { points.append(point) }
+        }
+        return points
     }
 }

@@ -24,6 +24,12 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     private static let initialRecovery = AppleVideoInitialRecoveryPolicy()
     private static let stallRecovery = AppleVideoStallRecoveryPolicy()
     private static let logger = Logger(subsystem: "com.wangkai.iShareScreen", category: "VideoFeedback")
+#if DEBUG && os(iOS)
+    private static let debugDiagnosticsQueue = DispatchQueue(
+        label: "com.isharescreen.video-stream.diagnostics",
+        qos: .utility
+    )
+#endif
 
     private let receiver: any AppleMediaReceiving
     private let mediaStreamIndex: Int
@@ -93,6 +99,22 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
     private var lastFreezeDiagnosticTime: TimeInterval = 0
     private var refreshScheduler = AppleVideoRefreshScheduler()
     private var restartSourceSelectionPending = false
+#if DEBUG && os(iOS)
+    private var debugLastAccessUnitBySource = [UInt32: (
+        processingTime: TimeInterval,
+        kernelArrivalTime: TimeInterval?
+    )]()
+    private var debugAccessUnitCount = 0
+    private var debugProcessingGapCount = 0
+    private var debugKernelArrivalGapCount = 0
+    private var debugMaximumProcessingGapMilliseconds = 0.0
+    private var debugMaximumKernelArrivalGapMilliseconds = 0.0
+    private var debugMaximumIngressAgeMilliseconds = 0.0
+    private var debugMaximumSocketBacklogBytes = 0
+    private var debugKernelTimestampSampleCount = 0
+    private var debugMissingKernelTimestampCount = 0
+    private var debugAccessUnitReportStartedAt: TimeInterval?
+#endif
 
     convenience init(
         receiver: any AppleMediaReceiving,
@@ -127,11 +149,22 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
             keyBlob: video.viewerKey,
             synchronizationSource: video.synchronizationSource
         )
+        let frames: AppleVideoFrameStore
+#if os(iOS)
+        frames = AppleVideoFrameStore(
+            preservesLogicalFrameBatches: true,
+            logicalFrameQueueCapacity: 2,
+            deliversLogicalFrameBatchesOnDemand: true
+        )
+#else
+        frames = AppleVideoFrameStore()
+#endif
         super.init(
             canvas: video.canvas,
             displayIndex: video.displayIndex,
             tileCount: video.canvas.tileCount,
-            connectionTiming: connectionTiming
+            connectionTiming: connectionTiming,
+            frames: frames
         )
         performance.setSocketReceiveBufferBytes(
             receiver.videoReceiveBufferConfiguration(
@@ -385,6 +418,63 @@ final class AppleVideoStream: SessionVideoStream, @unchecked Sendable {
         sendPendingNACKs()
         sendFrameLossFeedbackIfNeeded()
         guard let accessUnit else { return }
+#if DEBUG && os(iOS)
+        debugAccessUnitCount += 1
+        debugMaximumSocketBacklogBytes = max(
+            debugMaximumSocketBacklogBytes,
+            datagram.estimatedSocketBacklogBytes
+        )
+        let kernelArrivalTime = datagram.kernelArrivalTime
+        if kernelArrivalTime == nil {
+            debugMissingKernelTimestampCount += 1
+        } else {
+            debugKernelTimestampSampleCount += 1
+        }
+        if let previous = debugLastAccessUnitBySource[accessUnit.synchronizationSource] {
+            let processingGapMilliseconds = (processingTime - previous.processingTime) * 1_000
+            if processingGapMilliseconds > 40 {
+                debugProcessingGapCount += 1
+                debugMaximumProcessingGapMilliseconds = max(
+                    debugMaximumProcessingGapMilliseconds,
+                    processingGapMilliseconds
+                )
+            }
+            if let kernelArrivalTime, let previousKernelArrivalTime = previous.kernelArrivalTime {
+                let kernelGapMilliseconds = (kernelArrivalTime - previousKernelArrivalTime) * 1_000
+                if kernelGapMilliseconds > 40 {
+                    debugKernelArrivalGapCount += 1
+                    debugMaximumKernelArrivalGapMilliseconds = max(
+                        debugMaximumKernelArrivalGapMilliseconds,
+                        kernelGapMilliseconds
+                    )
+                }
+            }
+        }
+        debugMaximumIngressAgeMilliseconds = max(
+            debugMaximumIngressAgeMilliseconds,
+            datagram.ingressAge.map { $0 * 1_000 } ?? 0
+        )
+        debugLastAccessUnitBySource[accessUnit.synchronizationSource] = (
+            processingTime,
+            kernelArrivalTime
+        )
+        let reportStartedAt = debugAccessUnitReportStartedAt ?? processingTime
+        debugAccessUnitReportStartedAt = reportStartedAt
+        if processingTime - reportStartedAt >= 1 {
+            let diagnostic = "[DEBUG-IOS-AU-CADENCE-4F83] units=\(debugAccessUnitCount) processGaps=\(debugProcessingGapCount)/\(Int(debugMaximumProcessingGapMilliseconds.rounded()))ms kernelGaps=\(debugKernelArrivalGapCount)/\(Int(debugMaximumKernelArrivalGapMilliseconds.rounded()))ms kernelSamples=\(debugKernelTimestampSampleCount) missing=\(debugMissingKernelTimestampCount) ingressMax=\(Int(debugMaximumIngressAgeMilliseconds.rounded()))ms backlog=\(debugMaximumSocketBacklogBytes)"
+            Self.debugDiagnosticsQueue.async { print(diagnostic) }
+            debugAccessUnitCount = 0
+            debugProcessingGapCount = 0
+            debugKernelArrivalGapCount = 0
+            debugMaximumProcessingGapMilliseconds = 0
+            debugMaximumKernelArrivalGapMilliseconds = 0
+            debugMaximumIngressAgeMilliseconds = 0
+            debugMaximumSocketBacklogBytes = 0
+            debugKernelTimestampSampleCount = 0
+            debugMissingKernelTimestampCount = 0
+            debugAccessUnitReportStartedAt = processingTime
+        }
+#endif
         queue.async { [weak self] in
             self?.process(accessUnit, generation: generation)
         }

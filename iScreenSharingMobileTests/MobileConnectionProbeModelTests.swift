@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.RFBVersion
 import XCTest
 @testable import iScreenSharingMobile
 

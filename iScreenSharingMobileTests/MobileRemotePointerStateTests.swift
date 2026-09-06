@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleCanvas
 import XCTest
 @testable import iScreenSharingMobile
 
@@ -52,4 +53,52 @@ final class MobileRemotePointerStateTests: XCTestCase {
             .init(x: 800, y: 600)
         )
     }
+
+    func testRelativeMovementDoesNotDependOnRemoteResolution() {
+        var first = MobileRemotePointerState()
+        var second = MobileRemotePointerState()
+
+        let lowResolution = first.move(
+            by: CGPoint(x: 10, y: -5),
+            canvas: canvas,
+            bounds: bounds
+        )
+        let highResolution = second.move(
+            by: CGPoint(x: 10, y: -5),
+            canvas: AppleCanvas(width: 3200, height: 2400, tileCount: 4),
+            bounds: bounds
+        )
+
+        XCTAssertEqual(lowResolution.x - 800, 40)
+        XCTAssertEqual(lowResolution.y - 600, -20)
+        XCTAssertEqual(highResolution.x - 1_600, 40)
+        XCTAssertEqual(highResolution.y - 1_200, -20)
+    }
+
+    func testDragPathSplitsLargeMovementIntoBoundedSteps() throws {
+        let start = MobileRemotePointerState.Point(x: 100, y: 100)
+        let end = MobileRemotePointerState.Point(x: 140, y: 130)
+
+        let points = MobileRemotePointerPath.interpolatedPoints(from: start, to: end)
+
+        XCTAssertEqual(points.last, end)
+        var previous = start
+        for point in points {
+            XCTAssertLessThanOrEqual(
+                hypot(Double(point.x - previous.x), Double(point.y - previous.y)),
+                8.1
+            )
+            previous = point
+        }
+    }
+
+    func testDragPathOmitsStationaryMovement() {
+        let point = MobileRemotePointerState.Point(x: 100, y: 100)
+
+        XCTAssertTrue(MobileRemotePointerPath.interpolatedPoints(
+            from: point,
+            to: point
+        ).isEmpty)
+    }
+
 }

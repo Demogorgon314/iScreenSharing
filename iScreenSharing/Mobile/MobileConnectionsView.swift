@@ -139,7 +139,8 @@ private struct MobileConnectionPlaceholderView: View {
 
     var body: some View {
         Group {
-            if let session = controller.session, let stream = session.videoStream {
+            if let session = controller.session,
+               let stream = session.videoStream as? AppleVideoStream {
                 MobileVideoCanvasView(
                     stream: stream,
                     input: session.inputController,

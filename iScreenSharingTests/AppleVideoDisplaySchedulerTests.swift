@@ -3,6 +3,93 @@ import XCTest
 @testable import iScreenSharing
 
 final class AppleVideoDisplaySchedulerTests: XCTestCase {
+    func testMobileDisplayCatchesUpAfterOneMissedTick() throws {
+        let store = AppleVideoFrameStore(
+            preservesLogicalFrameBatches: true,
+            logicalFrameQueueCapacity: 2,
+            deliversLogicalFrameBatchesOnDemand: true
+        )
+        var scheduler = AppleVideoDisplayScheduler(
+            queueCapacity: 4,
+            presentsOnEnqueue: false,
+            preservesEnqueuedBatches: true,
+            presentsEarlyWhenBacklogged: true,
+            coalescesDueBatches: true
+        )
+        let period = 1.0 / 60
+        var frameAges = [Double]()
+        for sequence in 1...7 {
+            let timestamp = Double(sequence) * period
+            let frame = try makeFrame(sequence: UInt64(sequence), presentationTime: timestamp)
+            store.publish([AppleHEVCDecoder.DecodedFrame(
+                region: .tile(0),
+                decodingOrderNumber: frame.decodingOrderNumber,
+                rtpTimestamp: UInt32(sequence),
+                presentationTime: timestamp,
+                decodeDuration: 0,
+                accessUnitTiming: nil,
+                decodeEnteredAt: timestamp,
+                decoderSubmittedAt: timestamp,
+                decoderOutputAt: timestamp,
+                pixelBuffer: frame.pixelBuffer
+            )], playbackHandledAt: timestamp)
+            if sequence == 2 { continue }
+            for frames in store.drainLogicalFrameBatches() {
+                scheduler.enqueue(frames)
+            }
+            let update = scheduler.displayLinkDidFire(targetTimestamp: timestamp, period: period)
+            let displayed = try XCTUnwrap(update.frames[0])
+            frameAges.append((timestamp - displayed.presentationTime) * 1_000)
+        }
+        XCTAssertEqual(frameAges.count, 6)
+        for age in frameAges { XCTAssertEqual(age, 0, accuracy: 0.001) }
+        XCTAssertEqual(store.pendingLogicalFrameBatchCount, 0)
+        XCTAssertEqual(scheduler.queuedFrameCount, 0)
+    }
+
+    func testCatchUpSelectsWholeSnapshotAndKeepsFutureBatch() throws {
+        var scheduler = AppleVideoDisplayScheduler(
+            presentsOnEnqueue: false,
+            preservesEnqueuedBatches: true,
+            coalescesDueBatches: true
+        )
+        let unchangedTile = try makeFrame(sequence: 1, presentationTime: 1)
+        scheduler.enqueue([
+            0: unchangedTile,
+            1: try makeFrame(sequence: 2, presentationTime: 1),
+        ])
+        scheduler.enqueue([
+            0: unchangedTile,
+            1: try makeFrame(sequence: 3, presentationTime: 2),
+        ])
+        scheduler.enqueue([
+            0: try makeFrame(sequence: 4, presentationTime: 3),
+            1: try makeFrame(sequence: 5, presentationTime: 3),
+        ])
+
+        let caughtUp = scheduler.displayLinkDidFire(targetTimestamp: 2)
+        XCTAssertEqual(caughtUp.frames.mapValues(\.sequence), [0: 1, 1: 3])
+        XCTAssertTrue(scheduler.displayLinkDidFire(targetTimestamp: 2.5).frames.isEmpty)
+        let future = scheduler.displayLinkDidFire(targetTimestamp: 3)
+        XCTAssertEqual(future.frames.mapValues(\.sequence), [0: 4, 1: 5])
+        XCTAssertEqual(scheduler.queuedFrameCount, 0)
+        scheduler.presentationDidFail()
+        XCTAssertTrue(scheduler.displayLinkDidFire(targetTimestamp: 4).requiresPresentation)
+        scheduler.reset()
+        XCTAssertFalse(scheduler.displayLinkDidFire(targetTimestamp: 5).requiresPresentation)
+    }
+
+    func testBatchCatchUpIsOptIn() throws {
+        var scheduler = AppleVideoDisplayScheduler(
+            presentsOnEnqueue: false,
+            preservesEnqueuedBatches: true
+        )
+        scheduler.enqueue([0: try makeFrame(sequence: 1, presentationTime: 1)])
+        scheduler.enqueue([0: try makeFrame(sequence: 2, presentationTime: 2)])
+        XCTAssertEqual(scheduler.displayLinkDidFire(targetTimestamp: 3).frames[0]?.sequence, 1)
+        XCTAssertEqual(scheduler.displayLinkDidFire(targetTimestamp: 4).frames[0]?.sequence, 2)
+    }
+
     func testKeepsFutureFrameUntilItsFirstEligibleDisplayTick() throws {
         var scheduler = AppleVideoDisplayScheduler()
         scheduler.enqueue([0: try makeFrame(sequence: 1, presentationTime: 10)])

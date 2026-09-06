@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleCanvas
 import XCTest
 @testable import iScreenSharingMobile
 

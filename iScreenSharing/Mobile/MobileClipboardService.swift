@@ -1,4 +1,7 @@
 import Combine
+import struct ScreenSharingProtocol.AppleClipboardArchive
+import struct ScreenSharingProtocol.AppleClipboardFlavor
+import struct ScreenSharingProtocol.AppleClipboardItem
 import UIKit
 import UniformTypeIdentifiers
 

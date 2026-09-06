@@ -9,21 +9,28 @@ private struct AppleMetalTextureReferences: @unchecked Sendable {
     let images: [CVMetalTexture]
 }
 
-private final class AppleMetalInFlightGate: @unchecked Sendable {
+final class AppleMetalInFlightGate: @unchecked Sendable {
     private let lock = NSLock()
-    private var isInFlight = false
+    private let maximumInFlightCount: Int
+    private var inFlightCount = 0
+
+    init(maximumInFlightCount: Int = 1) {
+        precondition(maximumInFlightCount > 0)
+        self.maximumInFlightCount = maximumInFlightCount
+    }
 
     func begin() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !isInFlight else { return false }
-        isInFlight = true
+        guard inFlightCount < maximumInFlightCount else { return false }
+        inFlightCount += 1
         return true
     }
 
     func end() {
         lock.lock()
-        isInFlight = false
+        precondition(inFlightCount > 0)
+        inFlightCount -= 1
         lock.unlock()
     }
 }
@@ -129,7 +136,11 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private var renderingBounds = CGRect.zero
     private var canvasSize = CGSize.zero
     private var compositedCanvas: MTLTexture?
+#if os(iOS)
+    private let inFlightGate = AppleMetalInFlightGate(maximumInFlightCount: 2)
+#else
     private let inFlightGate = AppleMetalInFlightGate()
+#endif
     var connectionTiming: ConnectionStartupTrace?
     var displayIndex: Int = 0
     var didPresentFrame: (@Sendable () -> Void)?
@@ -293,6 +304,53 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         performance?.recordRenderCall(duration: CACurrentMediaTime() - renderCallStartedAt)
         return true
     }
+
+#if os(iOS)
+    func present(
+        drawable: CAMetalDrawable,
+        targetTimestamp: TimeInterval? = nil,
+        displayPeriod: TimeInterval? = nil,
+        isDisplayLinkTriggered: Bool = false
+    ) -> Bool {
+        let renderCallStartedAt = CACurrentMediaTime()
+        guard inFlightGate.begin() else {
+            performance?.recordRendererBusy()
+            return false
+        }
+        guard !latestFrames.isEmpty,
+              let commandBuffer = context.commandQueue.makeCommandBuffer() else {
+            inFlightGate.end()
+            return false
+        }
+        let drawableAcquiredAt = CACurrentMediaTime()
+        let encodeStartedAt = drawableAcquiredAt
+        guard encode(into: commandBuffer, drawable: drawable) else {
+            inFlightGate.end()
+            return false
+        }
+        let encodeEndedAt = CACurrentMediaTime()
+        let changedFrames = changedFrames()
+        let batchID = performance?.beginRenderBatch(
+            frameKeys: changedFrames.map(\.sequence),
+            drawableWaitStartedAt: drawableAcquiredAt,
+            drawableAcquiredAt: drawableAcquiredAt,
+            encodeStartedAt: encodeStartedAt,
+            encodeEndedAt: encodeEndedAt,
+            targetTimestamp: targetTimestamp,
+            displayPeriod: displayPeriod,
+            isDisplayLinkTriggered: isDisplayLinkTriggered
+        )
+        commit(
+            commandBuffer,
+            presenting: drawable,
+            changedFrames: changedFrames,
+            submittedAt: encodeEndedAt,
+            batchID: batchID
+        )
+        performance?.recordRenderCall(duration: CACurrentMediaTime() - renderCallStartedAt)
+        return true
+    }
+#endif
 
     func snapshot() -> CGImage? {
         let width = Int(drawableSize.width)

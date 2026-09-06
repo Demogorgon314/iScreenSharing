@@ -1,8 +1,8 @@
 # ScreenSharingProtocol
 
-`ScreenSharingProtocol` is a macOS-first Swift library for deterministic wire
-formats used by RFB and Apple's Screen Sharing high-performance mode. It is the
-reusable protocol core extracted from iScreenSharing.
+`ScreenSharingProtocol` is a Swift library for deterministic wire formats used
+by RFB and Apple's Screen Sharing high-performance mode. It is the reusable
+protocol core extracted from iScreenSharing and builds for macOS 15 and iOS 17.
 
 The current private-protocol baseline is macOS 15.7.7 (24G720). Behavior on
 other releases must be verified rather than inferred from this implementation.
@@ -26,8 +26,9 @@ writes, media queues, decoders, rendering, AppKit input, Pasteboard access, or
 Finder helper processes. Those are application and platform responsibilities.
 
 This is a wire-protocol library, not a complete Screen Sharing Session SDK. It
-currently supports macOS 15 and does not promise Linux, iOS, or older macOS
-compatibility.
+currently supports macOS 15 and iOS 17, and does not promise Linux or older
+Apple-platform compatibility. The private-protocol host behavior remains
+verified against the macOS build documented above.
 
 ## Adding the package
 

@@ -61,7 +61,7 @@ final class SessionCommandState: ObservableObject {
         self.displayScaleDidChange = displayScaleDidChange
         self.standardQualityDidChange = standardQualityDidChange
         keyboardInputSource = session?.keyboardInputSourceService
-        clipboardService = session?.clipboardService
+        clipboardService = session?.clipboardService as? AppleClipboardService
         audioStream = session?.audioStream
         supportsCopyPaste = session?.serverInfo.supportsCopyPaste ?? false
         supportsSharedClipboard = session?.serverInfo.supportsSharedPasteboard ?? false

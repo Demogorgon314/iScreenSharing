@@ -1,4 +1,5 @@
 import Foundation
+import struct ScreenSharingProtocol.AppleClipboardArchive
 
 @MainActor
 protocol AppleClipboardReceiving: AnyObject {

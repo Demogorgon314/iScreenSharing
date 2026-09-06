@@ -17,6 +17,7 @@ struct AppleReceivedVideoDatagram: Equatable, Sendable {
     let receiveBatchStartedAt: TimeInterval
     let estimatedSocketBacklogBytes: Int
     let ingressAge: TimeInterval?
+    let kernelArrivalTime: TimeInterval?
     let receiveBufferOverflowCount: UInt64?
     let networkPath: AppleVideoNetworkPath
 
@@ -26,6 +27,7 @@ struct AppleReceivedVideoDatagram: Equatable, Sendable {
         receiveBatchStartedAt: TimeInterval? = nil,
         estimatedSocketBacklogBytes: Int = 0,
         ingressAge: TimeInterval? = nil,
+        kernelArrivalTime: TimeInterval? = nil,
         receiveBufferOverflowCount: UInt64? = nil,
         networkPath: AppleVideoNetworkPath = .direct
     ) {
@@ -34,6 +36,7 @@ struct AppleReceivedVideoDatagram: Equatable, Sendable {
         self.receiveBatchStartedAt = receiveBatchStartedAt ?? arrivalTime
         self.estimatedSocketBacklogBytes = max(0, estimatedSocketBacklogBytes)
         self.ingressAge = ingressAge.map { max(0, $0) }
+        self.kernelArrivalTime = kernelArrivalTime
         self.receiveBufferOverflowCount = receiveBufferOverflowCount
         self.networkPath = networkPath
     }
@@ -113,7 +116,8 @@ final class AppleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
                 localPort: remoteAddress.port + 1,
                 remoteAddress: remoteAddress,
                 remotePort: remoteAddress.port + 1,
-                requestedReceiveBufferBytes: Self.requestedVideoReceiveBufferBytes
+                requestedReceiveBufferBytes: Self.requestedVideoReceiveBufferBytes,
+                recordsMonotonicTimestamps: Self.recordsVideoMonotonicTimestamps
             )
         } catch {
             Darwin.close(controlSocket)
@@ -128,7 +132,8 @@ final class AppleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
                     localPort: remoteAddress.port + 2,
                     remoteAddress: remoteAddress,
                     remotePort: remoteAddress.port + 2,
-                    requestedReceiveBufferBytes: Self.requestedVideoReceiveBufferBytes
+                    requestedReceiveBufferBytes: Self.requestedVideoReceiveBufferBytes,
+                    recordsMonotonicTimestamps: Self.recordsVideoMonotonicTimestamps
                 )
             } catch {
                 Darwin.close(videoSocket)
@@ -344,25 +349,106 @@ final class AppleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
     ) {
         let receiveBatchStartedAt = CACurrentMediaTime()
         var buffer = [UInt8](repeating: 0, count: Self.maximumDatagramLength)
+#if os(iOS)
+        var controlBuffer = [UInt8](repeating: 0, count: 64)
+#endif
         while true {
+#if os(iOS)
+            let received = Self.receiveTimestampedDatagram(
+                socket: socket,
+                buffer: &buffer,
+                controlBuffer: &controlBuffer
+            )
+            let count = received.count
+            let readAt = CACurrentMediaTime()
+            let kernelArrivalTime = received.monotonicTimestamp
+            let arrivalTime = readAt
+#else
             let arrivalTime = CACurrentMediaTime()
             let count = Darwin.recv(socket, &buffer, buffer.count, MSG_DONTWAIT)
+#endif
             guard count > 0 else { return }
+#if os(iOS)
+            let ingressAge = kernelArrivalTime.map { max(0, readAt - $0) }
+#else
+            let ingressAge: TimeInterval? = nil
+            let kernelArrivalTime: TimeInterval? = nil
+#endif
             let datagram = AppleReceivedVideoDatagram(
                 data: Data(buffer.prefix(count)),
                 arrivalTime: arrivalTime,
                 receiveBatchStartedAt: receiveBatchStartedAt,
-                estimatedSocketBacklogBytes: estimatedSocketBacklogBytes
+                estimatedSocketBacklogBytes: estimatedSocketBacklogBytes,
+                ingressAge: ingressAge,
+                kernelArrivalTime: kernelArrivalTime
             )
             handler(datagram)
         }
     }
 
+#if os(iOS)
+    private static func receiveTimestampedDatagram(
+        socket: Int32,
+        buffer: inout [UInt8],
+        controlBuffer: inout [UInt8]
+    ) -> (count: Int, monotonicTimestamp: TimeInterval?) {
+        var vector = iovec()
+        var message = msghdr()
+        let count = buffer.withUnsafeMutableBytes { bufferBytes in
+            controlBuffer.withUnsafeMutableBytes { controlBytes in
+                vector.iov_base = bufferBytes.baseAddress
+                vector.iov_len = bufferBytes.count
+                return withUnsafeMutablePointer(to: &vector) { vectorPointer in
+                    message.msg_iov = vectorPointer
+                    message.msg_iovlen = 1
+                    message.msg_control = controlBytes.baseAddress
+                    message.msg_controllen = socklen_t(controlBytes.count)
+                    return Darwin.recvmsg(socket, &message, MSG_DONTWAIT)
+                }
+            }
+        }
+        guard count > 0 else { return (count, nil) }
+        let timestamp = controlBuffer.withUnsafeBytes { bytes -> UInt64? in
+            let headerSize = MemoryLayout<cmsghdr>.size
+            let alignedHeaderSize = (headerSize + 3) & ~3
+            var offset = 0
+            let controlLength = min(Int(message.msg_controllen), bytes.count)
+            while offset + headerSize <= controlLength {
+                let header = bytes.loadUnaligned(fromByteOffset: offset, as: cmsghdr.self)
+                let messageLength = Int(header.cmsg_len)
+                guard messageLength >= alignedHeaderSize,
+                      offset + messageLength <= controlLength else { return nil }
+                if header.cmsg_level == SOL_SOCKET,
+                   header.cmsg_type == SCM_TIMESTAMP_MONOTONIC,
+                   offset + alignedHeaderSize + MemoryLayout<UInt64>.size <= controlLength {
+                    return bytes.loadUnaligned(
+                        fromByteOffset: offset + alignedHeaderSize,
+                        as: UInt64.self
+                    )
+                }
+                offset += (messageLength + 3) & ~3
+            }
+            return nil
+        }
+        return (count, timestamp.map(monotonicSeconds))
+    }
+
+    private static func monotonicSeconds(_ absoluteTime: UInt64) -> TimeInterval {
+        var timebase = mach_timebase_info_data_t()
+        mach_timebase_info(&timebase)
+        return Double(absoluteTime)
+            * Double(timebase.numer)
+            / Double(timebase.denom)
+            / 1_000_000_000
+    }
+#endif
+
     private static func makeSocket(
         localPort: UInt16,
         remoteAddress: ResolvedRemoteAddress,
         remotePort: UInt16,
-        requestedReceiveBufferBytes: Int?
+        requestedReceiveBufferBytes: Int?,
+        recordsMonotonicTimestamps: Bool = false
     ) throws -> PreparedSocket {
         let descriptor = Darwin.socket(Int32(remoteAddress.family), SOCK_DGRAM, IPPROTO_UDP)
         guard descriptor >= 0 else { throw AppleMediaReceiverError.socketCreationFailed(errno) }
@@ -370,6 +456,16 @@ final class AppleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
             var enabled: Int32 = 1
             guard setsockopt(descriptor, SOL_SOCKET, SO_REUSEADDR, &enabled, socklen_t(MemoryLayout.size(ofValue: enabled))) == 0 else {
                 throw AppleMediaReceiverError.socketConfigurationFailed(errno)
+            }
+            if recordsMonotonicTimestamps {
+                var timestampsEnabled: Int32 = 1
+                _ = setsockopt(
+                    descriptor,
+                    SOL_SOCKET,
+                    SO_TIMESTAMP_MONOTONIC,
+                    &timestampsEnabled,
+                    socklen_t(MemoryLayout.size(ofValue: timestampsEnabled))
+                )
             }
             if let requestedReceiveBufferBytes {
                 var receiveBuffer = Int32(clamping: requestedReceiveBufferBytes)
@@ -424,6 +520,14 @@ final class AppleMediaReceiver: AppleMediaReceiving, @unchecked Sendable {
         return byteCount
 #else
         nil
+#endif
+    }
+
+    private static var recordsVideoMonotonicTimestamps: Bool {
+#if os(iOS)
+        true
+#else
+        false
 #endif
     }
 

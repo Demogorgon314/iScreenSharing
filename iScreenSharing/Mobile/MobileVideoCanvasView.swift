@@ -1,3 +1,4 @@
+import struct ScreenSharingProtocol.AppleCursorImage
 import SwiftUI
 import UIKit
 
@@ -22,32 +23,53 @@ struct MobileVideoCanvasView: UIViewRepresentable {
 }
 
 @MainActor
-private final class MobileVideoDisplayLinkTarget: NSObject {
+private final class MobileVideoDisplayLinkTarget: NSObject, CAMetalDisplayLinkDelegate {
     weak var view: MobileVideoCanvasUIView?
 
     init(view: MobileVideoCanvasUIView) {
         self.view = view
     }
 
-    @objc func displayLinkDidFire(_ displayLink: CADisplayLink) {
-        view?.displayLinkDidFire(displayLink)
+    nonisolated func metalDisplayLink(
+        _ link: CAMetalDisplayLink,
+        needsUpdate update: CAMetalDisplayLink.Update
+    ) {
+        // The link is registered exclusively on the main run loop below, so
+        // its delegate callback shares the view's MainActor isolation.
+        MainActor.assumeIsolated {
+            view?.metalDisplayLinkDidFire(update)
+        }
     }
 }
 
 @MainActor
 final class MobileVideoCanvasUIView: UIView, UIKeyInput {
+    private struct ScheduledDragPoint {
+        let point: MobileRemotePointerState.Point
+        let sendAt: TimeInterval
+    }
+
     private var stream: AppleVideoStream
     private var input: AppleInputController?
     private var cursors: AppleCursorStore?
     private let metalLayer: AppleNV24MetalLayer?
     private let cursorLayer = CALayer()
-    private var frameObserver: UUID?
     private var cursorObserver: UUID?
-    private var displayLink: CADisplayLink?
+    private var displayLink: CAMetalDisplayLink?
     private var displayLinkTarget: MobileVideoDisplayLinkTarget?
-    private var displayScheduler = AppleVideoDisplayScheduler()
+    private var previousTargetPresentationTimestamp: TimeInterval?
+    private var displayScheduler = AppleVideoDisplayScheduler(
+        queueCapacity: 4,
+        presentsOnEnqueue: false,
+        preservesEnqueuedBatches: true,
+        presentsEarlyWhenBacklogged: true,
+        coalescesDueBatches: true
+    )
     private var pointerState = MobileRemotePointerState()
     private var dragPreviousLocation: CGPoint?
+    private var dragInputTask: Task<Void, Never>?
+    private var scheduledDragPoints = [ScheduledDragPoint]()
+    private var dragReleasePoint: MobileRemotePointerState.Point?
     private var cursorHotspot = CGPoint.zero
     private var inputTail = Task<Void, Never> {}
 
@@ -75,7 +97,6 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         cursorLayer.contentsGravity = .resize
         layer.addSublayer(cursorLayer)
         installGestures()
-        observeFrames()
         observeCursor()
     }
 
@@ -111,24 +132,25 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
             observeCursor()
         }
         if self.stream !== stream {
-            if let frameObserver { self.stream.frames.removeObserver(frameObserver) }
             self.stream = stream
             displayScheduler.reset()
             updateCursorPosition(pointerState.currentPoint(canvas: stream.canvas))
-            observeFrames()
             setNeedsLayout()
         }
     }
 
     func close() {
-        if let frameObserver { stream.frames.removeObserver(frameObserver) }
         if let cursorObserver { cursors?.removeObserver(cursorObserver) }
-        frameObserver = nil
         cursorObserver = nil
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
+        previousTargetPresentationTimestamp = nil
         displayScheduler.reset()
+        dragInputTask?.cancel()
+        dragInputTask = nil
+        scheduledDragPoints.removeAll(keepingCapacity: false)
+        dragReleasePoint = nil
         inputTail.cancel()
         metalLayer?.prepareForInactivity()
     }
@@ -192,16 +214,6 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         if !handled { super.pressesEnded(presses, with: event) }
     }
 
-    private func observeFrames() {
-        frameObserver = stream.frames.addObserver { [weak self] frames in
-            guard let self else { return }
-            if let update = self.displayScheduler.enqueue(frames) {
-                self.applyAndPresent(update)
-            }
-        }
-        enqueueCurrentFrames()
-    }
-
     private func observeCursor() {
         cursorObserver = cursors?.addObserver { [weak self] image in
             self?.applyCursor(image)
@@ -214,6 +226,23 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
             .reduce(into: AppleVideoFrameStore.FrameBatch()) { result, tileIndex in
                 result[tileIndex] = stream.frames.storedFrame(at: tileIndex)
             }
+        enqueueForPresentation(frames)
+    }
+
+    private func enqueueForPresentation(_ frames: AppleVideoFrameStore.FrameBatch) {
+        let mainDeliveredAt = CACurrentMediaTime()
+        for frame in frames.values {
+            stream.performance.recordFrameDelivery(
+                frameKey: frame.sequence,
+                accessUnitTiming: frame.accessUnitTiming,
+                decodeEnteredAt: frame.decodeEnteredAt,
+                decoderSubmittedAt: frame.decoderSubmittedAt,
+                decoderOutputAt: frame.decoderOutputAt,
+                playbackHandledAt: frame.playbackHandledAt,
+                mainDeliveredAt: mainDeliveredAt,
+                presentationTime: frame.presentationTime
+            )
+        }
         if let update = displayScheduler.enqueue(frames) {
             applyAndPresent(update)
         }
@@ -223,43 +252,76 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         displayLink?.invalidate()
         displayLink = nil
         displayLinkTarget = nil
+        previousTargetPresentationTimestamp = nil
         displayScheduler.invalidateDisplayTarget()
-        guard window != nil, metalLayer != nil else { return }
+        guard window != nil, let metalLayer else { return }
         let target = MobileVideoDisplayLinkTarget(view: self)
-        let displayLink = CADisplayLink(target: target, selector: #selector(target.displayLinkDidFire(_:)))
+        let displayLink = CAMetalDisplayLink(metalLayer: metalLayer)
         let maximumFramesPerSecond = Float(max(1, window?.screen.maximumFramesPerSecond ?? 60))
         displayLink.preferredFrameRateRange = CAFrameRateRange(
-            minimum: maximumFramesPerSecond,
+            minimum: min(30, maximumFramesPerSecond),
             maximum: maximumFramesPerSecond,
             preferred: maximumFramesPerSecond
         )
+        displayLink.preferredFrameLatency = 1
+        displayLink.delegate = target
         displayLink.add(to: .main, forMode: .common)
         displayLinkTarget = target
         self.displayLink = displayLink
         enqueueCurrentFrames()
     }
 
-    fileprivate func displayLinkDidFire(_ displayLink: CADisplayLink) {
-        let period = displayLink.targetTimestamp - displayLink.timestamp
-        applyAndPresent(displayScheduler.displayLinkDidFire(
-            targetTimestamp: displayLink.targetTimestamp,
+    fileprivate func metalDisplayLinkDidFire(_ metalUpdate: CAMetalDisplayLink.Update) {
+        let callbackTime = CACurrentMediaTime()
+        for frames in stream.frames.drainLogicalFrameBatches() {
+            enqueueForPresentation(frames)
+        }
+        let period = previousTargetPresentationTimestamp.map {
+            metalUpdate.targetPresentationTimestamp - $0
+        } ?? 0
+        previousTargetPresentationTimestamp = metalUpdate.targetPresentationTimestamp
+        stream.performance.recordDisplayLink(
+            lead: metalUpdate.targetTimestamp - callbackTime,
             period: period
-        ))
+        )
+        let update = displayScheduler.displayLinkDidFire(
+            targetTimestamp: metalUpdate.targetPresentationTimestamp,
+            period: period
+        )
+        applyAndPresent(update, drawable: metalUpdate.drawable)
     }
 
-    private func applyAndPresent(_ update: AppleVideoDisplayScheduler.DisplayUpdate) {
+    private func applyAndPresent(
+        _ update: AppleVideoDisplayScheduler.DisplayUpdate,
+        drawable: CAMetalDrawable? = nil
+    ) {
         if !update.frames.isEmpty, let metalLayer {
+            stream.performance.recordSchedulerSelection(
+                frameKeys: update.frames.values.map(\.sequence),
+                selectedAt: CACurrentMediaTime()
+            )
             for (tileIndex, frame) in update.frames {
                 metalLayer.update(frame, at: tileIndex)
             }
             updateLayout()
         }
         guard update.requiresPresentation, let metalLayer else { return }
-        if !metalLayer.present(
-            targetTimestamp: update.targetTimestamp,
-            displayPeriod: update.displayPeriod,
-            isDisplayLinkTriggered: update.trigger == .displayLinkTick
-        ) {
+        let didPresent: Bool
+        if let drawable {
+            didPresent = metalLayer.present(
+                drawable: drawable,
+                targetTimestamp: update.targetTimestamp,
+                displayPeriod: update.displayPeriod,
+                isDisplayLinkTriggered: update.trigger == .displayLinkTick
+            )
+        } else {
+            didPresent = metalLayer.present(
+                targetTimestamp: update.targetTimestamp,
+                displayPeriod: update.displayPeriod,
+                isDisplayLinkTriggered: update.trigger == .displayLinkTick
+            )
+        }
+        if !didPresent {
             displayScheduler.presentationDidFail()
         }
     }
@@ -322,21 +384,32 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
         case .began:
             dragPreviousLocation = location
             let point = pointerState.currentPoint(canvas: stream.canvas)
-            sendPointer(buttons: AppleInputController.leftButton, point: point, clickCount: 1)
+            startDragInput(at: point)
         case .changed:
             let previous = dragPreviousLocation ?? location
             dragPreviousLocation = location
+            let previousPoint = pointerState.currentPoint(canvas: stream.canvas)
             let point = pointerState.move(
                 by: CGPoint(x: location.x - previous.x, y: location.y - previous.y),
                 canvas: stream.canvas,
                 bounds: bounds
             )
             updateCursorPosition(point)
-            sendPointer(buttons: AppleInputController.leftButton, point: point, clickCount: 1)
+            scheduleDragPath(from: previousPoint, to: point)
         case .ended, .cancelled, .failed:
+            if recognizer.state == .ended, let previous = dragPreviousLocation {
+                let previousPoint = pointerState.currentPoint(canvas: stream.canvas)
+                let finalPoint = pointerState.move(
+                    by: CGPoint(x: location.x - previous.x, y: location.y - previous.y),
+                    canvas: stream.canvas,
+                    bounds: bounds
+                )
+                updateCursorPosition(finalPoint)
+                scheduleDragPath(from: previousPoint, to: finalPoint)
+            }
             dragPreviousLocation = nil
             let point = pointerState.currentPoint(canvas: stream.canvas)
-            sendPointer(buttons: 0, point: point, clickCount: 1)
+            finishDragInput(at: point)
         default:
             break
         }
@@ -434,6 +507,84 @@ final class MobileVideoCanvasUIView: UIView, UIKeyInput {
                 clickCount: clickCount
             )
         }
+    }
+
+    private func scheduleDragPath(
+        from start: MobileRemotePointerState.Point,
+        to end: MobileRemotePointerState.Point
+    ) {
+        let points = MobileRemotePointerPath.interpolatedPoints(from: start, to: end)
+        guard !points.isEmpty else { return }
+        let now = CACurrentMediaTime()
+        let segmentStart = max(now, scheduledDragPoints.last?.sendAt ?? now)
+        let segmentDuration = 1.0 / 60.0
+        for (index, point) in points.enumerated() {
+            scheduledDragPoints.append(ScheduledDragPoint(
+                point: point,
+                sendAt: segmentStart
+                    + segmentDuration * Double(index + 1) / Double(points.count)
+            ))
+        }
+    }
+
+    private func startDragInput(at point: MobileRemotePointerState.Point) {
+        dragInputTask?.cancel()
+        scheduledDragPoints.removeAll(keepingCapacity: true)
+        dragReleasePoint = nil
+        let predecessor = inputTail
+        let input = input
+        let task = Task { @MainActor [weak self] in
+            await predecessor.value
+            guard let self, let input, !Task.isCancelled else { return }
+            await input.pointer(
+                buttons: AppleInputController.leftButton,
+                x: point.x,
+                y: point.y,
+                clickCount: 1
+            )
+            while !Task.isCancelled {
+                guard let scheduled = self.scheduledDragPoints.first else {
+                    if let releasePoint = self.dragReleasePoint {
+                        await input.pointer(
+                            buttons: 0,
+                            x: releasePoint.x,
+                            y: releasePoint.y,
+                            clickCount: 1
+                        )
+                        self.dragReleasePoint = nil
+                        return
+                    }
+                    do {
+                        try await Task.sleep(nanoseconds: 1_000_000)
+                    } catch {
+                        return
+                    }
+                    continue
+                }
+                let delay = scheduled.sendAt - CACurrentMediaTime()
+                if delay > 0 {
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    } catch {
+                        return
+                    }
+                }
+                guard !Task.isCancelled, !self.scheduledDragPoints.isEmpty else { return }
+                self.scheduledDragPoints.removeFirst()
+                await input.pointer(
+                    buttons: AppleInputController.leftButton,
+                    x: scheduled.point.x,
+                    y: scheduled.point.y,
+                    clickCount: 1
+                )
+            }
+        }
+        dragInputTask = task
+        inputTail = task
+    }
+
+    private func finishDragInput(at point: MobileRemotePointerState.Point) {
+        dragReleasePoint = point
     }
 
     private static func cursorImage(from image: AppleCursorImage) -> CGImage? {

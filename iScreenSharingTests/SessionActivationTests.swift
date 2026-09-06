@@ -230,7 +230,7 @@ final class SessionActivationTests: XCTestCase {
             configuration: highPerformanceConfiguration
         )
 
-        let clipboard = try XCTUnwrap(session.clipboardService)
+        let clipboard = try XCTUnwrap(session.clipboardService as? AppleClipboardService)
         XCTAssertFalse(clipboard.isSharingEnabled)
         clipboard.setSharingEnabled(true)
         XCTAssertEqual(store.connection(for: endpoint)?.usesSharedClipboard, true)

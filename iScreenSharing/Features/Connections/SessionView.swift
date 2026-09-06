@@ -51,7 +51,7 @@ struct SessionView: View {
                     inputCoordinatesAreDisplayLocal: usesIndependentVideoStreams,
                     inputDisplayID: nil,
                     onWindowKeyChange: { isKey in
-                        session.clipboardService?.setSessionWindow(
+                        (session.clipboardService as? AppleClipboardService)?.setSessionWindow(
                             sessionWindowIdentifier,
                             isKey: isKey
                         )

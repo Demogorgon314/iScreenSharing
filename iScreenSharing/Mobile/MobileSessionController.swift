@@ -1,6 +1,8 @@
 import AVFAudio
 import Combine
 import Foundation
+import enum ScreenSharingProtocol.AppleRFBMessages
+import struct ScreenSharingProtocol.AppleDynamicResolutionSize
 
 @MainActor
 final class MobileSessionController: ObservableObject {
@@ -73,7 +75,11 @@ final class MobileSessionController: ObservableObject {
         var connectingSession: RFBAuthenticatedSession?
         do {
             let credentials = try ScreenSharingCredentials(username: username, password: password)
-            let session = try await authenticator.connect(to: endpoint, credentials: credentials)
+            let session = try await authenticator.connect(
+                to: endpoint,
+                credentials: credentials,
+                sharingType: .highPerformance
+            )
             connectingSession = session
             let requestedSize = viewportSize
                 .flatMap(AppleDynamicResolutionSize.normalized(viewport:))
@@ -104,7 +110,7 @@ final class MobileSessionController: ObservableObject {
 
             try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
             session.setVideoDecoderMode(.videoToolboxSynchronized)
-            guard let stream = session.videoStream else {
+            guard let stream = session.videoStream as? AppleVideoStream else {
                 throw AppleVideoStreamError.missingMediaReceiver
             }
             self.session = session

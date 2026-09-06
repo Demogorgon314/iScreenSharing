@@ -51,7 +51,8 @@ private actor RecordingAuthenticator: RFBAuthenticating {
 
     func connect(
         to endpoint: ConnectionEndpoint,
-        credentials: ScreenSharingCredentials
+        credentials: ScreenSharingCredentials,
+        sharingType: ScreenSharingType
     ) async throws -> RFBAuthenticatedSession {
         connectCount += 1
         if let delay { try await Task.sleep(for: delay) }
