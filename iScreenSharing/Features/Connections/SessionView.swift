@@ -51,7 +51,7 @@ struct SessionView: View {
                     inputCoordinatesAreDisplayLocal: usesIndependentVideoStreams,
                     inputDisplayID: nil,
                     onWindowKeyChange: { isKey in
-                        session.clipboardService?.setSessionWindow(
+                        (session.clipboardService as? AppleClipboardService)?.setSessionWindow(
                             sessionWindowIdentifier,
                             isKey: isKey
                         )
@@ -182,8 +182,11 @@ struct SessionView: View {
                 videoPerformance: videoPerformanceBinding,
                 metalPerformanceHUD: metalPerformanceHUDBinding
             )
-            if let audio = sessions.session(for: endpoint)?.audioStream {
-                AudioMuteButton(audio: audio)
+            if commandState.hasAudio {
+                AudioMuteButton(isMuted: Binding(
+                    get: { commandState.isAudioMuted },
+                    set: { commandState.setAudioMuted($0) }
+                ))
             }
         }
         if commandState.canChangeStandardQuality {
@@ -413,16 +416,16 @@ private struct KeyboardInputSourceButton: View {
 }
 
 private struct AudioMuteButton: View {
-    @ObservedObject var audio: AppleAudioStream
+    @Binding var isMuted: Bool
 
     var body: some View {
-        Button { audio.toggleMute() } label: {
+        Button { isMuted.toggle() } label: {
             Label(
-                audio.isMuted ? "Unmute" : "Mute",
-                systemImage: audio.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
+                isMuted ? "Unmute" : "Mute",
+                systemImage: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill"
             )
         }
-        .help(audio.isMuted ? "Unmute" : "Mute")
+        .help(isMuted ? "Unmute" : "Mute")
     }
 }
 

@@ -42,6 +42,7 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         await waitForMainQueue()
         let primary = try XCTUnwrap(NSApp.windows.first {
             $0.identifier?.rawValue == "session-example.local-5900-display-1"
+                && $0.delegate === coordinator
         })
 
         // DisplayInfo2 arrives after the leader window is already visible in a
@@ -60,6 +61,7 @@ final class SessionWindowCoordinatorTests: XCTestCase {
         await waitForMainQueue()
         let secondary = try XCTUnwrap(NSApp.windows.first {
             $0.identifier?.rawValue == "session-example.local-5900-display-2"
+                && $0.delegate === coordinator
         })
         defer {
             primary.close()
@@ -125,7 +127,7 @@ final class SessionWindowCoordinatorTests: XCTestCase {
             "session-example.local-5900-display-1"
         )
         let window = try XCTUnwrap(NSApp.windows.first {
-            $0.identifier == identifier && $0.isVisible
+            $0.identifier == identifier && $0.isVisible && $0.delegate === coordinator
         })
         defer {
             window.close()
@@ -349,7 +351,7 @@ final class SessionWindowCoordinatorTests: XCTestCase {
             "session-example.local-5900-display-1"
         )
         let window = try XCTUnwrap(NSApp.windows.first {
-            $0.identifier == identifier && $0.isVisible
+            $0.identifier == identifier && $0.isVisible && $0.delegate === coordinator
         })
 
         session.close()

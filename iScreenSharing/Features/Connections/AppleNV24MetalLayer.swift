@@ -9,21 +9,28 @@ private struct AppleMetalTextureReferences: @unchecked Sendable {
     let images: [CVMetalTexture]
 }
 
-private final class AppleMetalInFlightGate: @unchecked Sendable {
+final class AppleMetalInFlightGate: @unchecked Sendable {
     private let lock = NSLock()
-    private var isInFlight = false
+    private let maximumInFlightCount: Int
+    private var inFlightCount = 0
+
+    init(maximumInFlightCount: Int = 1) {
+        precondition(maximumInFlightCount > 0)
+        self.maximumInFlightCount = maximumInFlightCount
+    }
 
     func begin() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !isInFlight else { return false }
-        isInFlight = true
+        guard inFlightCount < maximumInFlightCount else { return false }
+        inFlightCount += 1
         return true
     }
 
     func end() {
         lock.lock()
-        isInFlight = false
+        precondition(inFlightCount > 0)
+        inFlightCount -= 1
         lock.unlock()
     }
 }
@@ -129,7 +136,13 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     private var renderingBounds = CGRect.zero
     private var canvasSize = CGSize.zero
     private var compositedCanvas: MTLTexture?
+#if os(iOS)
+    private let inFlightGate = AppleMetalInFlightGate(maximumInFlightCount: 2)
+#else
     private let inFlightGate = AppleMetalInFlightGate()
+#endif
+    var connectionTiming: ConnectionStartupTrace?
+    var displayIndex: Int = 0
     var didPresentFrame: (@Sendable () -> Void)?
     var synchronizesPresentation: Bool {
         didSet { configurePresentation() }
@@ -152,7 +165,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         device = context.device
         pixelFormat = .bgra8Unorm
         framebufferOnly = true
-        backgroundColor = CGColor.black
+        backgroundColor = CGColor(gray: 0, alpha: 1)
         maximumDrawableCount = 2
         allowsNextDrawableTimeout = true
         configurePresentation()
@@ -164,6 +177,8 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             fatalError("AppleNV24MetalLayer can only copy its own presentation layer")
         }
         context = source.context
+        connectionTiming = source.connectionTiming
+        displayIndex = source.displayIndex
         performance = source.performance
         latestFrames = source.latestFrames
         lastPresentedSequences = source.lastPresentedSequences
@@ -237,6 +252,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         canvasSize = .zero
         compositedCanvas = nil
         performance = nil
+        connectionTiming = nil
     }
 
     @discardableResult
@@ -288,6 +304,53 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         performance?.recordRenderCall(duration: CACurrentMediaTime() - renderCallStartedAt)
         return true
     }
+
+#if os(iOS)
+    func present(
+        drawable: CAMetalDrawable,
+        targetTimestamp: TimeInterval? = nil,
+        displayPeriod: TimeInterval? = nil,
+        isDisplayLinkTriggered: Bool = false
+    ) -> Bool {
+        let renderCallStartedAt = CACurrentMediaTime()
+        guard inFlightGate.begin() else {
+            performance?.recordRendererBusy()
+            return false
+        }
+        guard !latestFrames.isEmpty,
+              let commandBuffer = context.commandQueue.makeCommandBuffer() else {
+            inFlightGate.end()
+            return false
+        }
+        let drawableAcquiredAt = CACurrentMediaTime()
+        let encodeStartedAt = drawableAcquiredAt
+        guard encode(into: commandBuffer, drawable: drawable) else {
+            inFlightGate.end()
+            return false
+        }
+        let encodeEndedAt = CACurrentMediaTime()
+        let changedFrames = changedFrames()
+        let batchID = performance?.beginRenderBatch(
+            frameKeys: changedFrames.map(\.sequence),
+            drawableWaitStartedAt: drawableAcquiredAt,
+            drawableAcquiredAt: drawableAcquiredAt,
+            encodeStartedAt: encodeStartedAt,
+            encodeEndedAt: encodeEndedAt,
+            targetTimestamp: targetTimestamp,
+            displayPeriod: displayPeriod,
+            isDisplayLinkTriggered: isDisplayLinkTriggered
+        )
+        commit(
+            commandBuffer,
+            presenting: drawable,
+            changedFrames: changedFrames,
+            submittedAt: encodeEndedAt,
+            batchID: batchID
+        )
+        performance?.recordRenderCall(duration: CACurrentMediaTime() - renderCallStartedAt)
+        return true
+    }
+#endif
 
     func snapshot() -> CGImage? {
         let width = Int(drawableSize.width)
@@ -352,9 +415,19 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         let presentationSubmittedAt = CACurrentMediaTime()
         let performance = performance
         let logger = Self.logger
+#if os(macOS)
         let didPresentFrame = didPresentFrame
+        // Capture this session's trace now; the retained layer can be reused
+        // before Metal delivers the old drawable's callback.
+        let timing = connectionTiming
+        let displayIndex = displayIndex
         drawable.addPresentedHandler { drawable in
             guard drawable.presentedTime > 0 else { return }
+            timing?.record(
+                .firstPresented, index: displayIndex,
+                since: .init(.firstFramePublished, index: displayIndex),
+                at: drawable.presentedTime
+            )
             performance?.recordDisplay(
                 duration: drawable.presentedTime - presentationSubmittedAt,
                 presentedAt: drawable.presentedTime
@@ -364,6 +437,7 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             }
             didPresentFrame?()
         }
+#endif
         commandBuffer.present(drawable)
         if let batchID {
             commandBuffer.addScheduledHandler { _ in
@@ -373,6 +447,16 @@ final class AppleNV24MetalLayer: CAMetalLayer {
         let inFlightGate = inFlightGate
         commandBuffer.addCompletedHandler { commandBuffer in
             defer { inFlightGate.end() }
+#if !os(macOS)
+            let completedAt = CACurrentMediaTime()
+            performance?.recordDisplay(
+                duration: completedAt - presentationSubmittedAt,
+                presentedAt: completedAt
+            )
+            if let batchID {
+                performance?.recordRenderBatchPresented(batchID, at: completedAt)
+            }
+#endif
             performance?.recordGPU(
                 duration: CACurrentMediaTime() - submittedAt
             )
@@ -399,7 +483,9 @@ final class AppleNV24MetalLayer: CAMetalLayer {
     }
 
     private func configurePresentation() {
+#if os(macOS)
         displaySyncEnabled = synchronizesPresentation
+#endif
         presentsWithTransaction = false
     }
 
@@ -586,8 +672,13 @@ final class AppleNV24MetalLayer: CAMetalLayer {
 
         let left = Float((container.minX - bounds.minX) / bounds.width * 2 - 1)
         let right = Float((container.maxX - bounds.minX) / bounds.width * 2 - 1)
+#if os(iOS)
+        let bottom = Float(1 - (container.maxY - bounds.minY) / bounds.height * 2)
+        let top = Float(1 - (container.minY - bounds.minY) / bounds.height * 2)
+#else
         let bottom = Float((container.minY - bounds.minY) / bounds.height * 2 - 1)
         let top = Float((container.maxY - bounds.minY) / bounds.height * 2 - 1)
+#endif
         let u0 = Float((0 - content.minX) / content.width)
         let u1 = Float((container.width - content.minX) / content.width)
         let vBottom = Float(1 - (0 - content.minY) / content.height)
@@ -637,12 +728,21 @@ final class AppleNV24MetalLayer: CAMetalLayer {
             }
             let validHeight = min(slotHeight, max(0, canvasSize.height - logicalStart))
             guard width > 0, validHeight > 0 else { return nil }
+#if os(iOS)
+            let container = AppleVideoCanvasLayout.nativeTileContainer(
+                logicalStart: logicalStart,
+                validHeight: validHeight,
+                canvasSize: canvasSize,
+                width: width
+            )
+#else
             let container = CGRect(
                 x: 0,
                 y: canvasSize.height - logicalStart - validHeight,
                 width: min(width, canvasSize.width),
                 height: validHeight
             )
+#endif
             let content = CGRect(
                 x: 0,
                 y: validHeight - slotHeight,

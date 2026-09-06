@@ -1,3 +1,4 @@
+import Combine
 import class ScreenSharingProtocol.AppleEncryptedRecordLayer
 import struct ScreenSharingProtocol.AppleCanvas
 import struct ScreenSharingProtocol.AppleDynamicResolutionSize
@@ -26,20 +27,30 @@ final class SessionActivationTests: XCTestCase {
     }
 
     func testHighPerformanceActivationReturnsSessionWithRequiredResources() async throws {
+        let timings = StartupTimingRecorder()
+        let trace = timings.makeTrace()
         let endpoint = try ConnectionEndpoint("example.local")
         let transport = ActivationRecordingTransport()
-        let session = try makeSession(endpoint: endpoint, transport: transport)
+        let session = try ConnectionStartupTrace.$current.withValue(trace) {
+            try makeSession(endpoint: endpoint, transport: transport)
+        }
         let authenticator = ActivationFixedAuthenticator(session: session)
         let displaySizes = ActivationDisplaySizeRecorder()
+        let preferences = SessionFeaturePreferences(defaults: defaults)
+        preferences.setVideoDecoderMode(.videoToolboxSynchronized)
         let activation = SessionActivation(
             authenticator: authenticator,
             controlChannelNegotiator: ActivationControlChannelNegotiator(
                 displaySizes: displaySizes
             ),
             mediaNegotiator: ActivationMediaNegotiator(),
-            videoStreamStarter: ActivationVideoStreamStarter(),
+            videoStreamStarter: ActivationVideoStreamStarter(onStart: { mode in
+                // The decoder choice must precede video delivery, before a
+                // window/SessionCommandState exists to reapply preferences.
+                XCTAssertEqual(mode, .videoToolboxSynchronized)
+            }),
             connectionStore: ConnectionStore(defaults: defaults),
-            sessionFeaturePreferences: SessionFeaturePreferences(defaults: defaults)
+            sessionFeaturePreferences: preferences
         )
         let requestedSizes = [
             AppleDynamicResolutionSize(width: 1_280, height: 720),
@@ -75,7 +86,117 @@ final class SessionActivationTests: XCTestCase {
         XCTAssertNotNil(session.keyboardInputSourceService)
         XCTAssertNotNil(session.controlState)
         XCTAssertEqual(transport.cancelCount, 0)
+        XCTAssertTrue(session.connectionTiming === trace)
+        XCTAssertEqual(timings.entries.map(\.event.stage), [
+            .signInStarted, .encryptionStarted, .encryptionReady,
+            .mediaStarted, .mediaReady, .audioStarted, .audioUnavailable, .activationReady,
+        ])
         session.close()
+        trace.record(.firstPresented, index: 0)
+        XCTAssertEqual(timings.entries.last?.event.stage, .closed)
+    }
+
+    func testActivationReturnsWhileAudioIsPreparingAndSessionCloseDisposesLatePlayer() async throws {
+        let entered = expectation(description: "Audio preparation entered")
+        let closed = expectation(description: "Late audio disposed")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let timings = StartupTimingRecorder()
+        let trace = timings.makeTrace()
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = try ConnectionStartupTrace.$current.withValue(trace) {
+            try makeSession(endpoint: endpoint, transport: ActivationRecordingTransport())
+        }
+        defer { session.close() }
+        let player = AudioStreamRecordingPlayer(onClose: { closed.fulfill() })
+        let receiver = AudioStreamReceiver()
+        let preferences = SessionFeaturePreferences(defaults: defaults)
+        let activation = SessionActivation(
+            authenticator: ActivationFixedAuthenticator(session: session),
+            controlChannelNegotiator: ActivationControlChannelNegotiator(
+                displaySizes: ActivationDisplaySizeRecorder()
+            ),
+            mediaNegotiator: ActivationMediaNegotiator(receiver: receiver),
+            videoStreamStarter: ActivationVideoStreamStarter(),
+            audioPlaybackFactory: {
+                XCTAssertFalse(Thread.isMainThread)
+                entered.fulfill()
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+                return .init(decoder: AudioStreamDecoder(), player: player)
+            },
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionFeaturePreferences: preferences
+        )
+
+        let activated = try await activation.activate(
+            endpoint: endpoint,
+            credentials: try ScreenSharingCredentials(username: "user", password: "password"),
+            configuration: highPerformanceConfiguration
+        )
+        await fulfillment(of: [entered], timeout: 2)
+
+        XCTAssertTrue(activated === session)
+        XCTAssertEqual(session.videoStream?.state, .streaming)
+        XCTAssertNotNil(session.audioStream)
+        XCTAssertNotNil(timings.entry(.activationReady))
+        XCTAssertNil(timings.entry(.audioReady))
+        let commands = SessionCommandState(endpoint: endpoint, session: session, preferences: preferences)
+        XCTAssertTrue(commands.hasAudio)
+        commands.setAudioMuted(true)
+        XCTAssertTrue(commands.isAudioMuted)
+        XCTAssertTrue(try XCTUnwrap(session.audioStream).isMuted)
+
+        session.close()
+        release.signal()
+        await fulfillment(of: [closed], timeout: 2)
+        XCTAssertEqual(player.closeCount, 1)
+        XCTAssertEqual(receiver.drainCount, 0)
+        XCTAssertNil(timings.entry(.audioReady))
+    }
+
+    func testDeferredAudioFailureUpdatesCommandsAndLeavesVideoRunning() async throws {
+        let unavailable = expectation(description: "Audio menu disabled")
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let endpoint = try ConnectionEndpoint("example.local")
+        let session = try makeSession(endpoint: endpoint, transport: ActivationRecordingTransport())
+        defer { session.close() }
+        let preferences = SessionFeaturePreferences(defaults: defaults)
+        let activation = SessionActivation(
+            authenticator: ActivationFixedAuthenticator(session: session),
+            controlChannelNegotiator: ActivationControlChannelNegotiator(
+                displaySizes: ActivationDisplaySizeRecorder()
+            ),
+            mediaNegotiator: ActivationMediaNegotiator(receiver: AudioStreamReceiver()),
+            videoStreamStarter: ActivationVideoStreamStarter(),
+            audioPlaybackFactory: {
+                XCTAssertEqual(release.wait(timeout: .now() + 5), .success)
+                throw AppleAACELDDecoderError.converterCreationFailed
+            },
+            connectionStore: ConnectionStore(defaults: defaults),
+            sessionFeaturePreferences: preferences
+        )
+
+        _ = try await activation.activate(
+            endpoint: endpoint,
+            credentials: try ScreenSharingCredentials(username: "user", password: "password"),
+            configuration: highPerformanceConfiguration
+        )
+        let commands = SessionCommandState(endpoint: endpoint, session: session, preferences: preferences)
+        let subscription = commands.$hasAudio.filter { !$0 }.sink { _ in
+            XCTAssertTrue(Thread.isMainThread)
+            unavailable.fulfill()
+        }
+        defer { subscription.cancel() }
+        XCTAssertTrue(commands.hasAudio)
+        release.signal()
+        await fulfillment(of: [unavailable], timeout: 2)
+
+        XCTAssertFalse(commands.hasAudio)
+        commands.setAudioMuted(true)
+        XCTAssertFalse(commands.isAudioMuted)
+        XCTAssertEqual(session.videoStream?.state, .streaming)
+        XCTAssertNotNil(session.inputController)
     }
 
     func testHighPerformanceActivationRestoresAndPersistsSharedClipboardOverride() async throws {
@@ -109,7 +230,7 @@ final class SessionActivationTests: XCTestCase {
             configuration: highPerformanceConfiguration
         )
 
-        let clipboard = try XCTUnwrap(session.clipboardService)
+        let clipboard = try XCTUnwrap(session.clipboardService as? AppleClipboardService)
         XCTAssertFalse(clipboard.isSharingEnabled)
         clipboard.setSharingEnabled(true)
         XCTAssertEqual(store.connection(for: endpoint)?.usesSharedClipboard, true)
@@ -535,10 +656,13 @@ private actor ActivationCompletionRecorder {
 }
 
 private struct ActivationMediaNegotiator: AppleMediaNegotiating {
+    var receiver: (any AppleMediaReceiving)?
+
     func negotiate(
         _ session: RFBAuthenticatedSession,
         displayCount: Int
     ) async throws -> AppleMediaNegotiationResult {
+        if let receiver { session.install(mediaReceiver: receiver) }
         let keys = AppleMediaKeys(
             audioViewer: Data(repeating: 1, count: 46),
             audioServer: Data(repeating: 2, count: 46),
@@ -556,10 +680,14 @@ private struct ActivationMediaNegotiator: AppleMediaNegotiating {
 }
 
 private struct ActivationVideoStreamStarter: AppleVideoStreamStarting {
+    var onStart: (AppleVideoDecoderMode) -> Void = { _ in }
+
     func startVideo(
         for session: RFBAuthenticatedSession,
-        negotiation: AppleMediaNegotiationResult
+        negotiation: AppleMediaNegotiationResult,
+        decoderMode: AppleVideoDecoderMode
     ) throws {
+        onStart(decoderMode)
         let stream = ActivationVideoStream(canvas: negotiation.canvas)
         session.install(videoStream: stream)
         stream.start()

@@ -120,7 +120,7 @@ final class AppleSessionKeyboardTests: XCTestCase {
 
     func testRemoteSystemCommandsRemainOneShotAndAreNotReleasedWithKeyboardSource() async throws {
         let harness = try makeHarness(sharingType: .standard)
-        await harness.input.perform(.missionControl)
+        harness.input.perform(.missionControl)
         harness.input.releaseKeyboard(from: UUID())
         await harness.input.enqueueInput {}.value
 

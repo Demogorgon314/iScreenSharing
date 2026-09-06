@@ -6,19 +6,6 @@ import struct ScreenSharingProtocol.AppleClipboardFlavor
 import struct ScreenSharingProtocol.AppleClipboardItem
 
 @MainActor
-protocol AppleClipboardReceiving: AnyObject {
-    var allowsRemoteSynchronization: Bool { get }
-    func localArchive() -> AppleClipboardArchive?
-    func archiveForRemoteRequest() -> AppleClipboardArchive?
-    func remoteRequestDidFinish()
-    func remotePasteboardDidChange()
-    func receive(_ archive: AppleClipboardArchive)
-    func synchronizationLease() -> UInt64?
-    func isSynchronizationLeaseValid(_ lease: UInt64) -> Bool
-    func receiveIfEligible(_ archive: AppleClipboardArchive, lease: UInt64) -> Bool
-}
-
-@MainActor
 final class AppleClipboardService: ObservableObject, AppleClipboardReceiving {
     private static let receivingOwners = NSMapTable<NSString, AppleClipboardService>(
         keyOptions: .strongMemory,

@@ -808,6 +808,7 @@ private struct MockMediaNegotiator: AppleMediaNegotiating {
 private struct MockVideoStreamStarter: AppleVideoStreamStarting {
     func startVideo(
         for session: RFBAuthenticatedSession,
-        negotiation: AppleMediaNegotiationResult
+        negotiation: AppleMediaNegotiationResult,
+        decoderMode: AppleVideoDecoderMode
     ) throws { }
 }

@@ -304,6 +304,10 @@ final class RemoteVideoCanvasNSView: NSView {
             showsDeveloperHUD: showsDeveloperHUD,
             performance: performance
         )
+        if let metalLayer = displayLayer as? AppleNV24MetalLayer {
+            metalLayer.connectionTiming = displayFrameSource?.connectionTiming
+            metalLayer.displayIndex = displayFrameSource?.displayIndex ?? 0
+        }
         super.init(frame: .zero)
 
         updateFileTransfer(fileTransfer)

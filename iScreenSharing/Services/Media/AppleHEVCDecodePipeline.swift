@@ -118,7 +118,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         }
     }
 
-    private let sourceToTile: [UInt32: Int]
+    let tileCount: Int
+    private var sourceToTile: [UInt32: Int]
     private let callbackQueue: DispatchQueue
     private let outputHandler: OutputHandler
     private let longTermReferenceHandler: LongTermReferenceHandler
@@ -148,9 +149,11 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
     private var isClosed = false
     private let freezeDiagnosticsEnabled: Bool
 
+    /// With no source mapping, prepares the decoder for a later activation.
+    /// A supplied mapping starts an active pipeline immediately.
     init(
         tileCount: Int,
-        sourceToTile: [UInt32: Int],
+        sourceToTile: [UInt32: Int] = [:],
         callbackQueue: DispatchQueue,
         decoderFactory: DecoderFactory,
         outputHandler: @escaping OutputHandler,
@@ -163,7 +166,8 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         errorHandler: @escaping ErrorHandler
     ) throws {
         precondition(tileCount > 0)
-        precondition(sourceToTile.count == tileCount)
+        precondition(sourceToTile.isEmpty || sourceToTile.count == tileCount)
+        self.tileCount = tileCount
         self.sourceToTile = sourceToTile
         self.callbackQueue = callbackQueue
         self.outputHandler = outputHandler
@@ -202,8 +206,21 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         )
     }
 
+    var isActive: Bool { !isClosed && !sourceToTile.isEmpty }
+
+    /// Commits source selection once, reusing the prepared decoder. Before
+    /// activation, submissions are ignored and do not anchor DON or playout.
+    @discardableResult
+    func activate(sourceToTile: [UInt32: Int]) -> Bool {
+        guard !isClosed, self.sourceToTile.isEmpty,
+              sourceToTile.count == tileCount,
+              Set(sourceToTile.values) == Set(0..<tileCount) else { return false }
+        self.sourceToTile = sourceToTile
+        return true
+    }
+
     func submit(_ accessUnits: [AppleHEVCAccessUnit]) {
-        guard !isClosed else { return }
+        guard isActive else { return }
         let selectedUnits = accessUnits.filter {
             sourceToTile[$0.synchronizationSource] != nil
         }
@@ -343,7 +360,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         _ failure: AppleHEVCDecoder.DecodeFailure,
         generation: UInt64
     ) {
-        guard !isClosed, generation == decoderGeneration else { return }
+        guard isActive, generation == decoderGeneration else { return }
         completeTrackedDecode(isFailure: true)
         let shouldFlush = tileFrameSynchronizer?.recordDecodeFailure(
             frameSequenceNumber: failure.frameSequenceNumber,
@@ -399,7 +416,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         _ frame: AppleHEVCDecoder.DecodedFrame,
         generation: UInt64
     ) {
-        guard !isClosed, generation == decoderGeneration else { return }
+        guard isActive, generation == decoderGeneration else { return }
         completeTrackedDecode(isFailure: false)
         guard let tileFrameSynchronizer else {
             outputHandler([frame])
@@ -433,7 +450,7 @@ final class AppleHEVCDecodePipeline: @unchecked Sendable {
         _ decodingOrderNumber: UInt16,
         generation: UInt64
     ) {
-        guard !isClosed, generation == decoderGeneration else { return }
+        guard isActive, generation == decoderGeneration else { return }
         longTermReferenceHandler(decodingOrderNumber)
     }
 

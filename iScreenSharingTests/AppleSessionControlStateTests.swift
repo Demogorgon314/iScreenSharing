@@ -1,3 +1,4 @@
+import Carbon
 import Combine
 import Foundation
 import enum ScreenSharingProtocol.AppleRFBMessages
@@ -10,6 +11,46 @@ import XCTest
 
 @MainActor
 final class AppleSessionControlStateTests: XCTestCase {
+    func testStandardMenuCommandFollowsKeyboardCleanupBeforeObservation() async throws {
+        try await assertMenuCommandOrdering(sharingType: .standard)
+    }
+
+    func testHighPerformanceMenuCommandFollowsKeyboardCleanupBeforeObservation() async throws {
+        try await assertMenuCommandOrdering(sharingType: .highPerformance)
+    }
+
+    func testQueuedRemoteCommandIsRejectedAfterInputCloses() async throws {
+        let harness = try makeHarness()
+        let gate = SessionControlGate()
+        harness.input.enqueueInput { await gate.wait() }
+        harness.input.perform(.missionControl)
+        await harness.input.close()
+        await gate.open()
+        await harness.input.enqueueInput {}.value
+
+        XCTAssertTrue(harness.transport.sentMessages.isEmpty)
+        harness.session.close()
+    }
+
+    func testRemoteCommandsRespectQueuedObservationAndReturnToControl() async throws {
+        let harness = try makeHarness()
+        harness.state.toggleMode()
+        harness.input.perform(.missionControl)
+        await harness.input.enqueueInput {}.value
+
+        harness.state.toggleMode()
+        harness.input.perform(.missionControl)
+        await harness.input.enqueueInput {}.value
+
+        XCTAssertFalse(harness.state.isObserving)
+        XCTAssertEqual(harness.transport.sentMessages, [
+            Data([0x0a, 0, 0, 0]),
+            Data([0x0a, 0, 0, 1]),
+            Data([4, 1, 0, 0, 0x10, 0x08, 0xfd, 0x02]),
+        ])
+        harness.session.close()
+    }
+
     func testStandardModeChangeWaitsForEarlierInputAndRejectsLaterInput() async throws {
         try await assertModeChangeOrdersInput(sharingType: .standard)
     }
@@ -100,6 +141,72 @@ final class AppleSessionControlStateTests: XCTestCase {
         XCTAssertEqual(harness.transport.sentMessages, [
             Data([0x0a, 0, 0, 0]), Data([0x0a, 0, 0, 1]),
         ])
+        harness.session.close()
+    }
+
+    private func assertMenuCommandOrdering(sharingType: ScreenSharingType) async throws {
+        let harness = try makeHarness(sharingType: sharingType)
+        let capabilities = AppleRemoteSystemCapabilities()
+        capabilities.receive(keySymbols: [AppleRemoteSystemCommand.missionControl.rawValue])
+        harness.session.install(remoteSystemCapabilities: capabilities)
+        let suiteName = "MenuCommandOrdering.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let commands = SessionCommandState(
+            endpoint: harness.session.endpoint, session: harness.session,
+            controlState: harness.state, preferences: SessionFeaturePreferences(defaults: defaults)
+        )
+        let source = UUID()
+        let shift = AppleKeyboardKey(keyCode: 56, keyboardType: 40, symbols: [0xffe1])
+        harness.input.receiveKeyboard(.modifiersChanged(shift, .shift, pressed: [.shift]), from: source)
+        await harness.input.enqueueInput {}.value
+
+        let gate = SessionControlGate()
+        harness.input.enqueueInput { await gate.wait() }
+        let overtookCleanup = expectation(description: "Menu command must wait for keyboard cleanup")
+        overtookCleanup.isInverted = true
+        harness.transport.observeSend { overtookCleanup.fulfill() }
+
+        harness.input.releaseKeyboard(from: source)
+        XCTAssertTrue(commands.canPerform(.missionControl))
+        commands.perform(.missionControl)
+        commands.setObserving(true)
+        XCTAssertFalse(commands.canPerform(.missionControl))
+        commands.perform(.missionControl)
+
+        await fulfillment(of: [overtookCleanup], timeout: 0.1)
+        harness.transport.observeSend(nil)
+        await gate.open()
+        await harness.input.enqueueInput {}.value
+
+        XCTAssertTrue(commands.isObserving)
+        XCTAssertFalse(commands.isChangingMode)
+        XCTAssertNil(harness.state.errorMessage)
+        let expected: [Data]
+        if sharingType == .standard {
+            expected = [
+                Data([4, 1, 0, 0, 0, 0, 0xff, 0xe1]),
+                Data([4, 0, 0, 0, 0, 0, 0xff, 0xe1]),
+                Data([4, 1, 0, 0, 0x10, 0x08, 0xfd, 0x02]),
+                Data([0x0a, 0, 0, 0]),
+            ]
+        } else {
+            let encoder = AppleEncryptedRecordLayer(keys: try recordKeys())
+            expected = try [
+                encoder.encrypt(encoder.encryptKeyEvent(
+                    isDown: true, keySymbol: 0xffe1, timestampDelta: 123, keyboardType: 40, keyCode: 56
+                )),
+                encoder.encrypt(encoder.encryptKeyEvent(
+                    isDown: false, keySymbol: 0xffe1, timestampDelta: 0, keyboardType: 40, keyCode: 56
+                )),
+                encoder.encrypt(encoder.encryptKeyEvent(
+                    isDown: true, keySymbol: 0x1008_fd02, timestampDelta: 0,
+                    keyboardType: UInt16(LMGetKbdType()), keyCode: 0xfd02
+                )),
+                encoder.encrypt(Data([0x0a, 0, 0, 0])),
+            ]
+        }
+        XCTAssertEqual(harness.transport.sentMessages, expected)
         harness.session.close()
     }
 

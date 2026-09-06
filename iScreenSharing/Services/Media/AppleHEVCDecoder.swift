@@ -80,20 +80,26 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     ] == "1"
 
     private enum Session {
+#if os(macOS)
         case videoProcessing(AppleVCPDecompressionSession)
+#endif
         case videoToolbox(VTDecompressionSession)
 
         var backend: Backend {
             switch self {
+#if os(macOS)
             case .videoProcessing: .videoProcessing
+#endif
             case .videoToolbox: .videoToolbox
             }
         }
 
         func close() {
             switch self {
+#if os(macOS)
             case let .videoProcessing(session):
                 session.close()
+#endif
             case let .videoToolbox(session):
                 AppleHEVCDecoder.invalidate(session)
             }
@@ -109,8 +115,10 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     private let backendHandler: BackendHandler
     private let longTermReferenceHandler: LongTermReferenceHandler
     private var session: Session?
+#if os(macOS)
     private var nextVideoProcessingTileOrder: UInt16 = 0
     private var warnedPixelFormats = Set<OSType>()
+#endif
 
     init(
         parameterSets: AppleHEVCParameterSets,
@@ -158,6 +166,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         return try lock.withDecoderLock {
             guard let session else { throw AppleHEVCDecoderError.sessionClosed }
             switch session {
+#if os(macOS)
             case let .videoProcessing(session):
                 let sampleBuffer = try Self.makeSampleBuffer(
                     nalUnits: validNALUnits,
@@ -197,6 +206,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
                         throw AppleHEVCDecoderError.sessionClosed
                     }
                 }
+#endif
             case let .videoToolbox(session):
                 let sampleBuffer = try Self.makeSampleBuffer(
                     nalUnits: validNALUnits,
@@ -323,6 +333,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
     }
 
     private func makeSession(decoderMode: AppleVideoDecoderMode) throws -> Session {
+#if os(macOS)
         if Self.prefersVideoProcessing(
             mode: decoderMode,
             tileCount: tileCount,
@@ -351,6 +362,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
             Self.logger.notice("Using native VideoProcessing multi-tile assembly")
             return .videoProcessing(session)
         }
+#endif
         if tileCount > 1 {
             Self.logger.warning(
                 "Using one public VideoToolbox decoder with incremental tile updates and atomic Metal presentation"
@@ -361,6 +373,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
         ))
     }
 
+#if os(macOS)
     private func publishFullCanvas(
         _ pixelBuffer: CVPixelBuffer,
         metadata: AppleVCPDecompressionSession.FrameMetadata
@@ -397,6 +410,7 @@ final class AppleHEVCDecoder: @unchecked Sendable {
               decodingOrderNumber != 0 else { return }
         longTermReferenceHandler(decodingOrderNumber)
     }
+#endif
 
     private static func makeFormatDescription(
         _ parameterSets: AppleHEVCParameterSets

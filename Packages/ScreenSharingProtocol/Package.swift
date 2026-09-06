@@ -5,6 +5,7 @@ import PackageDescription
 let package = Package(
     name: "ScreenSharingProtocol",
     platforms: [
+        .iOS("17.0"),
         .macOS("15.0"),
     ],
     products: [

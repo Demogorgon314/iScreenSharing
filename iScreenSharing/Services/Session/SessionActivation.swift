@@ -40,6 +40,7 @@ final class SessionActivation: SessionActivating {
     private let controlChannelNegotiator: any AppleControlChannelNegotiating
     private let mediaNegotiator: any AppleMediaNegotiating
     private let videoStreamStarter: any AppleVideoStreamStarting
+    private let audioPlaybackFactory: AppleAudioStream.PlaybackFactory
     private let connectionStore: ConnectionStore
     private let sessionFeaturePreferences: SessionFeaturePreferences
 
@@ -48,6 +49,9 @@ final class SessionActivation: SessionActivating {
         controlChannelNegotiator: any AppleControlChannelNegotiating = AppleControlChannelNegotiator(),
         mediaNegotiator: any AppleMediaNegotiating = AppleMediaNegotiator(),
         videoStreamStarter: any AppleVideoStreamStarting = AppleVideoStreamStarter(),
+        audioPlaybackFactory: @escaping AppleAudioStream.PlaybackFactory = {
+            try AppleAudioStream.Playback.makeDefault()
+        },
         connectionStore: ConnectionStore,
         sessionFeaturePreferences: SessionFeaturePreferences = SessionFeaturePreferences()
     ) {
@@ -55,6 +59,7 @@ final class SessionActivation: SessionActivating {
         self.controlChannelNegotiator = controlChannelNegotiator
         self.mediaNegotiator = mediaNegotiator
         self.videoStreamStarter = videoStreamStarter
+        self.audioPlaybackFactory = audioPlaybackFactory
         self.connectionStore = connectionStore
         self.sessionFeaturePreferences = sessionFeaturePreferences
     }
@@ -108,9 +113,13 @@ final class SessionActivation: SessionActivating {
             }
 
             try Task.checkCancellation()
+            session.connectionTiming?.record(.activationReady, since: .init(.serverInitReady))
             pendingSession = nil
             return session
         } catch {
+            pendingSession?.connectionTiming?.finish(
+                error is CancellationError || Task.isCancelled ? .cancelled : .failed
+            )
             pendingSession?.close()
             try Task.checkCancellation()
             throw error
@@ -138,14 +147,19 @@ final class SessionActivation: SessionActivating {
         endpoint: ConnectionEndpoint,
         configuration: SessionActivationConfiguration
     ) async throws {
+        let timing = session.connectionTiming
+        timing?.record(.encryptionStarted)
         _ = try await controlChannelNegotiator.enableEncryption(
             for: session,
             displaySizes: configuration.requestedDisplaySizes
         )
+        timing?.record(.encryptionReady, since: .init(.encryptionStarted))
+        timing?.record(.mediaStarted)
         let negotiation = try await mediaNegotiator.negotiate(
             session,
             displayCount: configuration.virtualDisplayCount.rawValue
         )
+        timing?.record(.mediaReady, since: .init(.mediaStarted))
         let input = AppleInputController(session: session, canvas: negotiation.canvas)
         session.install(inputController: input)
         let supportsSharedClipboard = session.serverInfo.supportsSharedPasteboard
@@ -188,7 +202,11 @@ final class SessionActivation: SessionActivating {
         } else {
             fileTransferService = nil
         }
-        try videoStreamStarter.startVideo(for: session, negotiation: negotiation)
+        try videoStreamStarter.startVideo(
+            for: session,
+            negotiation: negotiation,
+            decoderMode: sessionFeaturePreferences.videoDecoderMode
+        )
         let dynamicResolutionController: AppleDynamicResolutionController?
         if configuration.virtualDisplayCount == .one,
            let stream = session.videoStream as? AppleVideoStream {
@@ -296,13 +314,18 @@ final class SessionActivation: SessionActivating {
         clipboard.start()
         controlMessages.start()
         keyboardInputSource.start()
+        timing?.record(.audioStarted)
         if let receiver = session.mediaReceiver,
            let audio = try? AppleAudioStream(
                receiver: receiver,
-               negotiation: negotiation
+               negotiation: negotiation,
+               connectionTiming: timing,
+               playbackFactory: audioPlaybackFactory
            ) {
             session.install(audioStream: audio)
             audio.start()
+        } else {
+            timing?.record(.audioUnavailable, since: .init(.audioStarted))
         }
     }
 }

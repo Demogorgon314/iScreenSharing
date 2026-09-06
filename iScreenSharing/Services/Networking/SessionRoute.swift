@@ -20,6 +20,7 @@ protocol OpenSessionRoute: AnyObject, Sendable {
 enum SessionRouteError: LocalizedError, Equatable {
     case mediaUnavailableForStandardMode
     case mediaAlreadyOpened
+    case unsupportedRoute
     case closed
 
     var errorDescription: String? {
@@ -28,6 +29,8 @@ enum SessionRouteError: LocalizedError, Equatable {
             "Standard Screen Sharing does not use a high-performance media route."
         case .mediaAlreadyOpened:
             "The high-performance media route has already been opened."
+        case .unsupportedRoute:
+            "This connection route is unavailable on this device."
         case .closed:
             "The Screen Sharing route is closed."
         }
@@ -93,12 +96,17 @@ struct DirectSessionRouteAdapter: SessionRouteAdapter {
         _ endpoint: ConnectionEndpoint,
         sharingType: ScreenSharingType
     ) async throws -> any OpenSessionRoute {
+        let timing = ConnectionStartupTrace.current
+        timing?.record(.resolutionStarted)
         let addresses = try await addressResolver.resolve(endpoint)
+        timing?.record(.resolutionReady, since: .init(.resolutionStarted), count: addresses.count)
         var lastError: Error?
-        for address in addresses {
+        for (index, address) in addresses.enumerated() {
+            timing?.record(.tcpStarted, index: index)
             let transport = makeTransport(address)
             do {
                 try await transport.start()
+                timing?.record(.tcpReady, index: index, since: .init(.tcpStarted, index: index))
                 return ManagedSessionRoute(
                     control: transport,
                     remoteAddress: address,
@@ -109,6 +117,7 @@ struct DirectSessionRouteAdapter: SessionRouteAdapter {
                 transport.cancel()
                 throw CancellationError()
             } catch {
+                timing?.record(.tcpFailed, index: index, since: .init(.tcpStarted, index: index))
                 transport.cancel()
                 lastError = error
             }
@@ -118,16 +127,21 @@ struct DirectSessionRouteAdapter: SessionRouteAdapter {
 }
 
 struct TailscaleSessionRouteAdapter: SessionRouteAdapter {
+#if os(macOS)
     private let nodeProvider: any TailscaleNodeProviding
 
     init(nodeProvider: any TailscaleNodeProviding = EmbeddedTailscaleRuntime.shared) {
         self.nodeProvider = nodeProvider
     }
+#else
+    init() {}
+#endif
 
     func open(
         _ endpoint: ConnectionEndpoint,
         sharingType: ScreenSharingType
     ) async throws -> any OpenSessionRoute {
+#if os(macOS)
         let remoteAddress = try ResolvedRemoteAddress(
             numericHost: endpoint.host,
             port: endpoint.port
@@ -153,6 +167,9 @@ struct TailscaleSessionRouteAdapter: SessionRouteAdapter {
             transport.cancel()
             throw error
         }
+#else
+        throw SessionRouteError.unsupportedRoute
+#endif
     }
 }
 

@@ -45,12 +45,16 @@ struct RFBAuthenticationService: RFBAuthenticating {
         credentials: ScreenSharingCredentials,
         sharingType: ScreenSharingType = .highPerformance
     ) async throws -> RFBAuthenticatedSession {
+        let timing = ConnectionStartupTrace.current
+        timing?.record(.routeStarted)
         let route = try await routeOpener.open(endpoint, sharingType: sharingType)
+        timing?.record(.routeReady, since: .init(.routeStarted))
         let transport = route.control
         do {
             return try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 let probe = try await performVersionHandshake(on: transport)
+                timing?.record(.versionReady, since: .init(.routeReady))
                 guard probe.securityTypes.contains(.appleRSA) else {
                     throw RFBAuthenticationError.unsupportedAppleRSA
                 }
@@ -59,10 +63,12 @@ struct RFBAuthenticationService: RFBAuthenticating {
                     credentials: credentials,
                     transport: transport
                 )
+                timing?.record(.authenticationReady, since: .init(.versionReady))
                 let serverInfo = try await initializeSession(
                     on: transport,
                     sharingType: sharingType
                 )
+                timing?.record(.serverInitReady, since: .init(.authenticationReady))
                 try Task.checkCancellation()
                 return RFBAuthenticatedSession(
                     endpoint: endpoint,
@@ -86,14 +92,23 @@ struct RFBAuthenticationService: RFBAuthenticating {
     private func performVersionHandshake(
         on transport: any RFBTransport
     ) async throws -> RFBProbeResult {
+        let timing = ConnectionStartupTrace.current
+        timing?.record(.bannerReadStarted)
         let banner = try await transport.receiveExactly(RFBProtocol.bannerLength)
+        timing?.record(.bannerReceived, since: .init(.bannerReadStarted))
         let version = try RFBProtocol.parseVersion(banner)
+        timing?.record(.clientVersionSendStarted)
         try await transport.send(RFBProtocol.appleVersion)
-        let count = try RFBProtocol.parseSecurityTypeCount(
-            try await transport.receiveExactly(1)
-        )
+        timing?.record(.clientVersionSent, since: .init(.clientVersionSendStarted))
+        timing?.record(.securityCountReadStarted)
+        let countData = try await transport.receiveExactly(1)
+        timing?.record(.securityCountReceived, since: .init(.securityCountReadStarted))
+        let count = try RFBProtocol.parseSecurityTypeCount(countData)
+        timing?.record(.securityTypesReadStarted)
+        let typesData = try await transport.receiveExactly(count)
+        timing?.record(.securityTypesReceived, since: .init(.securityTypesReadStarted))
         let types = try RFBProtocol.parseSecurityTypes(
-            try await transport.receiveExactly(count),
+            typesData,
             expectedCount: count
         )
         return RFBProbeResult(serverVersion: version, securityTypes: types)

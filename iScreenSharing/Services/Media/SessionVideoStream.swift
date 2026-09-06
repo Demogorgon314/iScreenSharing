@@ -15,11 +15,19 @@ class SessionVideoStream: ObservableObject, @unchecked Sendable {
     let frames: AppleVideoFrameStore
     let performance: AppleVideoPerformanceMonitor
     let displayIndex: Int
+    let connectionTiming: ConnectionStartupTrace?
 
-    init(canvas: AppleCanvas, displayIndex: Int, tileCount: Int) {
+    init(
+        canvas: AppleCanvas,
+        displayIndex: Int,
+        tileCount: Int,
+        connectionTiming: ConnectionStartupTrace? = nil,
+        frames: AppleVideoFrameStore = AppleVideoFrameStore()
+    ) {
         self.canvas = canvas
         self.displayIndex = displayIndex
-        frames = AppleVideoFrameStore()
+        self.connectionTiming = connectionTiming
+        self.frames = frames
         performance = AppleVideoPerformanceMonitor(tileCount: tileCount)
     }
 

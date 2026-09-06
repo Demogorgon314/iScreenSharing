@@ -20,6 +20,7 @@ final class NetworkDiscoveryModel: ObservableObject {
     private let browser: any BonjourBrowsing
     private let deviceInfoResolver: any BonjourDeviceInfoResolving
     private var resolutionTask: Task<Void, Never>?
+    private var browseGeneration = UUID()
     private var deviceInfoByEndpoint = [ConnectionEndpoint: AppleRemoteDeviceInfo]()
 
     init(
@@ -31,9 +32,20 @@ final class NetworkDiscoveryModel: ObservableObject {
     }
 
     func browse() async {
+        guard !Task.isCancelled else { return }
+        let generation = UUID()
+        browseGeneration = generation
+        resolutionTask?.cancel()
+        // A cancelled scene task can finish after its replacement has begun.
+        // Its cleanup must not cancel the new generation's metadata lookup.
+        defer {
+            if Task.isCancelled, browseGeneration == generation {
+                resolutionTask?.cancel()
+            }
+        }
         state = .searching
         for await update in browser.updates() {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, browseGeneration == generation else { return }
             switch update {
             case .searching:
                 state = .searching

@@ -18,6 +18,7 @@ final class AppleControlMessageService: @unchecked Sendable {
     private let receiveKeyboardInputSource: @Sendable (AppleKeyboardInputSourceState) async -> Void
     private let receiveDeviceInfo: @Sendable (AppleRemoteDeviceInfo) async -> Void
     private let receiveFileTransferMessage: @Sendable (Data) async -> Bool
+    private let didFail: @MainActor @Sendable (String) -> Void
     private let countLock = NSLock()
     private var task: Task<Void, Never>?
     private var messageCount = 0
@@ -33,7 +34,8 @@ final class AppleControlMessageService: @unchecked Sendable {
         receiveVendorKeySymbols: @escaping @Sendable (Set<UInt32>) async -> Void = { _ in },
         receiveKeyboardInputSource: @escaping @Sendable (AppleKeyboardInputSourceState) async -> Void = { _ in },
         receiveDeviceInfo: @escaping @Sendable (AppleRemoteDeviceInfo) async -> Void = { _ in },
-        receiveFileTransferMessage: @escaping @Sendable (Data) async -> Bool = { _ in false }
+        receiveFileTransferMessage: @escaping @Sendable (Data) async -> Bool = { _ in false },
+        didFail: @escaping @MainActor @Sendable (String) -> Void = { _ in }
     ) {
         self.session = session
         clipboardExchange = AppleClipboardExchange(
@@ -57,6 +59,7 @@ final class AppleControlMessageService: @unchecked Sendable {
         self.receiveKeyboardInputSource = receiveKeyboardInputSource
         self.receiveDeviceInfo = receiveDeviceInfo
         self.receiveFileTransferMessage = receiveFileTransferMessage
+        self.didFail = didFail
     }
 
     var receivedMessageCount: Int {
@@ -93,6 +96,7 @@ final class AppleControlMessageService: @unchecked Sendable {
             } catch {
                 guard !Task.isCancelled else { return }
                 session.close()
+                await didFail(error.localizedDescription)
                 return
             }
         }
